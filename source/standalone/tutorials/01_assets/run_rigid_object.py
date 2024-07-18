@@ -40,7 +40,7 @@ import omni.isaac.core.utils.prims as prim_utils
 import omni.isaac.lab.sim as sim_utils
 import omni.isaac.lab.utils.math as math_utils
 from omni.isaac.lab.assets import RigidObject, RigidObjectCfg
-from omni.isaac.lab.sim import SimulationContext
+# from omni.isaac.lab.sim import SimulationContext
 
 
 def design_scene():
@@ -126,7 +126,7 @@ def main():
     """Main function."""
     # Load kit helper
     sim_cfg = sim_utils.SimulationCfg()
-    sim = SimulationContext(sim_cfg)
+    sim = sim_utils.SimulationContext(sim_cfg)
     # Set main camera
     sim.set_camera_view(eye=[1.5, 0.0, 1.0], target=[0.0, 0.0, 0.0])
     # Design scene
