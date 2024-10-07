@@ -9,7 +9,7 @@ from omni.isaac.lab.envs.mdp.actions.actions_cfg import DifferentialInverseKinem
 from omni.isaac.lab.sim.spawners import UsdFileCfg
 from omni.isaac.lab.utils import configclass
 from omni.isaac.lab.utils.assets import ISAACLAB_NUCLEUS_DIR
-
+from omni.isaac.lab.sensors import ContactSensor, ContactSensorCfg
 from . import joint_pos_env_cfg
 
 ##
@@ -27,6 +27,7 @@ class FrankaCubeLiftEnvCfg(joint_pos_env_cfg.FrankaCubeLiftEnvCfg):
         # Set Franka as robot
         # We switch here to a stiffer PD controller for IK tracking to be better.
         self.scene.robot = FRANKA_PANDA_HIGH_PD_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+
 
         # Set actions for the specific robot type (franka)
         self.actions.arm_action = DifferentialInverseKinematicsActionCfg(

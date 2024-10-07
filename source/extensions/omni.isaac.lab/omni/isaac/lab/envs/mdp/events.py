@@ -82,9 +82,9 @@ def randomize_rigid_body_material(
 
     # sample material properties from the given ranges
     material_samples = np.zeros(materials[env_ids].shape)
-    material_samples[..., 0] = np.random.uniform(*static_friction_range)
-    material_samples[..., 1] = np.random.uniform(*dynamic_friction_range)
-    material_samples[..., 2] = np.random.uniform(*restitution_range)
+    material_samples[..., 0] = np.random.uniform(*static_friction_range, size=material_samples.shape[:-1])
+    material_samples[..., 1] = np.random.uniform(*dynamic_friction_range, size=material_samples.shape[:-1])
+    material_samples[..., 2] = np.random.uniform(*restitution_range, size=material_samples.shape[:-1])
 
     # create uniform range tensor for bucketing
     lo = np.array([static_friction_range[0], dynamic_friction_range[0], restitution_range[0]])
@@ -844,6 +844,7 @@ def reset_scene_to_default(env: ManagerBasedEnv, env_ids: torch.Tensor):
         default_joint_pos = articulation_asset.data.default_joint_pos[env_ids].clone()
         default_joint_vel = articulation_asset.data.default_joint_vel[env_ids].clone()
         # set into the physics simulation
+        articulation_asset.set_joint_position_target(default_joint_pos, env_ids=env_ids)
         articulation_asset.write_joint_state_to_sim(default_joint_pos, default_joint_vel, env_ids=env_ids)
 
 
