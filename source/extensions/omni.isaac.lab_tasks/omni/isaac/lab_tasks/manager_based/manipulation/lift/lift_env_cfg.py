@@ -6,7 +6,7 @@
 from dataclasses import MISSING
 
 import omni.isaac.lab.sim as sim_utils
-from omni.isaac.lab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
+from omni.isaac.lab.assets import ArticulationCfg, AssetBaseCfg, DeformableObjectCfg, RigidObjectCfg
 from omni.isaac.lab.envs import ManagerBasedRLEnvCfg
 from omni.isaac.lab.managers import CurriculumTermCfg as CurrTerm
 from omni.isaac.lab.managers import EventTermCfg as EventTerm
@@ -42,7 +42,7 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     # end-effector sensor: will be populated by agent env cfg
     ee_frame: FrameTransformerCfg = MISSING
     # target object: will be populated by agent env cfg
-    object: RigidObjectCfg = MISSING
+    object: RigidObjectCfg | DeformableObjectCfg = MISSING
 
     # Table
     table = AssetBaseCfg(
@@ -53,7 +53,7 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
                           rigid_props=RigidBodyPropertiesCfg(
                                 kinematic_enabled=True,
                             ),
-                         
+
                          ),
     )
 
@@ -71,10 +71,10 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     )
     contact_sensor: ContactSensorCfg = MISSING
     # contact_sensor = ContactSensorCfg(
-    #     prim_path="{ENV_REGEX_NS}/Object", 
-    #     # filter_prim_paths_expr= ["{ENV_REGEX_NS}/Table"], 
+    #     prim_path="{ENV_REGEX_NS}/Object",
+    #     # filter_prim_paths_expr= ["{ENV_REGEX_NS}/Table"],
     #     # filter_prim_paths_expr= ["{ENV_REGEX_NS}/Robot/.*finger"],
-    #     filter_prim_paths_expr= ["{ENV_REGEX_NS}/Table", "{ENV_REGEX_NS}/Robot/.*rightfinger", "{ENV_REGEX_NS}/Robot/.*leftfinger"], 
+    #     filter_prim_paths_expr= ["{ENV_REGEX_NS}/Table", "{ENV_REGEX_NS}/Robot/.*rightfinger", "{ENV_REGEX_NS}/Robot/.*leftfinger"],
     #     track_air_time=True, track_pose=True,
     #     update_period=0.0, debug_vis=True
     # )
@@ -104,6 +104,8 @@ class ActionsCfg:
     """Action specifications for the MDP."""
 
     # will be set by agent env cfg
+    arm_action: mdp.JointPositionActionCfg | mdp.DifferentialInverseKinematicsActionCfg = MISSING
+    gripper_action: mdp.BinaryJointPositionActionCfg = MISSING
     arm_action: mdp.JointPositionActionCfg = MISSING
     # gripper_action: mdp.BinaryJointPositionActionCfg = MISSING
 
