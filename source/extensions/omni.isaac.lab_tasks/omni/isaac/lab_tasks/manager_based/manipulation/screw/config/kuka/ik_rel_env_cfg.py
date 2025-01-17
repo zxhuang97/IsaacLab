@@ -406,8 +406,8 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
             # robot.spawn.usd_path = "assets/victor/victor_left_arm_v2/victor_left_arm_v2.usd"
         robot.init_state.pos = [-0.15, -0.5, -0.8]
 
-        robot.spawn.collision_props.contact_offset = robot_params.contact_offset
-        robot.spawn.collision_props.rest_offset = robot_params.rest_offset
+        # robot.spawn.collision_props.contact_offset = robot_params.contact_offset
+        # robot.spawn.collision_props.rest_offset = robot_params.rest_offset
         robot.spawn.rigid_props.max_depenetration_velocity = robot_params.max_depenetration_velocity
         robot.spawn.rigid_props.sleep_threshold = robot_params.sleep_threshold
         robot.spawn.rigid_props.stabilization_threshold = robot_params.stabilization_threshold
@@ -568,13 +568,6 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         if termination_params.far_from_bolt:
             self.terminations.far_from_bolt = DoneTerm(func=terminate_if_far_from_bolt)
         self.scene.nut.spawn.activate_contact_sensors = True
-
-
-        self.scene.contact_sensor = ContactSensorCfg(
-            prim_path="{ENV_REGEX_NS}/Nut/factory_nut",
-            filter_prim_paths_expr=["{ENV_REGEX_NS}/Bolt/factory_bolt"],
-            update_period=0.0,
-        )
 
         # rewards
         rewards_params = self.params.rewards
