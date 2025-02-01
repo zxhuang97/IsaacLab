@@ -123,7 +123,6 @@ asset_factory = {
         "bolt_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_bolt_m16_loose/factory_bolt_m16_loose.usd",
         "nut_init_state_tighten": RigidObjectCfg.InitialStateCfg(
             pos=(6.3000e-01, 2.0661e-06, 3.0895e-03), rot=(-2.1609e-01, 6.6671e-05, -6.6467e-05, 9.7637e-01)
-
         ),
         "nut_init_state_thread": RigidObjectCfg.InitialStateCfg(
             pos=(6.3000e-01, 4.0586e-06, 0.03), rot=(9.9833e-01, 1.2417e-04, -1.2629e-05, 5.7803e-02)
@@ -144,10 +143,11 @@ asset_factory = {
             pos=(6.3000e-01, 2.0661e-06, 3.0895e-03), rot=(-2.1609e-01, 6.6671e-05, -6.6467e-05, 9.7637e-01),
             joint_pos={}, joint_vel={}
         ),
-        "nut_init_state_thread": RigidObjectCfg.InitialStateCfg(
-            pos=(6.3000e-01, 4.0586e-06, 0.03), rot=(9.9833e-01, 1.2417e-04, -1.2629e-05, 5.7803e-02)
+        "nut_init_state_thread": ArticulationCfg.InitialStateCfg(
+            pos=(6.3000e-01, 4.0586e-06, 0.03), rot=(9.9833e-01, 1.2417e-04, -1.2629e-05, 5.7803e-02),
+            joint_pos={}, joint_vel={}
         ),
-        "bolt_init_state": RigidObjectCfg.InitialStateCfg(pos=(0.63, 0.0, 0.0)),
+        "bolt_init_state": ArticulationCfg.InitialStateCfg(pos=(0.63, 0.0, 0.0), joint_pos={}, joint_vel={}),
         "nut_frame_offset": OffsetCfg(pos=(0.0, 0.0, 0.0225)),
         "bolt_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.0)),
         "bolt_tip_offset": OffsetCfg(pos=(0.0, 0.0, 0.041)),
@@ -276,7 +276,7 @@ class BaseObservationsCfg:
         def __post_init__(self):
             self.enable_corruption = False
             self.concatenate_terms = True
-            self.hist_len = 1
+            self.history_length = 1
 
     # observation groups
     policy: PolicyCfg = PolicyCfg()
