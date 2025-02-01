@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-from omni.isaac.lab.app import AppLauncher
+from isaaclab.app import AppLauncher
 
 # launch omniverse app
 app_launcher = AppLauncher()
@@ -11,9 +11,9 @@ simulation_app = app_launcher.app
 import asyncio
 import numpy as np
 
-from omni.isaac.core.objects import DynamicCuboid
-from omni.isaac.core.prims import RigidPrimView
-from omni.isaac.core.world import World
+from isaacsim.core.objects import DynamicCuboid
+from isaacsim.core.prims import RigidPrimView
+from isaacsim.core.world import World
 
 
 async def example():

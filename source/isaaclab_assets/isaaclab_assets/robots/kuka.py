@@ -15,18 +15,18 @@ Reference: https://github.com/frankaemika/franka_ros
 import torch
 from typing import TYPE_CHECKING, Literal
 
-import omni.isaac.core.utils.prims as prim_utils
+import isaacsim.core.utils.prims as prim_utils
 import omni.log
 from pxr import Usd, UsdPhysics
 
-import omni.isaac.lab.sim as sim_utils
-from omni.isaac.lab.actuators import ImplicitActuatorCfg
-from omni.isaac.lab.assets.articulation import Articulation, ArticulationCfg
-from omni.isaac.lab.envs import ManagerBasedEnv
-from omni.isaac.lab.managers.action_manager import ActionTerm, ActionTermCfg
-from omni.isaac.lab.sim import schemas
-from omni.isaac.lab.utils import configclass
-from omni.isaac.lab.utils.assets import ISAACLAB_NUCLEUS_DIR
+import isaaclab.sim as sim_utils
+from isaaclab.actuators import ImplicitActuatorCfg
+from isaaclab.assets.articulation import Articulation, ArticulationCfg
+from isaaclab.envs import ManagerBasedEnv
+from isaaclab.managers.action_manager import ActionTerm, ActionTermCfg
+from isaaclab.sim import schemas
+from isaaclab.utils import configclass
+from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR
 
 
 ##

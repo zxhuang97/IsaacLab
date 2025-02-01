@@ -144,7 +144,7 @@ autodoc_mock_imports = [
     "pxr.PhysxSchema",
     "pxr.PhysicsSchemaTools",
     "omni.replicator",
-    "omni.isaac.core",
+    "isaacsim.core",
     "omni.isaac.kit",
     "omni.isaac.cloner",
     "omni.isaac.urdf",

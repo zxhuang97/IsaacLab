@@ -24,7 +24,7 @@ import tqdm
 
 import cv2
 
-from omni.isaac.lab.app import AppLauncher
+from isaaclab.app import AppLauncher
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Pick and lift state machine for lift environments.")
@@ -59,19 +59,19 @@ from collections.abc import Sequence
 
 import warp as wp
 from moviepy.video.io.ImageSequenceClip import ImageSequenceClip
-from omni.isaac.core.prims import RigidPrimView
+from isaacsim.core.prims import RigidPrimView
 from source.visualization.plot import plot_arrow, plot_cone, plot_pointclouds
 
-import omni.isaac.lab.sim as sim_utils
-import omni.isaac.lab.utils.math as math_utils
-from omni.isaac.lab.assets.rigid_object.rigid_object_data import RigidObjectData
-from omni.isaac.lab.markers.config import RAY_CASTER_MARKER_CFG
-from omni.isaac.lab.sensors.camera import Camera, CameraCfg
-from omni.isaac.lab.sensors.contact_sensor import ContactSensor, ContactSensorCfg
+import isaaclab.sim as sim_utils
+import isaaclab.utils.math as math_utils
+from isaaclab.assets.rigid_object.rigid_object_data import RigidObjectData
+from isaaclab.markers.config import RAY_CASTER_MARKER_CFG
+from isaaclab.sensors.camera import Camera, CameraCfg
+from isaaclab.sensors.contact_sensor import ContactSensor, ContactSensorCfg
 
-import omni.isaac.lab_tasks  # noqa: F401
-from omni.isaac.lab_tasks.manager_based.manipulation.lift.lift_env_cfg import LiftEnvCfg
-from omni.isaac.lab_tasks.utils.parse_cfg import parse_env_cfg
+import isaaclab_tasks  # noqa: F401
+from isaaclab_tasks.manager_based.manipulation.lift.lift_env_cfg import LiftEnvCfg
+from isaaclab_tasks.utils.parse_cfg import parse_env_cfg
 
 
 def save_numpy_as_mp4(array, filename, fps=20, scale=1.0, add_index_rate=-1):
