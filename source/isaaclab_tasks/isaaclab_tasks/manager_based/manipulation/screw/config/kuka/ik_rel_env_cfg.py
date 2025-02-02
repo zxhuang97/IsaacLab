@@ -19,7 +19,6 @@ from force_tool.utils.data_utils import SmartDict, read_h5_dict
 from force_tool.utils.curobo_utils import CuRoboArm
 from omegaconf import OmegaConf
 from pxr import Usd, UsdGeom
-from regex import F
 
 import isaaclab.sim as sim_utils
 import isaaclab.utils.math as math_utils
@@ -51,7 +50,7 @@ import time
 import numpy as np
 ##
 # Pre-defined configs
-from isaaclab_assets.kuka import KUKA_VICTOR_LEFT_HIGH_PD_CFG
+from isaaclab_assets import KUKA_VICTOR_LEFT_HIGH_PD_CFG
 
 
 

@@ -82,7 +82,6 @@ def run_simulator(sim: sim_utils.SimulationContext, entities: dict[str, Articula
     # Define simulation stepping
     sim_dt = sim.get_physics_dt()
     count = 0
-    print("torch version: ", torch.__version__)
     # Simulation loop
     while simulation_app.is_running():
         # Reset
