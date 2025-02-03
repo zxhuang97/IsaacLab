@@ -44,7 +44,7 @@ from isaaclab.markers.config import (  # isort: skip
 
 # Scene definition
 FRAME_MARKER_SMALL_CFG = copy.deepcopy(FRAME_MARKER_CFG)
-FRAME_MARKER_SMALL_CFG.markers["frame"].scale = (0.008, 0.008, 0.008)
+FRAME_MARKER_SMALL_CFG.markers["frame"].scale = (0.02, 0.02, 0.02)
 RED_PLATE_MARKER_CFG = VisualizationMarkersCfg(
     markers={
         "height": sim_utils.CylinderCfg(
@@ -58,14 +58,10 @@ BLUE_PLATE_MARKER_CFG = RED_PLATE_MARKER_CFG.copy()
 BLUE_PLATE_MARKER_CFG.markers["height"].visual_material = sim_utils.PreviewSurfaceCfg(
     diffuse_color=(0, 0, 1.0), opacity=0.5
 )
-PLATE_ARROW_CFG = VisualizationMarkersCfg(
-    markers={
-        "frame": sim_utils.UsdFileCfg(
-            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/UIElements/frame_prim.usd",
-            scale=(0.008, 0.008, 0.008),
-        ),
-    }
-)
+
+# For some reasons, can't visualize two markers at the same time
+# PLATE_ARROW_CFG = BLUE_PLATE_MARKER_CFG.copy()
+# PLATE_ARROW_CFG.markers["frame"] = FRAME_MARKER_SMALL_CFG.markers["frame"]
 
 asset_factory = {
     "m8_loose": {
@@ -211,13 +207,13 @@ class ScrewSceneCfg(InteractiveSceneCfg):
                 usd_path=self.screw_dict["nut_path"],
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(
                     disable_gravity=True,
-                    linear_damping=0.0,
-                    angular_damping=0.0,
-                    max_depenetration_velocity=5.0,
-                    max_linear_velocity=1000.0,
-                    max_angular_velocity=3666.0,
-                    enable_gyroscopic_forces=True,
-                    solver_position_iteration_count=192,
+                    # linear_damping=0.0,
+                    # angular_damping=0.0,
+                    # max_depenetration_velocity=5.0,
+                    # max_linear_velocity=1000.0,
+                    # max_angular_velocity=3666.0,
+                    # enable_gyroscopic_forces=True,
+                    # solver_position_iteration_count=192,
             ),
             ),
         )
@@ -228,13 +224,13 @@ class ScrewSceneCfg(InteractiveSceneCfg):
                 usd_path=self.screw_dict["bolt_path"],
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(               
                     linear_damping=0.0,
-                    angular_damping=0.0,
-                    max_depenetration_velocity=5.0,
-                    max_linear_velocity=1000.0,
-                    max_angular_velocity=3666.0,
-                    enable_gyroscopic_forces=True,
-                    solver_position_iteration_count=192,
-                    solver_velocity_iteration_count=1,
+                    # angular_damping=0.0,
+                    # max_depenetration_velocity=5.0,
+                    # max_linear_velocity=1000.0,
+                    # max_angular_velocity=3666.0,
+                    # enable_gyroscopic_forces=True,
+                    # solver_position_iteration_count=192,
+                    # solver_velocity_iteration_count=1,
                 ),
                 # articulation_props=sim_utils.ArticulationRootPropertiesCfg(articulation_enabled=False)
                 ),
@@ -250,12 +246,10 @@ class ScrewSceneCfg(InteractiveSceneCfg):
         self.nut_frame = FrameTransformerCfg(
             prim_path="{ENV_REGEX_NS}/Origin",
             debug_vis=True,
-            visualizer_cfg=PLATE_ARROW_CFG.replace(prim_path="/Visuals/Nut"),
+            visualizer_cfg=BLUE_PLATE_MARKER_CFG.replace(prim_path="/Visuals/Nut"),
             target_frames=[
                 FrameTransformerCfg.FrameCfg(
-                    # prim_path="{ENV_REGEX_NS}/Nut/factory_nut",
                     prim_path="{ENV_REGEX_NS}/Nut/" + f"{self.screw_dict['nut_geom_name']}",
-
                     name="nut",
                     offset=self.screw_dict["nut_frame_offset"],
                 )
@@ -533,7 +527,18 @@ class BaseNutThreadEnvCfg(BaseScrewEnvCfg):
             prim_path="{ENV_REGEX_NS}/Origin",
             debug_vis=True,
             visualizer_cfg=BLUE_PLATE_MARKER_CFG.replace(prim_path="/Visuals/Nut"),
-            # visualizer_cfg=PLATE_ARROW_CFG.replace(prim_path="/Visuals/Nut"),
+            target_frames=[
+                FrameTransformerCfg.FrameCfg(
+                    prim_path="{ENV_REGEX_NS}/Nut/" + f"{screw_dict['nut_geom_name']}",
+                    name="nut",
+                    offset=screw_dict["nut_frame_offset"],
+                )
+            ],
+        )
+        self.scene.nut_frame_dir = FrameTransformerCfg(
+            prim_path="{ENV_REGEX_NS}/Origin",
+            debug_vis=True,
+            visualizer_cfg=FRAME_MARKER_SMALL_CFG.replace(prim_path="/Visuals/Nut2"),
             target_frames=[
                 FrameTransformerCfg.FrameCfg(
                     prim_path="{ENV_REGEX_NS}/Nut/" + f"{screw_dict['nut_geom_name']}",
