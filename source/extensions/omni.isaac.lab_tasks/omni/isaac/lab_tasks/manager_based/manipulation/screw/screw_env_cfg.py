@@ -276,7 +276,7 @@ class BaseObservationsCfg:
         def __post_init__(self):
             self.enable_corruption = False
             self.concatenate_terms = True
-            self.hist_len = 1
+            self.history_length = 1
 
     # observation groups
     policy: PolicyCfg = PolicyCfg()
