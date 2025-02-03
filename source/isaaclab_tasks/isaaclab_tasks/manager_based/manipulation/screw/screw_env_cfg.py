@@ -209,8 +209,16 @@ class ScrewSceneCfg(InteractiveSceneCfg):
             prim_path="{ENV_REGEX_NS}/Nut",
             spawn=sim_utils.UsdFileCfg(
                 usd_path=self.screw_dict["nut_path"],
-                rigid_props=sim_utils.RigidBodyPropertiesCfg(disable_gravity=True),
-                # articulation_props=sim_utils.ArticulationRootPropertiesCfg(articulation_enabled=False)
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                    disable_gravity=True,
+                    linear_damping=0.0,
+                    angular_damping=0.0,
+                    max_depenetration_velocity=5.0,
+                    max_linear_velocity=1000.0,
+                    max_angular_velocity=3666.0,
+                    enable_gyroscopic_forces=True,
+                    solver_position_iteration_count=192,
+            ),
             ),
         )
 
@@ -218,6 +226,16 @@ class ScrewSceneCfg(InteractiveSceneCfg):
             prim_path="{ENV_REGEX_NS}/Bolt",
             spawn=sim_utils.UsdFileCfg(
                 usd_path=self.screw_dict["bolt_path"],
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(               
+                    linear_damping=0.0,
+                    angular_damping=0.0,
+                    max_depenetration_velocity=5.0,
+                    max_linear_velocity=1000.0,
+                    max_angular_velocity=3666.0,
+                    enable_gyroscopic_forces=True,
+                    solver_position_iteration_count=192,
+                    solver_velocity_iteration_count=1,
+                ),
                 # articulation_props=sim_utils.ArticulationRootPropertiesCfg(articulation_enabled=False)
                 ),
             init_state=self.screw_dict["bolt_init_state"],
