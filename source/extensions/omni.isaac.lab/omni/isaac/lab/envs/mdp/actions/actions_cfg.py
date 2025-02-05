@@ -272,15 +272,15 @@ class RigidObjectPoseActionTermCfg(ActionTermCfg):
     scale = [1, 1, 1, 1, 1, 1]
 
 
-@configclass
-class Robotiq3FingerActionCfg(ActionTermCfg):
-    """Configuration for the Robotiq 3-finger gripper action term"""
+# @configclass
+# class Robotiq3FingerActionCfg(ActionTermCfg):
+#     """Configuration for the Robotiq 3-finger gripper action term"""
 
-    side: Literal["left", "right"] = "left"
-    class_type: type[ActionTerm] = robotiq_3f_actions.Robotiq3FingerAction
-    use_relative_mode: bool = True
-    is_accumulate_action: bool = False
-    keep_grasp_state: bool = False
+#     side: Literal["left", "right"] = "left"
+#     class_type: type[ActionTerm] = robotiq_3f_actions.Robotiq3FingerAction
+#     use_relative_mode: bool = True
+#     is_accumulate_action: bool = False
+#     keep_grasp_state: bool = False
 
 
 @configclass

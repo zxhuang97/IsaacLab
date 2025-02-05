@@ -426,6 +426,8 @@ class FactoryEnv(DirectRLEnv):
         """Update intermediate values used for rewards and observations."""
         self._compute_intermediate_values(dt=self.physics_dt)
         time_out = self.episode_length_buf >= self.max_episode_length - 1
+        # print("Time out indices:", (time_out==1).nonzero(as_tuple=True))
+        # print(self.episode_length_buf)
         return time_out, time_out
 
     def _get_curr_successes(self, success_threshold, check_rot=False):
@@ -529,6 +531,7 @@ class FactoryEnv(DirectRLEnv):
         We assume all envs will always be reset at the same time.
         """
         super()._reset_idx(env_ids)
+        # print(f"Resetting env {env_ids}")
 
         self._set_assets_to_default_pose(env_ids)
         self._set_franka_to_default_pose(joints=self.cfg.ctrl.reset_joints, env_ids=env_ids)
@@ -693,7 +696,7 @@ class FactoryEnv(DirectRLEnv):
         fixed_asset_pos_noise = torch.randn((len(env_ids), 3), dtype=torch.float32, device=self.device)
         fixed_asset_pos_rand = torch.tensor(self.cfg.obs_rand.fixed_asset_pos, dtype=torch.float32, device=self.device)
         fixed_asset_pos_noise = fixed_asset_pos_noise @ torch.diag(fixed_asset_pos_rand)
-        self.init_fixed_pos_obs_noise[:] = fixed_asset_pos_noise
+        self.init_fixed_pos_obs_noise[env_ids,:] = fixed_asset_pos_noise
 
         self.step_sim_no_action()
 
