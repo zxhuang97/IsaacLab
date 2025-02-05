@@ -33,6 +33,7 @@ from omni.isaac.lab.utils import configclass
 from omni.isaac.lab.utils.assets import ISAAC_NUCLEUS_DIR
 from omni.isaac.lab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 
+from omni.isaac.lab.sim.spawners.materials.physics_materials_cfg import RigidBodyMaterialCfg
 import omni.isaac.lab_tasks.manager_based.manipulation.screw.mdp as mdp
 
 from omni.isaac.lab.markers.config import (  # isort: skip
@@ -44,7 +45,7 @@ from omni.isaac.lab.markers.config import (  # isort: skip
 
 # Scene definition
 FRAME_MARKER_SMALL_CFG = copy.deepcopy(FRAME_MARKER_CFG)
-FRAME_MARKER_SMALL_CFG.markers["frame"].scale = (0.008, 0.008, 0.008)
+FRAME_MARKER_SMALL_CFG.markers["frame"].scale = (0.02, 0.02, 0.02)
 RED_PLATE_MARKER_CFG = VisualizationMarkersCfg(
     markers={
         "height": sim_utils.CylinderCfg(
@@ -58,14 +59,10 @@ BLUE_PLATE_MARKER_CFG = RED_PLATE_MARKER_CFG.copy()
 BLUE_PLATE_MARKER_CFG.markers["height"].visual_material = sim_utils.PreviewSurfaceCfg(
     diffuse_color=(0, 0, 1.0), opacity=0.5
 )
-PLATE_ARROW_CFG = VisualizationMarkersCfg(
-    markers={
-        "frame": sim_utils.UsdFileCfg(
-            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/UIElements/frame_prim.usd",
-            scale=(0.008, 0.008, 0.008),
-        ),
-    }
-)
+
+# For some reasons, can't visualize two markers at the same time
+# PLATE_ARROW_CFG = BLUE_PLATE_MARKER_CFG.copy()
+# PLATE_ARROW_CFG.markers["frame"] = FRAME_MARKER_SMALL_CFG.markers["frame"]
 
 asset_factory = {
     "m8_loose": {
@@ -204,7 +201,7 @@ class ScrewSceneCfg(InteractiveSceneCfg):
             obj_cfg = functools.partial(ArticulationCfg, actuators={})
         else:
             obj_cfg = functools.partial(RigidObjectCfg)
-        # objects
+        
         self.nut: RigidObjectCfg = obj_cfg(
             prim_path="{ENV_REGEX_NS}/Nut",
             spawn=sim_utils.UsdFileCfg(
@@ -232,7 +229,7 @@ class ScrewSceneCfg(InteractiveSceneCfg):
         self.nut_frame = FrameTransformerCfg(
             prim_path="{ENV_REGEX_NS}/Origin",
             debug_vis=True,
-            visualizer_cfg=PLATE_ARROW_CFG.replace(prim_path="/Visuals/Nut"),
+            visualizer_cfg=FRAME_MARKER_SMALL_CFG.replace(prim_path="/Visuals/Nut"),
             target_frames=[
                 FrameTransformerCfg.FrameCfg(
                     # prim_path="{ENV_REGEX_NS}/Nut/factory_nut",
@@ -276,7 +273,7 @@ class BaseObservationsCfg:
         def __post_init__(self):
             self.enable_corruption = False
             self.concatenate_terms = True
-            # self.hist_len = 1
+            self.history_length = 1
 
     # observation groups
     policy: PolicyCfg = PolicyCfg()
@@ -316,6 +313,7 @@ class BaseScrewEnvCfg(ManagerBasedRLEnvCfg):
     events: EventCfg = EventCfg()
     curriculum = CurriculumCfg()
 
+    # my parameters
     sim: SimulationCfg = SimulationCfg(
         dt=1.0 / 60.0,
         physx=PhysxCfg(
@@ -514,8 +512,19 @@ class BaseNutThreadEnvCfg(BaseScrewEnvCfg):
         self.scene.nut_frame = FrameTransformerCfg(
             prim_path="{ENV_REGEX_NS}/Origin",
             debug_vis=True,
-            visualizer_cfg=BLUE_PLATE_MARKER_CFG.replace(prim_path="/Visuals/Nut"),
-            # visualizer_cfg=PLATE_ARROW_CFG.replace(prim_path="/Visuals/Nut"),
+            visualizer_cfg=FRAME_MARKER_SMALL_CFG.replace(prim_path="/Visuals/Nut_frame"),
+            target_frames=[
+                FrameTransformerCfg.FrameCfg(
+                    prim_path="{ENV_REGEX_NS}/Nut/" + f"{screw_dict['nut_geom_name']}",
+                    name="nut",
+                    offset=screw_dict["nut_frame_offset"],
+                )
+            ],
+        )
+        self.scene.nut_frame_plate= FrameTransformerCfg(
+            prim_path="{ENV_REGEX_NS}/Origin",
+            debug_vis=True,
+            visualizer_cfg=BLUE_PLATE_MARKER_CFG.replace(prim_path="/Visuals/Nut_plate"),
             target_frames=[
                 FrameTransformerCfg.FrameCfg(
                     prim_path="{ENV_REGEX_NS}/Nut/" + f"{screw_dict['nut_geom_name']}",
