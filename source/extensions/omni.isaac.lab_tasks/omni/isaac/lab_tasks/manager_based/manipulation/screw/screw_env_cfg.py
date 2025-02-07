@@ -378,7 +378,7 @@ class BaseScrewEnvCfg(ManagerBasedRLEnvCfg):
         nut.spawn.rigid_props.linear_damping = nut_params.linear_damping
         nut.spawn.rigid_props.angular_damping = nut_params.angular_damping
 
-        self.episode_length_s = 24
+        self.episode_length_s = 24   # 24, 10 for sim quality test
         self.viewer.origin_type = "asset_root"
         self.viewer.asset_name = "bolt"
         self.viewer.eye = (0.1, 0, 0.04)
