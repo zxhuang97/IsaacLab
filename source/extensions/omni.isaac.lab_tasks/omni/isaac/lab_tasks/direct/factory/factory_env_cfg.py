@@ -88,8 +88,8 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         "fixed_quat",
     ]
 
-    task_name: str = "peg_insert"  # peg_insert, gear_mesh, nut_thread
-    task: FactoryTask = FactoryTask()
+    name: str = "peg_insert"  # peg_insert, gear_mesh, nut_thread
+    task_class: FactoryTask = FactoryTask()
     obs_rand: ObsRandCfg = ObsRandCfg()
     ctrl: CtrlCfg = CtrlCfg()
 
@@ -108,7 +108,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
             gpu_max_rigid_contact_count=2**23,
             gpu_max_rigid_patch_count=2**23,
             gpu_max_num_partitions=1,  # Important for stable simulation.
-            gpu_collision_stack_size=1024*(2**20),# For 1024 parallel scenes, too many collisions
+            gpu_collision_stack_size=2048*(2**20),# For 1024 parallel scenes, too many collisions
         ),
         physics_material=RigidBodyMaterialCfg(
             static_friction=1.0,
@@ -191,15 +191,15 @@ class FactoryEnvCfg(DirectRLEnvCfg):
 
 @configclass
 class FactoryTaskPegInsertCfg(FactoryEnvCfg):
-    task_name = "peg_insert"
-    task = PegInsert()
+    name = "peg_insert"
+    task_class = PegInsert()
     episode_length_s = 10.0
 
 
 @configclass
 class FactoryTaskGearMeshCfg(FactoryEnvCfg):
-    task_name = "gear_mesh"
-    task = GearMesh()
+    name = "gear_mesh"
+    task_class = GearMesh()
     episode_length_s = 20.0
 
 
@@ -207,8 +207,8 @@ from omegaconf import OmegaConf
 
 @configclass
 class FactoryTaskNutThreadCfg(FactoryEnvCfg):
-    task_name = "nut_thread"
-    task = NutThread()
+    name = "nut_thread"
+    task_class = NutThread()
     episode_length_s = 30.0
 
     # To enable experiments with cfg dicts
@@ -264,8 +264,8 @@ class FactoryTaskNutThreadCfg(FactoryEnvCfg):
         ])
 
         # NutThread Task related properties
-        params.task = params.get("taskcfg", {})
-        update_terminals(self.task, params.task, [
+        params.task_class = params.get("taskcfg", {})
+        update_terminals(self.task_class, params.task_class, [
             "hand_init_pos",
             "hand_init_pos_noise",
             "hand_init_orn",
@@ -302,8 +302,8 @@ class FactoryTaskNutThreadCfg(FactoryEnvCfg):
         # nut.spawn.rigid_props.angular_damping = nut_params.angular_damping
 
         self.episode_length_s = 24   # 24, 10 for sim quality test
-        # self.viewer.origin_type = "asset_root"
-        # self.viewer.asset_name = "bolt"
-        # self.viewer.eye = (0.1, 0, 0.04)
-        # self.viewer.lookat = (0, 0, 0.04)
-        # self.viewer.resolution = (720, 720)
+        self.viewer.origin_type = "asset_root"
+        self.viewer.asset_name = "fixed_asset"
+        self.viewer.eye = (0.1, 0.1, 0.06)
+        self.viewer.lookat = (0, 0.0, 0.04)
+        self.viewer.resolution = (720, 720)

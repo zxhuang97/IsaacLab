@@ -3,6 +3,12 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
+# Profiling
+# import cProfile
+# import pstats
+# import io
+
+
 import numpy as np
 import torch
 
@@ -22,6 +28,7 @@ from .factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG, FactoryEnvCfg
 
 class FactoryEnv(DirectRLEnv):
     cfg: FactoryEnvCfg
+    # profiler = cProfile.Profile()
 
     def __init__(self, cfg: FactoryEnvCfg, render_mode: str | None = None, **kwargs):
         # Update number of obs/states
@@ -29,7 +36,8 @@ class FactoryEnv(DirectRLEnv):
         cfg.state_space = sum([STATE_DIM_CFG[state] for state in cfg.state_order])
         cfg.observation_space += cfg.action_space
         cfg.state_space += cfg.action_space
-        self.cfg_task = cfg.task
+        # cfg.task -> cfg.task_class
+        self.cfg_task = cfg.task_class
 
         super().__init__(cfg, render_mode, **kwargs)
 
@@ -571,7 +579,8 @@ class FactoryEnv(DirectRLEnv):
     def set_pos_inverse_kinematics(self, env_ids):
         """Set robot joint position using DLS IK."""
         ik_time = 0.0
-        while ik_time < 0.25:
+        # while ik_time < 0.25:
+        while ik_time < 0.08:       # DEFAULT = 0.25
             # Compute error to target.
             pos_error, axis_angle_error = fc.get_pose_error(
                 fingertip_midpoint_pos=self.fingertip_midpoint_pos[env_ids],
@@ -661,6 +670,9 @@ class FactoryEnv(DirectRLEnv):
 
     def randomize_initial_state(self, env_ids):
         """Randomize initial state and perform any episode-level randomization."""
+        # Profile
+        # self.profiler.enable()
+
         # Disable gravity.
         physics_sim_view = sim_utils.SimulationContext.instance().physics_sim_view
         physics_sim_view.set_gravity(carb.Float3(0.0, 0.0, 0.0))
@@ -840,7 +852,7 @@ class FactoryEnv(DirectRLEnv):
         self.step_sim_no_action()
 
         grasp_time = 0.0
-        while grasp_time < 0.25:
+        while grasp_time < 0.08:        # DEFAULT = 0.25
             self.ctrl_target_joint_pos[env_ids, 7:] = 0.0  # Close gripper.
             self.ctrl_target_gripper_dof_pos = 0.0
             self.close_gripper_in_place()
@@ -889,3 +901,5 @@ class FactoryEnv(DirectRLEnv):
         self._set_gains(self.default_gains)
 
         physics_sim_view.set_gravity(carb.Float3(*self.cfg.sim.gravity))
+
+        # self.profiler.disable()
