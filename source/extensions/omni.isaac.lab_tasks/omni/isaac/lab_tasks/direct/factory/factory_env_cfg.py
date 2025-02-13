@@ -286,6 +286,11 @@ class FactoryTaskNutThreadCfg(FactoryEnvCfg):
         # nut_params.linear_damping = nut_params.get("linear_damping", None)
         # nut_params.angular_damping = nut_params.get("angular_damping", None)
 
+        # Sensors
+        params.observations = params.get("observations", OmegaConf.create())
+        self.use_tiled_camera = params.observations.get("use_tiled_camera", False)
+
+
     def __post_init__(self):
         """Post initialization."""
         self.update_env_params()
