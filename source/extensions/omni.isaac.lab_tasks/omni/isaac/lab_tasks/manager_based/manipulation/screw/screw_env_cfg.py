@@ -275,9 +275,21 @@ class BaseObservationsCfg:
             self.concatenate_terms = True
             self.history_length = 1
 
+    # Make a noise-free auxiliary task nut pose
+    @configclass
+    class AuxCfg(ObsGroup):
+        # bolt_pose = ObsTerm(func=mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("bolt")})
+        nut_pos = ObsTerm(func=mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("nut")})
+        nut_quat = ObsTerm(func=mdp.root_quat_w, params={"asset_cfg": SceneEntityCfg("nut")})
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True
+            self.history_length = 1
+
     # observation groups
     policy: PolicyCfg = PolicyCfg()
-
+    aux_task: AuxCfg = AuxCfg()
 
 @configclass
 class EventCfg:
