@@ -556,9 +556,17 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         nut_params = self.params.scene.nut
         if nut_params.rigid_grasp:
             self.scene.nut.spawn.func = spawn_nut_with_rigid_grasp
+            
         # observations
         obs_params = self.params.observations
         self.observations.policy.history_length = obs_params.history_length
+
+        if obs_params.critic_privil_obs:
+            self.observations.critic = self.observations.CriticCfg()
+            self.observations.critic.history_length = obs_params.history_length     # Add the critic length
+        if obs_params.actor_aux_task:
+            self.observations.aux_task = self.observations.AuxCfg()
+
         self.observations.policy.flatten_history_dim = obs_params.flatten_history_dim
         if obs_params.include_wrench:
             self.observations.policy.wrist_wrench = ObsTerm(
@@ -566,16 +574,34 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
                 params={"asset_cfg": SceneEntityCfg("robot", body_names=[obs_params.wrench_target_body])},
                 scale=1,
             )
+            if obs_params.critic_privil_obs:
+                self.observations.critic.wrist_wrench = ObsTerm(
+                    func=mdp.body_incoming_wrench,
+                    params={"asset_cfg": SceneEntityCfg("robot", body_names=[obs_params.wrench_target_body])},
+                    scale=1,
+                )
         if obs_params.include_tool:
             self.observations.policy.tool_pose = ObsTerm(
-                func=robot_tool_pose)
+                func=robot_tool_pose
+            )
+            if obs_params.critic_privil_obs:
+                self.observations.critic.tool_pose = ObsTerm(
+                    func=robot_tool_pose
+                )
+            
         if obs_params.include_action:
             self.observations.policy.last_action = ObsTerm(
                 func=mdp.last_action,
                 params={"action_name": "arm_action"},
                 scale=1,
             )
-            
+            if obs_params.critic_privil_obs:
+                self.observations.critic.last_action = ObsTerm(
+                    func=mdp.last_action,
+                    params={"action_name": "arm_action"},
+                    scale=1,
+                )
+                
         self.observations.policy.nut_pos.modifiers = [NoiseModifierCfg(
             noise_cfg=GaussianNoiseCfg(mean=0.0, std=obs_params.nut_pos.noise_std, operation="add"),
             bias_noise_cfg=GaussianNoiseCfg(mean=0.0, std=obs_params.nut_pos.bias_std, operation="abs"),
@@ -653,8 +679,6 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         if termination_params.far_from_bolt:
             self.terminations.far_from_bolt = DoneTerm(func=terminate_if_far_from_bolt)
         self.scene.nut.spawn.activate_contact_sensors = True
-
-
 
 
         # rewards

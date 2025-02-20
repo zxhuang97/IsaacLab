@@ -162,6 +162,29 @@ class ScrewSceneCfg(InteractiveSceneCfg):
 
     screw_type: Literal["m8_loose", "m8_tight", "m16_loose", "m16_tight"] = "m8_tight"
 
+    def add_visualize_nut(self):
+        # Visual-only predicted nut
+        self.predicted_nut_material = sim_utils.PreviewSurfaceCfg(
+            diffuse_color=(1.0, 0.0, 0.0),  # Red color
+            opacity=0.5             # Half transparent
+        )
+
+        self.predicted_nut = RigidObjectCfg(
+            prim_path="{ENV_REGEX_NS}/PredictedNut",
+            spawn=sim_utils.UsdFileCfg(
+                usd_path=self.screw_dict["nut_path"],
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                    disable_gravity=True,
+                    solver_position_iteration_count=0,  # Optimize performance
+                    solver_velocity_iteration_count=0
+                ),
+                collision_props=sim_utils.CollisionPropertiesCfg(
+                    collision_enabled=False  # Disable collisions
+                ),
+                visual_material=self.predicted_nut_material
+            ),
+        )
+
     def __post_init__(self):
         self.screw_dict = asset_factory[self.screw_type]
         # world
@@ -201,6 +224,12 @@ class ScrewSceneCfg(InteractiveSceneCfg):
             obj_cfg = functools.partial(ArticulationCfg, actuators={})
         else:
             obj_cfg = functools.partial(RigidObjectCfg)
+
+        # Materials for visualization
+        self.nut_material = sim_utils.PreviewSurfaceCfg(
+            diffuse_color=(1.0, 0.0, 0.0),  # Red color
+            opacity=0.5             # Half transparent
+        )
         
         self.nut: RigidObjectCfg = obj_cfg(
             prim_path="{ENV_REGEX_NS}/Nut",
@@ -208,6 +237,7 @@ class ScrewSceneCfg(InteractiveSceneCfg):
                 usd_path=self.screw_dict["nut_path"],
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(disable_gravity=True),
                 # articulation_props=sim_utils.ArticulationRootPropertiesCfg(articulation_enabled=False)
+                # visual_material=self.nut_material
             ),
         )
 
@@ -287,9 +317,24 @@ class BaseObservationsCfg:
             self.concatenate_terms = True
             self.history_length = 1
 
+    # Make a noise-free critic
+    @configclass
+    class CriticCfg(ObsGroup):
+        # bolt_pose = ObsTerm(func=mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("bolt")})
+        nut_pos = ObsTerm(func=mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("nut")})
+        nut_quat = ObsTerm(func=mdp.root_quat_w, params={"asset_cfg": SceneEntityCfg("nut")})
+        nut_lin_vel = ObsTerm(func=mdp.root_lin_vel_w, params={"asset_cfg": SceneEntityCfg("nut")})
+        nut_ang_vel = ObsTerm(func=mdp.root_ang_vel_w, params={"asset_cfg": SceneEntityCfg("nut")})
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True
+            self.history_length = 1
+
     # observation groups
     policy: PolicyCfg = PolicyCfg()
-    aux_task: AuxCfg = AuxCfg()
+    # critic: CriticCfg = CriticCfg()
+    # aux_task: AuxCfg = AuxCfg()
 
 @configclass
 class EventCfg:
