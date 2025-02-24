@@ -9,6 +9,7 @@ import pickle
 from tracemalloc import start
 import torch
 from typing import Literal, Sequence
+import copy
 
 from numba.core import event
 import omni.isaac.core.utils.stage as stage_utils
@@ -375,6 +376,7 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         obs_params.nut_pos = obs_params.get("nut_pos", OmegaConf.create())
         obs_params.nut_pos.noise_std = obs_params.nut_pos.get("noise_std", 0.0)
         obs_params.nut_pos.bias_std = obs_params.nut_pos.get("bias_std", 0.0)
+        obs_params.critic_privil_obs = obs_params.get("critic_privil_obs", False)
 
         rewards_params = self.params.rewards
         rewards_params.dtw_ref_traj_w = rewards_params.get("dtw_ref_traj_w", 0.0)
@@ -486,13 +488,13 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
 
         # action
         action_params = self.params.actions
-        # arm_lows = [-0.004, -0.004, -0.004, -0.02, -0.02, -0.5]
-        # arm_highs = [0.004, 0.004, 0.004, 0.02, 0.02, 0.5]
-        # scale = [0.004, 0.004, 0.004, 0.02, 0.02, 0.5]
+        arm_lows = [-0.003, -0.003, -0.003, -0.02, -0.02, -0.4]
+        arm_highs = [0.003, 0.003, 0.003, 0.02, 0.02, 0.4]
+        scale = [0.003, 0.003, 0.003, 0.02, 0.02, 0.4]
 
-        arm_lows = [-0.002, -0.002, -0.002, -0.01, -0.01, -0.4]
-        arm_highs = [0.002, 0.002, 0.002, 0.01, 0.01, 0.4]
-        scale = [0.002, 0.002, 0.002, 0.01, 0.01, 0.4]
+        # arm_lows = [-0.002, -0.002, -0.002, -0.01, -0.01, -0.4]
+        # arm_highs = [0.002, 0.002, 0.002, 0.01, 0.01, 0.4]
+        # scale = [0.002, 0.002, 0.002, 0.01, 0.01, 0.4]
         if self.params.events.reset_target == "rigid_grasp_open_tilt" or \
                 self.params.events.reset_joint_std > 0:
             arm_lows = [-0.002, -0.002, -0.002, -0.01, -0.01, -0.5]
@@ -575,7 +577,9 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
                 params={"action_name": "arm_action"},
                 scale=1,
             )
-            
+        # observation space for oracle - noise-free
+        if obs_params.critic_privil_obs:
+            self.observations.critic = copy.deepcopy(self.observations.policy)
         self.observations.policy.nut_pos.modifiers = [NoiseModifierCfg(
             noise_cfg=GaussianNoiseCfg(mean=0.0, std=obs_params.nut_pos.noise_std, operation="add"),
             bias_noise_cfg=GaussianNoiseCfg(mean=0.0, std=obs_params.nut_pos.bias_std, operation="abs"),
