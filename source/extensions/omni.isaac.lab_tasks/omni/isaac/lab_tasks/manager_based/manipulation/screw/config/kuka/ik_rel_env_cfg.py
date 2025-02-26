@@ -564,7 +564,7 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         if obs_params.critic_privil_obs:
             self.observations.critic = self.observations.CriticCfg()
             self.observations.critic.history_length = obs_params.history_length     # Add the critic length
-        if obs_params.actor_aux_task:
+        if obs_params.actor_aux_task is not None or obs_params.critic_privil_obs != "":
             self.observations.aux_task = self.observations.AuxCfg()
 
         self.observations.policy.flatten_history_dim = obs_params.flatten_history_dim

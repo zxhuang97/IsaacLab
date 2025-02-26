@@ -237,7 +237,7 @@ class ScrewSceneCfg(InteractiveSceneCfg):
                 usd_path=self.screw_dict["nut_path"],
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(disable_gravity=True),
                 # articulation_props=sim_utils.ArticulationRootPropertiesCfg(articulation_enabled=False)
-                # visual_material=self.nut_material
+                visual_material=self.nut_material
             ),
         )
 
