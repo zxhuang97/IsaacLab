@@ -27,7 +27,7 @@ from omni.isaac.lab.assets import (
 )
 from omni.isaac.lab.sensors import ContactSensorCfg, FrameTransformerCfg, SensorBase, SensorBaseCfg
 from omni.isaac.lab.terrains import TerrainImporter, TerrainImporterCfg
-
+from omni.isaac.lab.markers.visualization_markers import VisualizationMarkersCfg, VisualizationMarkers
 from .interactive_scene_cfg import InteractiveSceneCfg
 
 
@@ -118,6 +118,7 @@ class InteractiveScene:
         self._rigid_object_collections = dict()
         self._sensors = dict()
         self._extras = dict()
+        self._markers = dict()      # Add markers
         # obtain the current stage
         self.stage = omni.usd.get_context().get_stage()
         # physics scene path

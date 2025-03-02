@@ -23,17 +23,17 @@ from omni.isaac.lab.managers import ObservationTermCfg as ObsTerm
 from omni.isaac.lab.managers import RewardTermCfg as RewTerm
 from omni.isaac.lab.managers import SceneEntityCfg
 from omni.isaac.lab.managers import TerminationTermCfg as DoneTerm
-from omni.isaac.lab.markers.visualization_markers import VisualizationMarkersCfg
+from omni.isaac.lab.markers import VecAutoUpdateVisualizationMarkersCfg, VisualizationMarkersCfg
 from omni.isaac.lab.scene import InteractiveSceneCfg
 from omni.isaac.lab.sensors import FrameTransformerCfg, ContactSensorCfg
 from omni.isaac.lab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
-from omni.isaac.lab.sim.schemas.schemas_cfg import MassPropertiesCfg, RigidBodyPropertiesCfg
+# from omni.isaac.lab.sim.schemas.schemas_cfg import MassPropertiesCfg, RigidBodyPropertiesCfg
 from omni.isaac.lab.sim.simulation_cfg import PhysxCfg, SimulationCfg
 from omni.isaac.lab.utils import configclass
 from omni.isaac.lab.utils.assets import ISAAC_NUCLEUS_DIR
-from omni.isaac.lab.utils.noise import AdditiveUniformNoiseCfg as Unoise
+# from omni.isaac.lab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 
-from omni.isaac.lab.sim.spawners.materials.physics_materials_cfg import RigidBodyMaterialCfg
+# from omni.isaac.lab.sim.spawners.materials.physics_materials_cfg import RigidBodyMaterialCfg
 import omni.isaac.lab_tasks.manager_based.manipulation.screw.mdp as mdp
 
 from omni.isaac.lab.markers.config import (  # isort: skip
@@ -59,6 +59,12 @@ BLUE_PLATE_MARKER_CFG = RED_PLATE_MARKER_CFG.copy()
 BLUE_PLATE_MARKER_CFG.markers["height"].visual_material = sim_utils.PreviewSurfaceCfg(
     diffuse_color=(0, 0, 1.0), opacity=0.5
 )
+BLUE_VIZ_MARKER_CFG = BLUE_PLATE_MARKER_CFG.copy()
+BLUE_VIZ_MARKER_CFG.markers["height"].height = 0.03
+BLUE_VIZ_MARKER_CFG.markers["height"].visual_material = sim_utils.PreviewSurfaceCfg(
+    diffuse_color=(0, 0, 1.0), opacity=0.2
+)
+
 
 # For some reasons, can't visualize two markers at the same time
 # PLATE_ARROW_CFG = BLUE_PLATE_MARKER_CFG.copy()
@@ -162,29 +168,6 @@ class ScrewSceneCfg(InteractiveSceneCfg):
 
     screw_type: Literal["m8_loose", "m8_tight", "m16_loose", "m16_tight"] = "m8_tight"
 
-    def add_visualize_nut(self):
-        # Visual-only predicted nut
-        self.predicted_nut_material = sim_utils.PreviewSurfaceCfg(
-            diffuse_color=(1.0, 0.0, 0.0),  # Red color
-            opacity=0.5             # Half transparent
-        )
-
-        self.predicted_nut = RigidObjectCfg(
-            prim_path="{ENV_REGEX_NS}/PredictedNut",
-            spawn=sim_utils.UsdFileCfg(
-                usd_path=self.screw_dict["nut_path"],
-                rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                    disable_gravity=True,
-                    solver_position_iteration_count=0,  # Optimize performance
-                    solver_velocity_iteration_count=0
-                ),
-                collision_props=sim_utils.CollisionPropertiesCfg(
-                    collision_enabled=False  # Disable collisions
-                ),
-                visual_material=self.predicted_nut_material
-            ),
-        )
-
     def __post_init__(self):
         self.screw_dict = asset_factory[self.screw_type]
         # world
@@ -225,19 +208,18 @@ class ScrewSceneCfg(InteractiveSceneCfg):
         else:
             obj_cfg = functools.partial(RigidObjectCfg)
 
-        # Materials for visualization
-        self.nut_material = sim_utils.PreviewSurfaceCfg(
-            diffuse_color=(1.0, 0.0, 0.0),  # Red color
-            opacity=0.5             # Half transparent
-        )
-        
         self.nut: RigidObjectCfg = obj_cfg(
             prim_path="{ENV_REGEX_NS}/Nut",
             spawn=sim_utils.UsdFileCfg(
                 usd_path=self.screw_dict["nut_path"],
-                rigid_props=sim_utils.RigidBodyPropertiesCfg(disable_gravity=True),
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                    disable_gravity=True,
+                ),
                 # articulation_props=sim_utils.ArticulationRootPropertiesCfg(articulation_enabled=False)
-                visual_material=self.nut_material
+                visual_material=sim_utils.PreviewSurfaceCfg(
+                    diffuse_color=(0.0, 0.5, 0.5),  # Red color
+                    opacity=1.0             # Half transparent
+                )
             ),
         )
 
@@ -264,7 +246,6 @@ class ScrewSceneCfg(InteractiveSceneCfg):
                 FrameTransformerCfg.FrameCfg(
                     # prim_path="{ENV_REGEX_NS}/Nut/factory_nut",
                     prim_path="{ENV_REGEX_NS}/Nut/" + f"{self.screw_dict['nut_geom_name']}",
-
                     name="nut",
                     offset=self.screw_dict["nut_frame_offset"],
                 )
@@ -272,9 +253,8 @@ class ScrewSceneCfg(InteractiveSceneCfg):
         )
 
         self.bolt_frame: FrameTransformerCfg = MISSING
-
-
-##
+        
+## 
 # MDP settings
 ##
 @configclass
@@ -284,7 +264,6 @@ class BaseActionsCfg:
     nut_action: ActionTerm | None = None
     arm_action: ActionTerm | None = None
     gripper_action: ActionTerm | None = None
-
 
 @configclass
 class BaseObservationsCfg:
@@ -590,6 +569,7 @@ class BaseNutThreadEnvCfg(BaseScrewEnvCfg):
                 )
             ],
         )
+
         self.scene.bolt_frame = FrameTransformerCfg(
             prim_path="{ENV_REGEX_NS}/Origin",
             debug_vis=True,
@@ -607,4 +587,19 @@ class BaseNutThreadEnvCfg(BaseScrewEnvCfg):
             prim_path="{ENV_REGEX_NS}/Nut/" + f"{screw_dict['nut_geom_name']}",
             filter_prim_paths_expr=["{ENV_REGEX_NS}/Bolt/" + f"{screw_dict['bolt_geom_name']}"],
             update_period=0.0,
+        )
+
+        self.auto_markers_cfg = VecAutoUpdateVisualizationMarkersCfg(
+            prim_path="World/Auto_visuals",
+            markers={
+                "nut_sphere": sim_utils.SphereCfg(
+                    radius=0.1,
+                    visual_material=sim_utils.GlassMdlCfg(
+                        glass_color=(0.0, 0.5, 0.5),  # Red color
+                    )
+                )
+            },
+            num_markers_per_type_env={
+                "nut_sphere": 1,
+            }
         )
