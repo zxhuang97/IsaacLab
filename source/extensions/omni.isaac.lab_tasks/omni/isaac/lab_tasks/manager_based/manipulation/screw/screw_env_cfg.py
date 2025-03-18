@@ -286,11 +286,21 @@ class BaseObservationsCfg:
 
     # Make a noise-free auxiliary task nut pose
     @configclass
-    class AuxCfg(ObsGroup):
+    class AuxNutPoseCfg(ObsGroup):
         # bolt_pose = ObsTerm(func=mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("bolt")})
         nut_pos = ObsTerm(func=mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("nut")})
         nut_quat = ObsTerm(func=mdp.root_quat_w, params={"asset_cfg": SceneEntityCfg("nut")})
 
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True
+            self.history_length = 1
+
+    @configclass
+    class AuxNutPosCfg(ObsGroup):
+        # bolt_pose = ObsTerm(func=mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("bolt")})
+        nut_pos = ObsTerm(func=mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("nut")})
+        
         def __post_init__(self):
             self.enable_corruption = False
             self.concatenate_terms = True
@@ -309,6 +319,10 @@ class BaseObservationsCfg:
             self.enable_corruption = False
             self.concatenate_terms = True
             self.history_length = 1
+
+    @configclass
+    class RMAPrivilCfg(PolicyCfg):
+        pass
 
     # observation groups
     policy: PolicyCfg = PolicyCfg()
@@ -592,14 +606,23 @@ class BaseNutThreadEnvCfg(BaseScrewEnvCfg):
         self.auto_markers_cfg = VecAutoUpdateVisualizationMarkersCfg(
             prim_path="World/Auto_visuals",
             markers={
-                "nut_sphere": sim_utils.SphereCfg(
-                    radius=0.1,
-                    visual_material=sim_utils.GlassMdlCfg(
-                        glass_color=(0.0, 0.5, 0.5),  # Red color
+                "viz_nut": sim_utils.UsdFileCfg(
+                    usd_path=self.scene.screw_dict["nut_path"],
+                    visual_material=sim_utils.PreviewSurfaceCfg(
+                        diffuse_color=(1.0, 0.0, 0.0),  # Red color
+                        opacity=0.1             # Half transparent
                     )
-                )
+                ),
+                "obs_viz_nut": sim_utils.UsdFileCfg(
+                    usd_path=self.scene.screw_dict["nut_path"],
+                    visual_material=sim_utils.PreviewSurfaceCfg(
+                        diffuse_color=(0.0, 0.0, 1.0),  # Blue color
+                        opacity=0.4             # Half transparent
+                    )
+                ),
             },
             num_markers_per_type_env={
-                "nut_sphere": 1,
+                "viz_nut": 1,
+                "obs_viz_nut": 1,
             }
         )

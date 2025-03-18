@@ -338,6 +338,10 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         self.params.sim.dt = self.params.sim.get("dt", 1.0 / 60.0)
         self.params.use_factory_params = self.params.get("use_factory_params", False)
         self.params.scene.robot = self.params.scene.get("robot", OmegaConf.create())
+
+        self.device = self.params.get("device", "cuda:0")
+        self.seed = self.params.get("seed", 1)
+
         # self.pre_grasp_path
         robot_params = self.params.scene.robot
         robot_params.collision_approximation = robot_params.get("collision_approximation", "convexHull2")
@@ -565,8 +569,17 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         if obs_params.critic_privil_obs:
             self.observations.critic = self.observations.CriticCfg()
             self.observations.critic.history_length = obs_params.history_length     # Add the critic length
-        if obs_params.actor_aux_task is not None and obs_params.actor_aux_task != "":
-            self.observations.aux_task = self.observations.AuxCfg()
+
+        # Add auxiliary task config
+        agent_class = self.params.agent.policy.class_name
+        aux_task_obs_dict = {
+            "ActorCriticNutPose": self.observations.AuxNutPoseCfg,
+            "ActorCriticNutDist": self.observations.AuxNutPoseCfg,
+            "ActorCriticNutPos": self.observations.AuxNutPosCfg,
+            "ActorCriticRMA": self.observations.RMAPrivilCfg,
+        }
+        if agent_class in aux_task_obs_dict.keys():
+            self.observations.aux_obs = aux_task_obs_dict[agent_class]()
 
         self.observations.policy.flatten_history_dim = obs_params.flatten_history_dim
         if obs_params.include_wrench:
@@ -581,6 +594,12 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
                     params={"asset_cfg": SceneEntityCfg("robot", body_names=[obs_params.wrench_target_body])},
                     scale=1,
                 )
+            if agent_class.startswith("ActorCriticRMA"):
+                self.observations.aux_obs.wrist_wrench = ObsTerm(
+                    func=mdp.body_incoming_wrench,
+                    params={"asset_cfg": SceneEntityCfg("robot", body_names=[obs_params.wrench_target_body])},
+                    scale=1,
+                )
         if obs_params.include_tool:
             self.observations.policy.tool_pose = ObsTerm(
                 func=robot_tool_pose
@@ -589,7 +608,10 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
                 self.observations.critic.tool_pose = ObsTerm(
                     func=robot_tool_pose
                 )
-            
+            if agent_class.startswith("ActorCriticRMA"):
+                self.observations.aux_obs.tool_pose = ObsTerm(
+                    func=robot_tool_pose
+                )
         if obs_params.include_action:
             self.observations.policy.last_action = ObsTerm(
                 func=mdp.last_action,
@@ -598,6 +620,12 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
             )
             if obs_params.critic_privil_obs:
                 self.observations.critic.last_action = ObsTerm(
+                    func=mdp.last_action,
+                    params={"action_name": "arm_action"},
+                    scale=1,
+                )
+            if agent_class.startswith("ActorCriticRMA"):
+                self.observations.aux_obs.last_action = ObsTerm(
                     func=mdp.last_action,
                     params={"action_name": "arm_action"},
                     scale=1,

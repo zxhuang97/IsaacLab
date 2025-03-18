@@ -165,7 +165,9 @@ class ManagerBasedEnv:
 
         # Initialize auto_markers
         if hasattr(cfg, 'auto_markers_cfg'):
-            self.auto_markers = VecAutoUpdateVisualizationMarkers(cfg.auto_markers_cfg, self.num_envs, None, self.device)
+            self.auto_markers = VecAutoUpdateVisualizationMarkers(
+                cfg.auto_markers_cfg, self.num_envs, self.scene.env_origins, None, self.device
+            )
         else:
             self.auto_markers = None
 

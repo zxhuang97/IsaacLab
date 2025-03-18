@@ -45,6 +45,8 @@ class KukaScrewPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         desired_kl=0.016,
         max_grad_norm=1.0,
     )
+    aux_backprop=False
+    device='cuda'
     # automate
     # algorithm = RslRlPpoAlgorithmCfg(
     #     value_loss_coef=2.0,
