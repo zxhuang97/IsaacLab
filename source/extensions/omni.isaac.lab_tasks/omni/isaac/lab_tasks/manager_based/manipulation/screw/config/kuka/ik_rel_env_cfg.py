@@ -335,7 +335,7 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
 
     def get_default_env_params(self):
         super().get_default_env_params()
-        self.params.sim.dt = self.params.sim.get("dt", 1.0 / 60.0)
+        self.params.sim.dt = self.params.sim.get("dt", 1.0 / 120.0)
         self.params.use_factory_params = self.params.get("use_factory_params", False)
         self.params.scene.robot = self.params.scene.get("robot", OmegaConf.create())
         # self.pre_grasp_path
