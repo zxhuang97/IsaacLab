@@ -97,6 +97,39 @@ def gaussian_noise(data: torch.Tensor, cfg: noise_cfg.GaussianNoiseCfg) -> torch
     else:
         raise ValueError(f"Unknown operation in noise: {cfg.operation}")
 
+def radial_noise(data: torch.Tensor, cfg: noise_cfg.RadialNoiseCfg) -> torch.Tensor:
+    """
+    Applies radial noise to the data such that each point is displaced by a
+    fixed magnitude in a random direction. For instance, if cfg.mean = 1.0
+    and the data point is [0, 0, 0], the resulting point will lie randomly
+    on the surface of a unit sphere (in 3D).
+
+    Args:
+        data: A tensor of shape (..., D) where D is the dimensionality.
+        cfg:  The configuration parameters for radial noise.
+
+    Returns:
+        A tensor of the same shape as `data`, with each point displaced
+        radially by `cfg.mean`.
+    """
+    # Ensure mean is on the same device as data
+    if isinstance(cfg.mean, torch.Tensor):
+        cfg.mean = cfg.mean.to(data.device)
+
+    # Generate random directions matching the shape of `data`
+    rand_dirs = torch.randn_like(data)
+
+    # Compute norms to get directions
+    # Add a small epsilon in case of any zero vectors
+    eps = 1e-12
+    norms = torch.norm(rand_dirs, dim=-1, keepdim=True) + eps
+
+    # Normalize and scale to.mean
+    unit_dirs = rand_dirs / norms
+    offset = unit_dirs * cfg.mean
+
+    # Apply the offset
+    return data + offset
 
 ##
 # Noise models as classes

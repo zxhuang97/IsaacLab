@@ -9,6 +9,7 @@
 # import io
 
 
+from calendar import c
 import numpy as np
 import torch
 
@@ -23,6 +24,7 @@ from omni.isaac.lab.utils.assets import ISAAC_NUCLEUS_DIR
 from omni.isaac.lab.utils.math import axis_angle_from_quat
 
 from omni.isaac.lab.sensors import TiledCamera, TiledCameraCfg
+from omni.isaac.lab.sensors.contact_sensor import ContactSensor, ContactSensorCfg
 from omni.isaac.lab.sensors import CameraCfg
 from omni.isaac.lab.sim.spawners.sensors import PinholeCameraCfg
 
@@ -199,37 +201,36 @@ class FactoryEnv(DirectRLEnv):
         light_cfg.func("/World/Light", light_cfg)
 
 
-        # Configure camera
-        # import omni.kit.viewport_legacy as vp_legacy
-        # viewport_window = vp_legacy.get_default_viewport_window()
-        # viewport_interface = viewport_window.get_viewport_interface()
-        # camera_state = viewport_interface.get_camera_state()  # returns a dict
+        # Add contact sensor
+        contact_sensor_cfg = ContactSensorCfg(
+            prim_path="/World/envs/env_.*/HeldAssetContact}",
+            filter_prim_paths_expr=[],      # Contact everything
+            update_period=0.0,
+        )
+        self.scene.sensors["held_asset_contact_sensor"] = ContactSensor(contact_sensor_cfg)
 
 
         # Add a camera
-        # ...existing code...
         if self.cfg.use_tiled_camera:
             offset_cfg = CameraCfg.OffsetCfg(
-                pos=(1, 0.0, 0.15), 
+                pos=(1, 0.0, 0.15),
                 rot=[0.4497752, 0.4401843, 0.5533875, 0.545621],
                 convention='opengl'
             )
-
-            ph_cfg = PinholeCameraCfg(visible=True, 
-                            semantic_tags=None, 
-                            copy_from_source=True, 
-                            projection_type='pinhole', 
-                            clipping_range=(0.0001, 20.0), 
-                            focal_length=24.0, 
-                            focus_distance=400.0, 
-                            f_stop=0.0, 
-                            horizontal_aperture=20.955, 
-                            vertical_aperture=None, 
-                            horizontal_aperture_offset=0.0, 
-                            vertical_aperture_offset=0.0, 
+            ph_cfg = PinholeCameraCfg(visible=True,
+                            semantic_tags=None,
+                            copy_from_source=True,
+                            projection_type='pinhole',
+                            clipping_range=(0.0001, 20.0),
+                            focal_length=24.0,
+                            focus_distance=400.0,
+                            f_stop=0.0,
+                            horizontal_aperture=20.955,
+                            vertical_aperture=None,
+                            horizontal_aperture_offset=0.0,
+                            vertical_aperture_offset=0.0,
                             lock_camera=True
             )
-
             tiled_camera_cfg = TiledCameraCfg(
                 width=720, height=720, 
                 offset=offset_cfg,

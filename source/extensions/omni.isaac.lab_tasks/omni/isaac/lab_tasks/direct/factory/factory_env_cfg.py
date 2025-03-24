@@ -12,6 +12,8 @@ from omni.isaac.lab.sim import PhysxCfg, SimulationCfg
 from omni.isaac.lab.sim.spawners.materials.physics_materials_cfg import RigidBodyMaterialCfg
 from omni.isaac.lab.utils import configclass
 
+from omegaconf import OmegaConf
+
 from .factory_tasks_cfg import ASSET_DIR, FactoryTask, GearMesh, NutThread, PegInsert
 
 OBS_DIM_CFG = {
@@ -43,7 +45,8 @@ STATE_DIM_CFG = {
 
 @configclass
 class ObsRandCfg:
-    fixed_asset_pos = [0.001, 0.001, 0.001]
+    # fixed_asset_pos = [0.001, 0.001, 0.001]
+    fixed_asset_pos = [0.0, 0.0, 0.0]
 
 
 @configclass
@@ -187,6 +190,90 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         },
     )
 
+    # To enable experiments with cfg dicts
+    params = OmegaConf.create()
+
+    def update_env_params(self):
+        """Set default environment parameters."""
+        # Initialize params structure
+        params = self.params
+
+        def update_terminals(container, config, keys):
+            """
+            Update each attribute in 'container' with the corresponding value
+            from 'config'. If a key is missing, leave the current value in 'container'.
+            """
+            for key in keys:
+                var = getattr(container, key)
+                var = config.get(key, var)
+
+        # params.scene = params.get("scene", OmegaConf.create())
+
+        # Hard Coded
+        # params.scene.nut = params.scene.get("nut", OmegaConf.create())
+        # params.scene.screw_type = params.scene.get("screw_type", "m16_loose")  # m8_tight m16_tight
+        # update_terminals(self, params, ["decimation"])
+
+        # Sim
+        # params.sim = params.get("sim", OmegaConf.create())
+        # update_terminals(self.sim, params.sim, ["dt"])
+        # Physx
+        # params.sim.physx = params.sim.get("physx", OmegaConf.create())
+        # update_terminals(self.sim.physx, params.sim.physx, [    
+        #     "friction_offset_threshold", 
+        #     "enable_ccd"
+        # ])  
+
+        # # --- Observation Randomization Config ---
+        # # Here we keep the whole config group in params.
+        params.obs_rand = params.get("obs_rand", {})
+        update_terminals(self.obs_rand, params.obs_rand, ["fixed_asset_pos"])
+        
+        # # --- Control Config ---
+        # params.ctrl = params.get("ctrl", {})
+        # update_terminals(self.ctrl, params.ctrl, [
+        #     "pos_action_bounds",
+        #     "rot_action_bounds",
+        #     "pos_action_threshold",
+        #     "rot_action_threshold",
+        #     "reset_joints",
+        #     "reset_task_prop_gains",
+        #     "reset_rot_deriv_scale",
+        #     "default_task_prop_gains"
+        # ])
+
+        # # NutThread Task related properties
+        # params.task_class = params.get("taskcfg", {})
+        # update_terminals(self.task_class, params.task_class, [
+        #     "hand_init_pos",
+        #     "hand_init_pos_noise",
+        #     "hand_init_orn",
+        #     "hand_init_orn_noise",
+        #     "unidirectional_rot",
+        #     "fixed_asset_init_pos_noise",
+        #     "fixed_asset_init_orn_deg",
+        #     "fixed_asset_init_orn_range_deg",
+        #     "held_asset_pos_noise",
+        #     "held_asset_rot_init",
+        # ])
+
+        # Sensors
+        params.observations = params.get("observations", OmegaConf.create())
+        self.use_tiled_camera = params.observations.get("use_tiled_camera", False)
+
+
+    def __post_init__(self):
+        """Post initialization."""
+        self.update_env_params()
+        self.sim.render_interval = self.decimation
+
+        # self.episode_length_s = 24   # 24, 10 for sim quality test
+        self.viewer.origin_type = "asset_root"
+        self.viewer.asset_name = "fixed_asset"
+        self.viewer.eye = (0.1, 0.1, 0.06)
+        self.viewer.lookat = (0, 0.0, 0.04)
+        self.viewer.resolution = (720, 720)
+
 
 
 @configclass
@@ -210,105 +297,3 @@ class FactoryTaskNutThreadCfg(FactoryEnvCfg):
     name = "nut_thread"
     task_class = NutThread()
     episode_length_s = 30.0
-
-    # To enable experiments with cfg dicts
-    params = OmegaConf.create()
-
-    def update_env_params(self):
-        """Set default environment parameters."""
-        # Initialize params structure
-        params = self.params
-
-        def update_terminals(container, config, keys):
-            """
-            Update each attribute in 'container' with the corresponding value
-            from 'config'. If a key is missing, leave the current value in 'container'.
-            """
-            for key in keys:
-                var = getattr(container, key)
-                var = config.get(key, var)
-
-        # params.scene = params.get("scene", OmegaConf.create())
-
-        # Hard Coded
-        # params.scene.nut = params.scene.get("nut", OmegaConf.create())
-        # params.scene.screw_type = params.scene.get("screw_type", "m16_loose")  # m8_tight m16_tight
-        update_terminals(self, params, ["decimation"])
-
-        # Sim
-        params.sim = params.get("sim", OmegaConf.create())
-        update_terminals(self.sim, params.sim, ["dt"])
-        # Physx
-        params.sim.physx = params.sim.get("physx", OmegaConf.create())
-        update_terminals(self.sim.physx, params.sim.physx, [    
-            "friction_offset_threshold", 
-            "enable_ccd"
-        ])  
-
-        # # --- Observation Randomization Config ---
-        # # Here we keep the whole config group in params.
-        params.obs_rand = params.get("obs_rand", {})
-        update_terminals(self.obs_rand, params.obs_rand, ["fixed_asset_pos"])
-        
-        # --- Control Config ---
-        params.ctrl = params.get("ctrl", {})
-        update_terminals(self.ctrl, params.ctrl, [
-            "pos_action_bounds",
-            "rot_action_bounds",
-            "pos_action_threshold",
-            "rot_action_threshold",
-            "reset_joints",
-            "reset_task_prop_gains",
-            "reset_rot_deriv_scale",
-            "default_task_prop_gains"
-        ])
-
-        # NutThread Task related properties
-        params.task_class = params.get("taskcfg", {})
-        update_terminals(self.task_class, params.task_class, [
-            "hand_init_pos",
-            "hand_init_pos_noise",
-            "hand_init_orn",
-            "hand_init_orn_noise",
-            "unidirectional_rot",
-            "fixed_asset_init_pos_noise",
-            "fixed_asset_init_orn_deg",
-            "fixed_asset_init_orn_range_deg",
-            "held_asset_pos_noise",
-            "held_asset_rot_init",
-        ])
-
-        # By default use the default params in USD
-        # nut_params = params.scene.nut
-        # nut_params.max_depenetration_velocity = nut_params.get("max_depenetration_velocity", None)
-        # nut_params.sleep_threshold = nut_params.get("sleep_threshold", None)
-        # nut_params.stabilization_threshold = nut_params.get("stabilization_threshold", None)
-        # nut_params.linear_damping = nut_params.get("linear_damping", None)
-        # nut_params.angular_damping = nut_params.get("angular_damping", None)
-
-        # Sensors
-        params.observations = params.get("observations", OmegaConf.create())
-        self.use_tiled_camera = params.observations.get("use_tiled_camera", False)
-
-
-    def __post_init__(self):
-        """Post initialization."""
-        self.update_env_params()
-        # self.screw_type = self.params.scene.screw_type
-        self.sim.render_interval = self.decimation
-        # self.rerender_on_reset = True
-        
-        # nut = self.scene.nut
-        # nut_params = self.params.scene.nut
-        # nut.spawn.rigid_props.max_depenetration_velocity = nut_params.max_depenetration_velocity
-        # nut.spawn.rigid_props.sleep_threshold = nut_params.sleep_threshold
-        # nut.spawn.rigid_props.stabilization_threshold = nut_params.stabilization_threshold
-        # nut.spawn.rigid_props.linear_damping = nut_params.linear_damping
-        # nut.spawn.rigid_props.angular_damping = nut_params.angular_damping
-
-        self.episode_length_s = 24   # 24, 10 for sim quality test
-        self.viewer.origin_type = "asset_root"
-        self.viewer.asset_name = "fixed_asset"
-        self.viewer.eye = (0.1, 0.1, 0.06)
-        self.viewer.lookat = (0, 0.0, 0.04)
-        self.viewer.resolution = (720, 720)
