@@ -394,7 +394,7 @@ class BaseScrewEnvCfg(ManagerBasedRLEnvCfg):
         params.scene.nut = params.scene.get("nut", OmegaConf.create())
 
         params.scene.screw_type = params.scene.get("screw_type", "m16_loose")  # m8_tight m16_tight
-        params.sim.dt = params.sim.get("dt", 1.0 / 60.0)
+        params.sim.dt = params.sim.get("dt", 1.0 / 120.0)
         params.sim.physx.friction_offset_threshold = params.sim.physx.get("friction_offset_threshold", 0.04)
         params.sim.physx.enable_ccd = params.sim.physx.get("enable_ccd", False)
         params.decimation = params.get("decimation", 2)

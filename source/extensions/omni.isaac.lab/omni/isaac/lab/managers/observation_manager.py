@@ -76,7 +76,9 @@ class ObservationManager(ManagerBase):
         """
         # check that cfg is not None
         if cfg is None:
-            raise ValueError("Observation manager configuration is None. Please provide a valid configuration.")
+            raise ValueError(
+                "Observation manager configuration is None. Please provide a valid configuration."
+            )
 
         # call the base class constructor (this will parse the terms config)
         super().__init__(cfg, env)
@@ -89,7 +91,9 @@ class ObservationManager(ManagerBase):
             if self._group_obs_concatenate[group_name]:
                 try:
                     term_dims = [torch.tensor(dims, device="cpu") for dims in group_term_dims]
-                    self._group_obs_dim[group_name] = tuple(torch.sum(torch.stack(term_dims, dim=0), dim=0).tolist())
+                    self._group_obs_dim[group_name] = tuple(
+                        torch.sum(torch.stack(term_dims, dim=0), dim=0).tolist()
+                    )
                 except RuntimeError:
                     raise RuntimeError(
                         f"Unable to concatenate observation terms in group '{group_name}'."
@@ -232,6 +236,7 @@ class ObservationManager(ManagerBase):
             raise ValueError(f"Obs term '{term_name}' not found.")
         # return the configuration
         return self._group_obs_term_cfgs[group_name][group_term_names.index(term_name)]
+
     """
     Operations.
     """
@@ -337,11 +342,13 @@ class ObservationManager(ManagerBase):
             if term_cfg.history_length > 0:
                 self._group_obs_term_history_buffer[group_name][term_name].append(obs)
                 if term_cfg.flatten_history_dim:
-                    group_obs[term_name] = self._group_obs_term_history_buffer[group_name][term_name].buffer.reshape(
-                        self._env.num_envs, -1
-                    )
+                    group_obs[term_name] = self._group_obs_term_history_buffer[group_name][
+                        term_name
+                    ].buffer.reshape(self._env.num_envs, -1)
                 else:
-                    group_obs[term_name] = self._group_obs_term_history_buffer[group_name][term_name].buffer
+                    group_obs[term_name] = self._group_obs_term_history_buffer[group_name][
+                        term_name
+                    ].buffer
             else:
                 group_obs[term_name] = obs
 
@@ -350,6 +357,29 @@ class ObservationManager(ManagerBase):
             return torch.cat(list(group_obs.values()), dim=-1)
         else:
             return group_obs
+
+    def split_obs_group(self, obs: torch.Tensor, group_name: str) -> dict[str, torch.Tensor]:
+        """Split the observations for a given group into individual terms.
+
+        Args:
+            obs: The observations to split.
+            group_name: The name of the group to split the observations for.
+        """
+        obs_dims = self._group_obs_term_dim[group_name]
+        obs_names = self._group_obs_term_names[group_name]
+        term_cfgs = self._group_obs_term_cfgs[group_name]
+        split_dict = dict()
+        idx = 0
+        for name, dim, term_cfg in zip(obs_names, obs_dims, term_cfgs):
+            if term_cfg.flatten_history_dim:
+                total_dim = np.prod(dim)
+                split_dict[name] = obs[:, idx : idx + total_dim].reshape(
+                    self._env.num_envs, term_cfg.history_length, -1
+                )
+            else:
+                split_dict[name] = obs[:, :, idx : idx + dim]
+            idx += total_dim
+        return split_dict
 
     """
     Helper functions.
@@ -401,7 +431,12 @@ class ObservationManager(ManagerBase):
             # iterate over all the terms in each group
             for term_name, term_cfg in group_cfg_items:
                 # skip non-obs settings
-                if term_name in ["enable_corruption", "concatenate_terms", "history_length", "flatten_history_dim"]:
+                if term_name in [
+                    "enable_corruption",
+                    "concatenate_terms",
+                    "history_length",
+                    "flatten_history_dim",
+                ]:
                     continue
                 # check for non config
                 if term_cfg is None:
@@ -431,7 +466,9 @@ class ObservationManager(ManagerBase):
                 # create history buffers and calculate history term dimensions
                 if term_cfg.history_length > 0:
                     group_entry_history_buffer[term_name] = CircularBuffer(
-                        max_len=term_cfg.history_length, batch_size=self._env.num_envs, device=self._env.device
+                        max_len=term_cfg.history_length,
+                        batch_size=self._env.num_envs,
+                        device=self._env.device,
                     )
                     old_dims = list(obs_dims)
                     old_dims.insert(1, term_cfg.history_length)
@@ -456,7 +493,9 @@ class ObservationManager(ManagerBase):
                         )
 
                     # cast the scale into torch tensor
-                    term_cfg.scale = torch.tensor(term_cfg.scale, dtype=torch.float, device=self._env.device)
+                    term_cfg.scale = torch.tensor(
+                        term_cfg.scale, dtype=torch.float, device=self._env.device
+                    )
 
                 # prepare modifiers for each observation
                 if term_cfg.modifiers is not None:
@@ -471,7 +510,9 @@ class ObservationManager(ManagerBase):
                                         f"Modifier function '{mod_cfg.func}' for observation term '{term_name}'"
                                         f" is not a subclass of 'ModifierBase'. Received: '{type(mod_cfg.func)}'."
                                     )
-                                mod_cfg.func = mod_cfg.func(cfg=mod_cfg, data_dim=raw_obs_dims, device=self._env.device)
+                                mod_cfg.func = mod_cfg.func(
+                                    cfg=mod_cfg, data_dim=raw_obs_dims, device=self._env.device
+                                )
 
                                 # add to list of class modifiers
                                 self._group_obs_class_modifiers.append(mod_cfg.func)
@@ -491,8 +532,12 @@ class ObservationManager(ManagerBase):
                         # check if term's arguments are matched by params
                         term_params = list(mod_cfg.params.keys())
                         args = inspect.signature(mod_cfg.func).parameters
-                        args_with_defaults = [arg for arg in args if args[arg].default is not inspect.Parameter.empty]
-                        args_without_defaults = [arg for arg in args if args[arg].default is inspect.Parameter.empty]
+                        args_with_defaults = [
+                            arg for arg in args if args[arg].default is not inspect.Parameter.empty
+                        ]
+                        args_without_defaults = [
+                            arg for arg in args if args[arg].default is inspect.Parameter.empty
+                        ]
                         args = args_without_defaults + args_with_defaults
                         # ignore first two arguments for env and env_ids
                         # Think: Check for cases when kwargs are set inside the function?
