@@ -32,6 +32,8 @@ from omni.isaac.lab.sim.spawners.sensors import PinholeCameraCfg
 from . import factory_control as fc
 from .factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG, FactoryEnvCfg
 
+# For getting Wrench Data
+from omni.isaac.lab.envs.mdp import get_incoming  # noqa: F401, F403
 
 class FactoryEnv(DirectRLEnv):
     cfg: FactoryEnvCfg
@@ -200,6 +202,9 @@ class FactoryEnv(DirectRLEnv):
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
 
+        # Add Wrench Getter Config
+        self.wrench_cfg = SceneEntityCfg("robot", body_names=["victor_left_arm_flange"])
+        self.wrench_cfg.resolve(env_uw.scene)
 
         # Add contact sensor
         contact_sensor_cfg = ContactSensorCfg(
@@ -207,8 +212,7 @@ class FactoryEnv(DirectRLEnv):
             filter_prim_paths_expr=[],      # Contact everything
             update_period=0.0,
         )
-        self.scene.sensors["held_asset_contact_sensor"] = ContactSensor(contact_sensor_cfg)
-
+        self.scene.sensors["contact_sensor"] = ContactSensor(contact_sensor_cfg)
 
         # Add a camera
         if self.cfg.use_tiled_camera:
@@ -304,6 +308,18 @@ class FactoryEnv(DirectRLEnv):
 
         self.keypoint_dist = torch.norm(self.keypoints_held - self.keypoints_fixed, p=2, dim=-1).mean(-1)
         self.last_update_timestamp = self._robot._data._sim_timestamp
+
+        ## ADD Held Asset State
+        self.held_state = self._held_asset.data.root_state_w
+        self.held_state[:, :3] = self.held_state[:, :3] -  self.scene.env_origins
+
+        ## ADD Finger Wrench Reading at panda_joint_7
+        joint_id = 6        # panda_joint_7
+        link_incoming_forces = self._robot.root_physx_view.get_link_incoming_joint_force()[:, joint_id]
+        self.finger_wrench = link_incoming_forces.view(self.num_envs, -1)
+
+        ## ADD contact sensor reading
+        self.contact_force = self.scene["contact_sensor"].data.net_forces_w.squeeze(1)
 
     def _get_observations(self):
         """Get actor/critic inputs using asymmetric critic."""

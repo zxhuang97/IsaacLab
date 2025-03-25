@@ -153,7 +153,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
                 "panda_joint4": -1.49139,
                 "panda_joint5": -0.00083,
                 "panda_joint6": 1.38774,
-                "panda_joint7": 0.0,
+            "panda_joint7": 0.0,
                 "panda_finger_joint2": 0.04,
             },
             pos=(0.0, 0.0, 0.0),
