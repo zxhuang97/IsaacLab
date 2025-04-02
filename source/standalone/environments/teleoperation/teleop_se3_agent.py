@@ -42,7 +42,7 @@ import torch
 
 import omni.isaac.core.utils.prims as prim_utils
 from force_tool.utils.data_utils import SmartDict, update_config
-from force_tool.visualization.plot_utils import save_numpy_as_mp4
+from force_tool.visualization.plot_utils import save_numpy_video
 from pxr import UsdPhysics
 
 import omni.isaac.lab.utils.math as math_utils
@@ -202,7 +202,7 @@ def main():
                     frames = np.array(frames)
                     wrench_frames = np.array(wrench_frames)
                     combined_frames = np.concatenate([frames, wrench_frames], axis=2)
-                    save_numpy_as_mp4(np.array(combined_frames), "nut.mp4")
+                    save_numpy_video(np.array(combined_frames), "nut.mp4")
                     frames = []
                     break
 

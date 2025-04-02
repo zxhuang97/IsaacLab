@@ -74,7 +74,7 @@ from omni.isaac.lab_tasks.manager_based.manipulation.lift.lift_env_cfg import Li
 from omni.isaac.lab_tasks.utils.parse_cfg import parse_env_cfg
 
 
-def save_numpy_as_mp4(array, filename, fps=20, scale=1.0, add_index_rate=-1):
+def save_numpy_video(array, filename, fps=20, scale=1.0, add_index_rate=-1):
     """Creates a gif given a stack of images using moviepy
     Parameters
     ----------
@@ -652,7 +652,7 @@ def main():
                     combined_frames = np.concatenate([frames, wrench_frames], axis=2)
                 else:
                     combined_frames = frames
-                save_numpy_as_mp4(np.array(combined_frames), f"cube_{policy_mode}_{robot_type}.mp4")
+                save_numpy_video(np.array(combined_frames), f"cube_{policy_mode}_{robot_type}.mp4")
                 frames = []
                 break
 
