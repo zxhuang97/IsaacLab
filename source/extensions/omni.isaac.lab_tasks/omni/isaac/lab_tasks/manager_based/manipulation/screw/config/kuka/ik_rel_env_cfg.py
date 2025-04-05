@@ -579,7 +579,7 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
             "ActorCriticNutPose": self.observations.AuxNutPoseCfg,
             "ActorCriticNutDist": self.observations.AuxNutPoseCfg,
             "ActorCriticNutPos": self.observations.AuxNutPosCfg,
-            "ActorCriticRMA": self.observations.RMAPrivilCfg,
+            # "ActorCriticRMA": self.observations.RMAPrivilCfg,
         }
         if agent_class in aux_task_obs_dict.keys():
             self.observations.aux_observations = aux_task_obs_dict[agent_class]()
@@ -597,12 +597,12 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
                     params={"asset_cfg": SceneEntityCfg("robot", body_names=[obs_params.wrench_target_body])},
                     scale=1,
                 )
-            if agent_class.startswith("ActorCriticRMA"):
-                self.observations.aux_observations.wrist_wrench = ObsTerm(
-                    func=mdp.body_incoming_wrench,
-                    params={"asset_cfg": SceneEntityCfg("robot", body_names=[obs_params.wrench_target_body])},
-                    scale=1,
-                )
+            # if agent_class.startswith("ActorCriticRMA"):
+            #     self.observations.aux_observations.wrist_wrench = ObsTerm(
+            #         func=mdp.body_incoming_wrench,
+            #         params={"asset_cfg": SceneEntityCfg("robot", body_names=[obs_params.wrench_target_body])},
+            #         scale=1,
+            #     )
         if obs_params.include_tool:
             self.observations.policy.tool_pose = ObsTerm(
                 func=robot_tool_pose
@@ -611,10 +611,10 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
                 self.observations.critic.tool_pose = ObsTerm(
                     func=robot_tool_pose
                 )
-            if agent_class.startswith("ActorCriticRMA"):
-                self.observations.aux_observations.tool_pose = ObsTerm(
-                    func=robot_tool_pose
-                )
+            # if agent_class.startswith("ActorCriticRMA"):
+            #     self.observations.aux_observations.tool_pose = ObsTerm(
+            #         func=robot_tool_pose
+            #     )
         if obs_params.include_action:
             self.observations.policy.last_action = ObsTerm(
                 func=mdp.last_action,
@@ -627,12 +627,12 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
                     params={"action_name": "arm_action"},
                     scale=1,
                 )
-            if agent_class.startswith("ActorCriticRMA"):
-                self.observations.aux_observations.last_action = ObsTerm(
-                    func=mdp.last_action,
-                    params={"action_name": "arm_action"},
-                    scale=1,
-                )
+            # if agent_class.startswith("ActorCriticRMA"):
+            #     self.observations.aux_observations.last_action = ObsTerm(
+            #         func=mdp.last_action,
+            #         params={"action_name": "arm_action"},
+            #         scale=1,
+            #     )
                 
         self.observations.policy.nut_pos.modifiers = [NoiseModifierCfg(
             noise_cfg=GaussianNoiseCfg(mean=0.0, std=obs_params.nut_pos.noise_std, operation="add"),

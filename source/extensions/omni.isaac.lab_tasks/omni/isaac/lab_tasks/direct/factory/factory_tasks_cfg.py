@@ -2,7 +2,6 @@
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
 import omni.isaac.lab.sim as sim_utils
 from omni.isaac.lab.assets import ArticulationCfg
 from omni.isaac.lab.utils import configclass
@@ -28,7 +27,9 @@ class HeldAssetCfg:
     height: float = 0.0
     friction: float = 0.75
     mass: float = 0.05
-
+    center_x_offset = 0.0
+    center_y_offset = 0.0
+    height_above_center = 0.0
 
 @configclass
 class RobotCfg:
@@ -90,7 +91,9 @@ class Peg8mm(HeldAssetCfg):
     diameter = 0.007986
     height = 0.050
     mass = 0.019
-
+    center_x_offset = 0.0
+    center_y_offset = 0.0
+    height_above_center = 0.050
 
 @configclass
 class Hole8mm(FixedAssetCfg):
@@ -98,7 +101,6 @@ class Hole8mm(FixedAssetCfg):
     diameter = 0.0081
     height = 0.025
     base_height = 0.0
-
 
 @configclass
 class PegInsert(FactoryTask):
@@ -149,13 +151,18 @@ class PegInsert(FactoryTask):
                 max_contact_impulse=1e32,
             ),
             mass_props=sim_utils.MassPropertiesCfg(mass=fixed_asset_cfg.mass),
-            collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.005, rest_offset=0.0),
+            collision_props=sim_utils.CollisionPropertiesCfg(
+                contact_offset=0.005,
+                rest_offset=0.0,
+                collision_enabled=True,
+            ),
         ),
         init_state=ArticulationCfg.InitialStateCfg(
             pos=(0.6, 0.0, 0.05), rot=(1.0, 0.0, 0.0, 0.0), joint_pos={}, joint_vel={}
         ),
         actuators={},
     )
+
     held_asset: ArticulationCfg = ArticulationCfg(
         prim_path="/World/envs/env_.*/HeldAsset",
         spawn=sim_utils.UsdFileCfg(
@@ -174,7 +181,11 @@ class PegInsert(FactoryTask):
                 max_contact_impulse=1e32,
             ),
             mass_props=sim_utils.MassPropertiesCfg(mass=held_asset_cfg.mass),
-            collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.005, rest_offset=0.0),
+            collision_props=sim_utils.CollisionPropertiesCfg(
+                contact_offset=0.005,
+                rest_offset=0.0,
+                collision_enabled=True,
+            ),
         ),
         init_state=ArticulationCfg.InitialStateCfg(
             pos=(0.0, 0.4, 0.1), rot=(1.0, 0.0, 0.0, 0.0), joint_pos={}, joint_vel={}
@@ -199,7 +210,11 @@ class MediumGear(HeldAssetCfg):
     diameter = 0.03  # Used for gripper width.
     height: float = 0.03
     mass = 0.012
-
+    # Gear is 0.025 height, but center at 0.05, and another 0.05 for gear
+    # 0.010 gear, 0.015 grab-able
+    height_above_center = 0.020
+    center_x_offset = -0.020
+    center_y_offset = 0.0
 
 @configclass
 class GearMesh(FactoryTask):
@@ -230,7 +245,11 @@ class GearMesh(FactoryTask):
                 max_contact_impulse=1e32,
             ),
             mass_props=sim_utils.MassPropertiesCfg(mass=0.019),
-            collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.005, rest_offset=0.0),
+            collision_props=sim_utils.CollisionPropertiesCfg(
+                contact_offset=0.005,
+                rest_offset=0.0,
+                collision_enabled=True,
+            ),
         ),
         init_state=ArticulationCfg.InitialStateCfg(
             pos=(0.0, 0.4, 0.1), rot=(1.0, 0.0, 0.0, 0.0), joint_pos={}, joint_vel={}
@@ -256,7 +275,11 @@ class GearMesh(FactoryTask):
                 max_contact_impulse=1e32,
             ),
             mass_props=sim_utils.MassPropertiesCfg(mass=0.019),
-            collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.005, rest_offset=0.0),
+            collision_props=sim_utils.CollisionPropertiesCfg(
+                contact_offset=0.005,
+                rest_offset=0.0,
+                collision_enabled=True,
+            ),
         ),
         init_state=ArticulationCfg.InitialStateCfg(
             pos=(0.0, 0.4, 0.1), rot=(1.0, 0.0, 0.0, 0.0), joint_pos={}, joint_vel={}
@@ -308,7 +331,11 @@ class GearMesh(FactoryTask):
                 max_contact_impulse=1e32,
             ),
             mass_props=sim_utils.MassPropertiesCfg(mass=fixed_asset_cfg.mass),
-            collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.005, rest_offset=0.0),
+            collision_props=sim_utils.CollisionPropertiesCfg(
+                contact_offset=0.005,
+                rest_offset=0.0,
+                collision_enabled=True,
+            ),
         ),
         init_state=ArticulationCfg.InitialStateCfg(
             pos=(0.6, 0.0, 0.05), rot=(1.0, 0.0, 0.0, 0.0), joint_pos={}, joint_vel={}
@@ -333,7 +360,11 @@ class GearMesh(FactoryTask):
                 max_contact_impulse=1e32,
             ),
             mass_props=sim_utils.MassPropertiesCfg(mass=held_asset_cfg.mass),
-            collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.005, rest_offset=0.0),
+            collision_props=sim_utils.CollisionPropertiesCfg(
+                contact_offset=0.005,
+                rest_offset=0.0,
+                collision_enabled=True,
+            ),
         ),
         init_state=ArticulationCfg.InitialStateCfg(
             pos=(0.0, 0.4, 0.1), rot=(1.0, 0.0, 0.0, 0.0), joint_pos={}, joint_vel={}
@@ -349,7 +380,7 @@ class NutM16(HeldAssetCfg):
     height = 0.01
     mass = 0.03
     friction = 0.01  # Additive with the nut means friction is (-0.25 + 0.75)/2 = 0.25
-
+    height_above_center = 0.01
 
 @configclass
 class BoltM16(FixedAssetCfg):
@@ -358,7 +389,6 @@ class BoltM16(FixedAssetCfg):
     height = 0.025
     base_height = 0.01
     thread_pitch = 0.002
-
 
 @configclass
 class NutThread(FactoryTask):
@@ -414,7 +444,11 @@ class NutThread(FactoryTask):
                 max_contact_impulse=1e32,
             ),
             mass_props=sim_utils.MassPropertiesCfg(mass=fixed_asset_cfg.mass),
-            collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.005, rest_offset=0.0),
+            collision_props=sim_utils.CollisionPropertiesCfg(
+                contact_offset=0.005,
+                rest_offset=0.0,
+                collision_enabled=True,
+            ),
         ),
         init_state=ArticulationCfg.InitialStateCfg(
             pos=(0.6, 0.0, 0.05), rot=(1.0, 0.0, 0.0, 0.0), joint_pos={}, joint_vel={}
@@ -439,7 +473,11 @@ class NutThread(FactoryTask):
                 max_contact_impulse=1e32,
             ),
             mass_props=sim_utils.MassPropertiesCfg(mass=held_asset_cfg.mass),
-            collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.005, rest_offset=0.0),
+            collision_props=sim_utils.CollisionPropertiesCfg(
+                contact_offset=0.005,
+                rest_offset=0.0,
+                collision_enabled=True,
+            ),
         ),
         init_state=ArticulationCfg.InitialStateCfg(
             pos=(0.0, 0.4, 0.1), rot=(1.0, 0.0, 0.0, 0.0), joint_pos={}, joint_vel={}

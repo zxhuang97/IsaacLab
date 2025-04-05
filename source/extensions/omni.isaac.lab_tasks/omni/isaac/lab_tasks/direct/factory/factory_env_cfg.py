@@ -9,10 +9,17 @@ from omni.isaac.lab.assets import ArticulationCfg
 from omni.isaac.lab.envs import DirectRLEnvCfg
 from omni.isaac.lab.scene import InteractiveSceneCfg
 from omni.isaac.lab.sim import PhysxCfg, SimulationCfg
+from omni.isaac.lab.managers import SceneEntityCfg
 from omni.isaac.lab.sim.spawners.materials.physics_materials_cfg import RigidBodyMaterialCfg
 from omni.isaac.lab.utils import configclass
 
+
+from omni.isaac.lab.sensors import TiledCameraCfg, ContactSensorCfg, CameraCfg
+from omni.isaac.lab.sim.spawners.sensors import PinholeCameraCfg
+
+
 from omegaconf import OmegaConf
+from omegaconf.listconfig import ListConfig
 
 from .factory_tasks_cfg import ASSET_DIR, FactoryTask, GearMesh, NutThread, PegInsert
 
@@ -190,6 +197,61 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         },
     )
 
+    # contact_filter_path = [
+    #     "/World/envs/env_.*/FixedAsset",
+    #     "/World/envs/env_.*/LargeGearAsset",
+    #     "/World/envs/env_.*/SmallGearAsset",
+    # ]
+    # contact_filter_path = [
+    #     "/World/envs/env_.*/FixedAsset/.*",
+    #     "/World/envs/env_.*/LargeGearAsset/.*",
+    #     "/World/envs/env_.*/SmallGearAsset/.*",
+    # ]
+    contact_filter_path = [
+        "/World/envs/env_.*/FixedAsset/forge_hole_8mm/forge_hole_8mm",
+        "/World/envs/env_.*/FixedAsset/factory_bolt_loose",
+        "/World/envs/env_.*/FixedAsset/factory_gear_base_loose",
+        "/World/envs/env_.*/LargeGearAsset/factory_gear_large",
+        "/World/envs/env_.*/SmallGearAsset/factory_gear_small",
+    ]
+
+    # Wrench config
+    wrench_joint_cfg = SceneEntityCfg("robot", body_names=["panda_link7"])
+
+    cam_offset_cfg = CameraCfg.OffsetCfg(
+        pos=(1, 0.0, 0.15),
+        rot=[0.4497752, 0.4401843, 0.5533875, 0.545621],
+        convention='opengl'
+    )
+    ph_cfg = PinholeCameraCfg(visible=True,
+        semantic_tags=None,
+        copy_from_source=True,
+        projection_type='pinhole',
+        clipping_range=(0.0001, 20.0),
+        focal_length=24.0,
+        focus_distance=400.0,
+        f_stop=0.0,
+        horizontal_aperture=20.955,
+        vertical_aperture=None,
+        horizontal_aperture_offset=0.0,
+        vertical_aperture_offset=0.0,
+        lock_camera=True
+    )
+    tiled_camera_cfg = TiledCameraCfg(
+        width=720, height=720,
+        offset=cam_offset_cfg,
+        prim_path='/World/envs/env_.*/Camera',
+        spawn=ph_cfg
+    )
+
+    # Add in scale randomization of assets. 
+    randomize_scale_method= "none"    # gaussian/uniform/none, implemented in factory_env
+    # Scale range for held asset
+    # For uniform, [min, max]
+    # For gaussian, [mean, std]
+    randomize_scale_range = (0.5, 2.0)
+
+
     # To enable experiments with cfg dicts
     params = OmegaConf.create()
 
@@ -198,14 +260,14 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         # Initialize params structure
         params = self.params
 
-        def update_terminals(container, config, keys):
-            """
-            Update each attribute in 'container' with the corresponding value
-            from 'config'. If a key is missing, leave the current value in 'container'.
-            """
-            for key in keys:
-                var = getattr(container, key)
-                var = config.get(key, var)
+        # def update_terminals(container, config, keys):
+        #     """
+        #     Update each attribute in 'container' with the corresponding value
+        #     from 'config'. If a key is missing, leave the current value in 'container'.
+        #     """
+        #     for key in keys:
+        #         var = getattr(container, key)
+        #         var = config.get(key, var)
 
         # params.scene = params.get("scene", OmegaConf.create())
 
@@ -215,8 +277,8 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         # update_terminals(self, params, ["decimation"])
 
         # Sim
-        # params.sim = params.get("sim", OmegaConf.create())
-        # update_terminals(self.sim, params.sim, ["dt"])
+        params_sim = params.get("sim", OmegaConf.create())
+        self.sim.dt = params_sim.get("dt", self.sim.dt)
         # Physx
         # params.sim.physx = params.sim.get("physx", OmegaConf.create())
         # update_terminals(self.sim.physx, params.sim.physx, [    
@@ -226,8 +288,12 @@ class FactoryEnvCfg(DirectRLEnvCfg):
 
         # # --- Observation Randomization Config ---
         # # Here we keep the whole config group in params.
-        params.obs_rand = params.get("obs_rand", {})
-        update_terminals(self.obs_rand, params.obs_rand, ["fixed_asset_pos"])
+        params_obs_rand = params.get("obs_rand", OmegaConf.create())
+        custom_obs_rand = params_obs_rand.get("fixed_asset_pos", None)
+        if custom_obs_rand is not None:
+            ObsRandCfg.fixed_asset_pos = custom_obs_rand
+            self.obs_rand = ObsRandCfg()
+            # self.obs_rand.fixed_asset_pos = custom_obs_rand
         
         # # --- Control Config ---
         # params.ctrl = params.get("ctrl", {})
@@ -243,7 +309,22 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         # ])
 
         # # NutThread Task related properties
-        # params.task_class = params.get("taskcfg", {})
+        params_taskcfg = params.get("taskcfg", {})
+        asset_scale_randomization = params_taskcfg.get("randomize_scale_method", "none")
+        if asset_scale_randomization not in ["gaussian", "uniform", "none"]:
+            print(f"Warning: asset_scale_randomization '{asset_scale_randomization}' is not recognized, using 'none'.")
+        self.randomize_scale_method = asset_scale_randomization
+        # Update scale
+        if self.randomize_scale_method in ["gaussian", "uniform"]:
+            scale_range = params_taskcfg.get("randomize_scale_range", None)
+            if scale_range is not None:
+                if len(scale_range) == 2:
+                    if isinstance(scale_range, ListConfig):
+                        scale_range = OmegaConf.to_container(scale_range, resolve=True)
+                    self.randomize_scale_range = tuple(scale_range)
+                else:
+                    print(f"Warning: 'randomize_scale_range' should be a list/tuple of length 2, using default {self.randomize_scale_range}.")
+        
         # update_terminals(self.task_class, params.task_class, [
         #     "hand_init_pos",
         #     "hand_init_pos_noise",
@@ -258,9 +339,8 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         # ])
 
         # Sensors
-        params.observations = params.get("observations", OmegaConf.create())
-        self.use_tiled_camera = params.observations.get("use_tiled_camera", False)
-
+        params_observations = params.get("observations", OmegaConf.create())
+        self.use_tiled_camera = params_observations.get("use_tiled_camera", False)
 
     def __post_init__(self):
         """Post initialization."""

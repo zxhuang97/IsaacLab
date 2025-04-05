@@ -320,9 +320,12 @@ class BaseObservationsCfg:
             self.concatenate_terms = True
             self.history_length = 1
 
-    @configclass
-    class RMAPrivilCfg(PolicyCfg):
-        pass
+    # @configclass
+    # class RMAPrivilCfg(PolicyCfg):
+    #     def __post_init__(self):
+    #         self.enable_corruption = False
+    #         self.concatenate_terms = True
+    #         self.history_length = 5
 
     # observation groups
     policy: PolicyCfg = PolicyCfg()
