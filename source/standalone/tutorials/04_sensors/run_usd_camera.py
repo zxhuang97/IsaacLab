@@ -188,7 +188,7 @@ def run_simulator(sim: sim_utils.SimulationContext, scene_entities: dict):
 
     # Set pose: There are two ways to set the pose of the camera.
     # -- Option-1: Set pose using view
-    camera.set_world_poses_from_view(camera_positions, camera_targets)
+    camera.set_world_poses_from_view(camera_positions, camera_targets, env_ids=torch.arange(2, device=sim.device))
     # -- Option-2: Set pose using ROS
     # camera.set_world_poses(camera_positions, camera_orientations, convention="ros")
 

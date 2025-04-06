@@ -377,6 +377,7 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         obs_params.nut_pos.noise_std = obs_params.nut_pos.get("noise_std", 0.0)
         obs_params.nut_pos.bias_std = obs_params.nut_pos.get("bias_std", 0.0)
         obs_params.critic_privil_obs = obs_params.get("critic_privil_obs", False)
+        obs_params.use_depth_camera = obs_params.get("use_depth_camera", False)
 
         rewards_params = self.params.rewards
         rewards_params.dtw_ref_traj_w = rewards_params.get("dtw_ref_traj_w", 0.0)
@@ -609,6 +610,20 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
             ),
             width=720,
             height=720,
+            )
+        if obs_params.use_depth_camera:
+            self.scene.depth_camera =TiledCameraCfg(
+                prim_path="{ENV_REGEX_NS}/Camera",
+                offset=TiledCameraCfg.OffsetCfg(
+                pos=(1., 0.1, 0.12),
+                rot=[0.4497752 , 0.4401843, 0.5533875, 0.545621],
+                convention="opengl"
+            ),
+            data_types=["distance_to_image_plane"],
+            spawn=sim_utils.PinholeCameraCfg(clipping_range=(0.0001, 0.5)
+            ),
+            width=200,
+            height=200,
             )
 
         # events
