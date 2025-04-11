@@ -215,11 +215,6 @@ class ScrewSceneCfg(InteractiveSceneCfg):
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(
                     disable_gravity=True,
                 ),
-                # articulation_props=sim_utils.ArticulationRootPropertiesCfg(articulation_enabled=False)
-                visual_material=sim_utils.PreviewSurfaceCfg(
-                    diffuse_color=(0.0, 0.5, 0.5),  # Red color
-                    opacity=1.0             # Half transparent
-                )
             ),
         )
 
@@ -227,8 +222,7 @@ class ScrewSceneCfg(InteractiveSceneCfg):
             prim_path="{ENV_REGEX_NS}/Bolt",
             spawn=sim_utils.UsdFileCfg(
                 usd_path=self.screw_dict["bolt_path"],
-                # articulation_props=sim_utils.ArticulationRootPropertiesCfg(articulation_enabled=False)
-                ),
+            ),
             init_state=self.screw_dict["bolt_init_state"],
         )
 
@@ -238,6 +232,7 @@ class ScrewSceneCfg(InteractiveSceneCfg):
             spawn=sim_utils.DomeLightCfg(color=(0.75, 0.75, 0.75), intensity=2500.0),
         )
 
+        # self.nut_frame = MISSING
         self.nut_frame = FrameTransformerCfg(
             prim_path="{ENV_REGEX_NS}/Origin",
             debug_vis=True,
@@ -329,8 +324,6 @@ class BaseObservationsCfg:
 
     # observation groups
     policy: PolicyCfg = PolicyCfg()
-    # critic: CriticCfg = CriticCfg()
-    # aux_task: AuxCfg = AuxCfg()
 
 @configclass
 class EventCfg:
@@ -384,6 +377,8 @@ class BaseScrewEnvCfg(ManagerBasedRLEnvCfg):
         # Initialize params structure
         if self.params is None:
             self.params = OmegaConf.create()
+        if not hasattr(self, "replicate_physics"):
+            self.replicate_physics = False
         params = self.params
         params.scene = params.get("scene", OmegaConf.create())
         params.sim = params.get("sim", OmegaConf.create())
@@ -414,7 +409,12 @@ class BaseScrewEnvCfg(ManagerBasedRLEnvCfg):
         """Post initialization."""
         self.get_default_env_params()
         self.screw_type = self.params.scene.screw_type
-        self.scene = ScrewSceneCfg(num_envs=4096, env_spacing=2.5, screw_type=self.screw_type)
+        self.scene = ScrewSceneCfg(
+            num_envs=4096,
+            env_spacing=2.5,
+            screw_type=self.screw_type,
+            replicate_physics=False
+        )
         # general settings
         self.decimation = self.params.decimation
         self.sim.render_interval = self.decimation
@@ -519,7 +519,6 @@ def nut_upright_reward_forge(env: ManagerBasedRLEnv, a: float = 300, b: float = 
     cos_sim = torch.sum(nut_up_vec * up_vecs, dim=1, keepdim=True) / torch.norm(nut_up_vec, dim=1, keepdim=True)
     rewards = mdp.forge_kernel(1 - cos_sim, a, b, tol)
     return rewards
-
 
 @configclass
 class NutThreadRewardsCfg:

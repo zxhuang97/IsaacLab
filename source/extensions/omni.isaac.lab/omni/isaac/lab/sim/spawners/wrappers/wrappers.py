@@ -8,6 +8,7 @@ from __future__ import annotations
 import random
 import re
 from typing import TYPE_CHECKING
+import torch
 
 import carb
 import omni.isaac.core.utils.prims as prim_utils
@@ -81,7 +82,22 @@ def spawn_multi_asset(
                 setattr(asset_cfg, attr_name, attr_value)
         # spawn single instance
         proto_prim_path = f"{template_prim_path}/Asset_{index:04d}"
-        asset_cfg.func(proto_prim_path, asset_cfg, translation=translation, orientation=orientation)
+        if isinstance(translation, torch.Tensor):
+            assert isinstance(translation, torch.Tensor)
+            asset_translation = tuple(translation[index].tolist())
+            asset_orientation = tuple(orientation[index].tolist())
+            asset_cfg.func(
+                proto_prim_path, asset_cfg, 
+                translation=asset_translation, 
+                orientation=asset_orientation,
+                index=index
+            )
+        else:
+            asset_cfg.func(
+                proto_prim_path, asset_cfg, 
+                translation=translation, 
+                orientation=orientation
+            )
         # append to proto prim paths
         proto_prim_paths.append(proto_prim_path)
 

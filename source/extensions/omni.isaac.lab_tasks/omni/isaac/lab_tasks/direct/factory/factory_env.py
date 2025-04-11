@@ -172,11 +172,6 @@ class FactoryEnv(DirectRLEnv):
     
     def randomize_scales(self, cfg):
         asset_scale_samples = None
-        # Seed for Debug
-        torch.cuda.manual_seed(1)
-        torch.cuda.manual_seed_all(1)  # For multi-GPU setups
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
 
         # Sample and randomize
         if cfg.randomize_scale_method.lower() == "uniform":
@@ -190,7 +185,7 @@ class FactoryEnv(DirectRLEnv):
                 mean=mean, std=std, size=(self.num_envs,)
             ).to(self.device)
         else:
-            self.asset_scale_sample = None
+            self.asset_scale_samples = None
             return
         
         # Update all the parameters in the task config
@@ -237,7 +232,7 @@ class FactoryEnv(DirectRLEnv):
         # ).to(self.device)
 
         # Set to self
-        self.asset_scale_sample = asset_scale_samples
+        self.asset_scale_samples = asset_scale_samples
 
     def compute_scaled_held_offset(self):
         # This section only applies to held assets for grabing purposes
@@ -259,7 +254,7 @@ class FactoryEnv(DirectRLEnv):
         mp_init_state = torch.tensor(singular_init_state.pos, device=self.device).reshape(1, 3)
         mp_init_state = mp_init_state.repeat(self.num_envs, 1)
         
-        alpha = self.asset_scale_sample.reshape(self.num_envs, 1).to(self.device)  # Shape: (num_envs, 1)
+        alpha = self.asset_scale_samples.reshape(self.num_envs, 1).to(self.device)  # Shape: (num_envs, 1)
         
         # Compute x,y,z offset
         center_offset = [
@@ -278,7 +273,7 @@ class FactoryEnv(DirectRLEnv):
     def multiplicate_assets(self, articulation_cfg):
         """Make fixed and held assets multiplicative."""
         # Make a list for easy indexing
-        asset_scale_samples = self.asset_scale_sample.cpu().tolist()
+        asset_scale_samples = self.asset_scale_samples.cpu().tolist()
         
         # If no
         if asset_scale_samples is None:
@@ -316,7 +311,7 @@ class FactoryEnv(DirectRLEnv):
         self.randomize_scales(self.cfg)
         self.compute_scaled_held_offset()
 
-        if self.asset_scale_sample is not None:
+        if self.asset_scale_samples is not None:
             # Must do this before spawning multiplicative assets
             self.scene.clone_environments(copy_from_source=False)
             self.scene.filter_collisions()
@@ -660,8 +655,8 @@ class FactoryEnv(DirectRLEnv):
         else:
             raise NotImplementedError("Task not implemented")
         # Consider scale sample
-        if self.asset_scale_sample is not None:
-            height_threshold /= self.asset_scale_sample  # Scale height threshold by the random scale sample
+        if self.asset_scale_samples is not None:
+            height_threshold /= self.asset_scale_samples  # Scale height threshold by the random scale sample
         
         is_close_or_below = torch.where(
             z_disp < height_threshold, torch.ones_like(curr_successes), torch.zeros_like(curr_successes)
@@ -767,11 +762,11 @@ class FactoryEnv(DirectRLEnv):
             gear_base_offset = self.cfg_task.fixed_asset_cfg.small_gear_base_offset
         else:
             raise ValueError(f"{target_gear} not valid in this context!")
-        # if self.asset_scale_sample is not None:
+        # if self.asset_scale_samples is not None:
         #     # Scale the offset by the random scale sample for consistency
         #     gear_base_offset = torch.tensor(
         #         gear_base_offset, device=self.device
-        #     ).reshape(-1, 3).repeat(self.num_envs, 1) * self.asset_scale_sample.reshape(self.num_envs, 1).to(self.device)
+        #     ).reshape(-1, 3).repeat(self.num_envs, 1) * self.asset_scale_samples.reshape(self.num_envs, 1).to(self.device)
         return gear_base_offset
 
     def _set_assets_to_default_pose(self, env_ids):

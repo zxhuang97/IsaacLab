@@ -3,10 +3,8 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-import functools
 import os
 import pickle
-from tracemalloc import start
 import torch
 from typing import Literal, Sequence
 import copy
@@ -20,7 +18,6 @@ from force_tool.utils.data_utils import SmartDict, read_h5_dict
 from force_tool.utils.curobo_utils import CuRoboArm
 from omegaconf import OmegaConf
 from pxr import Usd, UsdGeom
-from regex import F
 
 import omni.isaac.lab.sim as sim_utils
 from omni.isaac.lab.sim.simulation_cfg import PhysxCfg, SimulationCfg
@@ -363,7 +360,7 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
 
         nut_params = self.params.scene.nut
         nut_params.rigid_grasp = nut_params.get("rigid_grasp", True)
-
+        # nut_params.rigid_grasp = False
         action_params = self.params.actions
         action_params.controller_type = action_params.get("controller_type", "ik")
         action_params.ik_lambda = action_params.get("ik_lambda", 0.001)
@@ -712,7 +709,6 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         if termination_params.far_from_bolt:
             self.terminations.far_from_bolt = DoneTerm(func=terminate_if_far_from_bolt)
         self.scene.nut.spawn.activate_contact_sensors = True
-
 
         # rewards
         rewards_params = self.params.rewards
