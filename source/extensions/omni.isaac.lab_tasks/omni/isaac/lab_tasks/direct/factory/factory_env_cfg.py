@@ -292,7 +292,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         custom_obs_rand = params_obs_rand.get("fixed_asset_pos", None)
         if custom_obs_rand is not None:
             ObsRandCfg.fixed_asset_pos = custom_obs_rand
-            self.obs_rand = ObsRandCfg()
+            self.obs_rand = ObsRandCfg(fixed_asset_pos=custom_obs_rand)
             # self.obs_rand.fixed_asset_pos = custom_obs_rand
         
         # # --- Control Config ---

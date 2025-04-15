@@ -105,7 +105,6 @@ class GraspResetEventTermCfg(EventTerm):
         self.reset_randomize_mode = reset_randomize_mode
         self.reset_use_adr = reset_use_adr
 
-
 class reset_scene_to_grasp_state(ManagerTermBase):
     def __init__(self, cfg: GraspResetEventTermCfg, env: ManagerBasedEnv):
         super().__init__(cfg, env)
@@ -161,8 +160,11 @@ class reset_scene_to_grasp_state(ManagerTermBase):
             randomized_nut_pose = default_nut_pose.multiply(delta_pose)
             randomized_nut_pose.position += delta_trans
             randomized_tool_pose = randomized_nut_pose.multiply(nut_rel_pose.inverse())
+
             ik_result = self.curobo_arm.compute_ik(randomized_tool_pose)
             randomized_joint_state = ik_result.solution.squeeze(1)
+
+
         elif self.reset_randomize_mode == "joint":
             randomized_joint_state = torch.randn_like(arm_state) * self.reset_joint_std + arm_state
         else:

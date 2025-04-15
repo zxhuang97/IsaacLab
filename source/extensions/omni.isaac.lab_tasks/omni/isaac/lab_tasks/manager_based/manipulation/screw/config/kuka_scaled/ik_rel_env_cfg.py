@@ -7,10 +7,9 @@ from copy import deepcopy
 import torch
 import numpy as np
 
-from matplotlib.scale import ScaleBase
 import omni.isaac.lab.sim as sim_utils
 from omni.isaac.lab.utils import configclass
-from omni.isaac.lab.managers import ManagerTermBase
+from omni.isaac.lab.managers import ObservationTermCfg as ObsTerm
 import omni.isaac.core.utils.stage as stage_utils
 import omni.isaac.lab.utils.math as math_utils
 import omni.physx.scripts.utils as physx_utils
@@ -21,6 +20,11 @@ from pxr import Usd, UsdGeom
 from curobo.types.math import Pose
 
 import omni.isaac.lab_tasks.manager_based.manipulation.screw.mdp as mdp
+from omni.isaac.lab.managers import RewardTermCfg as RewTerm
+from omni.isaac.lab.envs import ManagerBasedRLEnv
+from omni.isaac.lab_tasks.manager_based.manipulation.screw.screw_env_cfg import (
+    nut_upright_reward_forge,
+)
 from omni.isaac.lab_tasks.manager_based.manipulation.screw.config.kuka.ik_rel_env_cfg import (
     IKRelKukaNutThreadEnvCfg,
     DTWReferenceTrajRewardCfg,
@@ -76,6 +80,9 @@ def create_fixed_joint_scaled(env: ManagerBasedEnv, env_ids: torch.Tensor):
         # Create fixed joint
         physx_utils.createJoint(stage, "Fixed", child_prim, parent_prim)
         # physx_utils.createJoint(stage, "Fixed", parent_prim, child_prim)
+
+def get_env_scales(env):
+    return env.cfg.asset_scale_samples.reshape(-1,1)
         
 # Do a scaled version of Grasp Reset
 class GraspResetEventTermScaledCfg(EventTermCfg):
@@ -100,6 +107,9 @@ class GraspResetEventTermScaledCfg(EventTermCfg):
 class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
     def __init__(self, cfg: GraspResetEventTermScaledCfg, env: ManagerBasedEnv):
         super().__init__(cfg, env)
+        self.num_buckets = 10
+        self.bucket_update_freq = 2
+        self.max_ik_batch_size = 10240
 
     def update_random_initializations(self, env:ManagerBasedEnv):
         cached_state = self.cached_state[0:1].clone()
@@ -120,47 +130,69 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
             num_envs = env.num_envs
             randomized_joint_states = []
             nut_rel_pose_all = self.nut_rel_pose
-            scales = env.cfg.asset_scale_samples.cpu()
-            for i in range(num_envs):
-                scale = scales[i]
+            scales = env.cfg.asset_scale_samples
 
-                # Compute scaled tool position
-                default_tool_pose = self.curobo_arm.forward_kinematics(arm_state.clone()).ee_pose
-                # bolt_pos = env.unwrapped.scene.rigid_objects["bolt"].data.root_state_w[i, :3]
-                # tool_rel_pos = default_tool_pose.position - bolt_pos
-                # default_tool_pose.position = bolt_pos + tool_rel_pos*scale
+            # Vectorize this!!!!!!
+            # Compute scaled tool position
+            default_tool_pose = self.curobo_arm.forward_kinematics(arm_state.clone()).ee_pose
+            # bolt_pos = env.unwrapped.scene.rigid_objects["bolt"].data.root_state_w[i, :3]
+            # tool_rel_pos = default_tool_pose.position - bolt_pos
+            # default_tool_pose.position = bolt_pos + tool_rel_pos*scale
+            default_tool_pose = default_tool_pose.repeat(num_envs)
 
-                # Compute nut relative position scaled
-                nut_rel_pose = nut_rel_pose_all[i].tolist()
-                nut_rel_pose = Pose.from_list(nut_rel_pose)
-                default_nut_pose = default_tool_pose.multiply(nut_rel_pose)
-                default_nut_pose = default_nut_pose.repeat(B)
+            # Compute nut relative position scaled
+            # annoyingly difficult to initialize
+            rel_pose_list = self.nut_rel_pose.tolist()
+            nut_rel_pose = Pose.from_batch_list(rel_pose_list, self.tensor_args)
+            # nut_rel_pose = Pose(torch.from_numpy(self.nut_rel_pose))
+            default_nut_pose = default_tool_pose.multiply(nut_rel_pose)
+            default_nut_pose = default_nut_pose.repeat(B)
 
-                # Compute scaled obs bias
-                low = self.reset_trans_low * scale
-                rand_range = (self.reset_trans_high - self.reset_trans_low) * scale
-                delta_trans = torch.rand((B, 3), device=env.device) * rand_range + low
-                delta_trans *= noise_scale
-                
-                delta_rot = 2 * torch.rand((B, 3), device=env.device) * self.reset_rot_std - self.reset_rot_std
-                delta_quat = math_utils.quat_from_euler_xyz(delta_rot[:, 0], delta_rot[:, 1], delta_rot[:, 2])
+            # Compute scaled obs bias
+            scales = scales.repeat(B)
+            low = self.reset_trans_low.reshape(1,-1) * scales.reshape(-1,1)
+            rand_range = (self.reset_trans_high-self.reset_trans_low).reshape(1,-1) * scales.reshape(-1,1)
+            delta_trans = torch.rand((B*num_envs, 3), device=env.device) * rand_range + low
+            delta_trans *= noise_scale
+            
+            delta_rot = 2 * torch.rand((B*num_envs, 3), device=env.device) * self.reset_rot_std - self.reset_rot_std
+            delta_quat = math_utils.quat_from_euler_xyz(delta_rot[:, 0], delta_rot[:, 1], delta_rot[:, 2])
 
-                # Add together
-                delta_pose = Pose(position=torch.zeros((B, 3), device=env.device), quaternion=delta_quat)
-                randomized_nut_pose = default_nut_pose.multiply(delta_pose)
-                randomized_nut_pose.position += delta_trans
-                randomized_tool_pose = randomized_nut_pose.multiply(nut_rel_pose.inverse())
-                ik_result = self.curobo_arm.compute_ik(randomized_tool_pose)
-                randomized_joint_state = ik_result.solution.squeeze(1)
-                randomized_joint_states.append(randomized_joint_state)
-            randomized_joint_state = torch.stack(randomized_joint_states, dim=0).to(env.device)
+            # Add together
+            delta_pose = Pose(position=torch.zeros((B*num_envs, 3), device=env.device), quaternion=delta_quat)
+            randomized_nut_pose = default_nut_pose.multiply(delta_pose)
+            randomized_nut_pose.position += delta_trans
+            nut_rel_pose = nut_rel_pose.repeat(B)
+            randomized_tool_pose = randomized_nut_pose.multiply(nut_rel_pose.inverse())
+
+            # Do IK
+            ik_results = []
+            for iter in range(0,B*num_envs, self.max_ik_batch_size):
+                end_idx = min(iter+self.max_ik_batch_size, B*num_envs)
+                ik_result = self.curobo_arm.compute_ik(
+                    randomized_tool_pose[iter:iter+end_idx]
+                )
+                ik_results.append(ik_result.solution.squeeze(1))
+            randomized_joint_state = torch.cat(ik_results, dim=0)
         elif self.reset_randomize_mode == "joint":
             randomized_joint_state = torch.randn_like(arm_state) * self.reset_joint_std + arm_state
         else:
             arm_state = cached_state["robot"]["joint_state"]["position"][:, :7].repeat(B, 1)
             randomized_joint_state = arm_state
         self.rand_init_configurations = randomized_joint_state.detach().cpu().numpy()
-        
+
+    def sample_reset_poses(self, num_envs, env_ids, device):
+        B = self.num_buckets
+        # Pick Indices
+        select = np.random.choice(B, size=num_envs)
+        # Since pose is repeated in tiled way, we compute indices as such:
+        pool_indices = select * num_envs
+        offset_indices = np.arange(num_envs)
+        indices = pool_indices + offset_indices
+        randomized_joint_state = self.rand_init_configurations[indices]
+        randomized_joint_state = torch.tensor(randomized_joint_state, device=device)
+        return randomized_joint_state[env_ids]
+
     def __call__(self, env: ManagerBasedEnv, env_ids: torch.Tensor):
         cached_state = self.cached_state[env_ids].clone()
         global_step = env._sim_step_counter // env.cfg.decimation
@@ -168,16 +200,47 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
             with torch.inference_mode(False):
                 self.update_random_initializations(env)
         if self.reset_randomize_mode is not None:
-            # draw random initializations
-            select = np.random.choice(self.num_buckets)
-            # Use the same index for all env_ids.
-            # This indexes the first dimension by env_ids and the second by the chosen index.
-            randomized_joint_state = self.rand_init_configurations[env_ids.cpu().numpy(), select, :].copy()
-            # Convert the result into a torch tensor on the proper device.
-            randomized_joint_state = torch.tensor(randomized_joint_state, device=env.device)
+            randomized_joint_state = self.sample_reset_poses(env.num_envs, env_ids, env.device)
             cached_state["robot"]["joint_state"]["position"][:, :7] = randomized_joint_state
             cached_state["robot"]["joint_state"]["position_target"][:, :7] = randomized_joint_state
         env.unwrapped.write_state(cached_state, env_ids)
+
+
+
+###################################
+#           Nut Thread           #
+def nut_thread_scaled_reward_forge(env: ManagerBasedRLEnv, a: float = 100, b: float = 0, tol: float = 0):
+    """Scale the nut_thread distance"""
+    diff = mdp.rel_nut_bolt_tip_distance(env)
+    diff /= env.cfg.asset_scale_samples[:, None]
+    rewards = mdp.forge_kernel(diff, a, b, tol)
+    return rewards
+
+def nut_thread_xy_l2_scaled(env: ManagerBasedRLEnv):
+    """Scale the nut_thread_xy_l2 distance"""
+    diff = mdp.rel_nut_bolt_tip_distance(env)[..., :2]
+    diff /= env.cfg.asset_scale_samples[:, None]
+    rewards = mdp.l2_norm(diff)
+    return 0.01 - rewards
+
+@configclass
+class NutThreadScaledRewardsCfg:
+    """Reward terms for the MDP."""
+
+    # task terms
+    xy_nut = RewTerm(func=nut_thread_xy_l2_scaled, weight=10)
+    coarse_nut = RewTerm(func=nut_thread_scaled_reward_forge, params={"a": 50, "b": 1}, weight=0.5)
+    fine_nut = RewTerm(
+        func=nut_thread_scaled_reward_forge,
+        params={
+            "a": 500,
+            "b": 0,
+        },
+        weight=2.0,
+    )
+    upright_reward = RewTerm(func=nut_upright_reward_forge, params={"a": 700, "b": 0, "tol": 1e-3}, weight=2)
+    success = RewTerm(func=mdp.nut_successfully_threaded, params={"threshold": 3e-4}, weight=1)
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.000001)
 
 
 # Do a scaled version of the DTW reward
@@ -213,9 +276,11 @@ class DTWReferenceTrajRewardScaled(DTWReferenceTrajReward):
         self.nut_traj_his = new_nut_traj_his
         return imitation_rwd
 
+
 @configclass
 class IKRelKukaNutThreadScaledEnvCfg(IKRelKukaNutThreadEnvCfg):
     """Configuration for the IK-based relative Kuka nut threading environment."""
+    rewards: NutThreadScaledRewardsCfg = NutThreadScaledRewardsCfg()
     
     def get_default_env_params(self):
         super().get_default_env_params()
@@ -225,6 +290,10 @@ class IKRelKukaNutThreadScaledEnvCfg(IKRelKukaNutThreadEnvCfg):
         if events_params.reset_scale_method not in ["none", "uniform", "gaussian"]:
             raise ValueError(f"Invalid reset_scale_method: {events_params.reset_scale_method}. Must be 'none', 'uniform' or 'gaussian'.")
         events_params.reset_scale_range = events_params.get("reset_scale_range", (0.8, 1.2))
+
+        # Add whether scale is observed
+        obs_params = self.params.observations
+        obs_params.include_scale = obs_params.get("include_scale", False)
 
     def randomize_scales(self):
         method = self.params.events.reset_scale_method
@@ -331,6 +400,15 @@ class IKRelKukaNutThreadScaledEnvCfg(IKRelKukaNutThreadEnvCfg):
             ).reshape(1,-1).repeat(self.params.num_envs, axis=0)
         nut_rel_pos = init_pos_repeated*scales-self.nut_frame_offset
         nut_rel_pose = np.concatenate([nut_rel_pos, init_rot_repeated], axis=-1)
+
+        # Pass scale as observation
+        obs_params = self.params.observations
+        if obs_params.include_scale:
+            self.observations.policy.asset_scale = ObsTerm(
+                func=get_env_scales,
+                scale=1,
+                history_length=1,
+            )
         
         self.events.reset_default = GraspResetEventTermScaledCfg(
             func=reset_scene_to_grasp_state_scaled,
@@ -345,6 +423,31 @@ class IKRelKukaNutThreadScaledEnvCfg(IKRelKukaNutThreadEnvCfg):
 
         # Nut Frame is used in nut_upright_reward_forge(), but only quat data
         # So no update is needed there
+
+        # rewards
+        # rewards_params = self.params.rewards
+        # self.rewards.coarse_nut.weight = rewards_params.coarse_nut_w
+        # self.rewards.fine_nut.weight = rewards_params.fine_nut_w
+        # self.rewards.upright_reward.weight = rewards_params.upright_reward_w
+        # self.rewards.success.weight = rewards_params.success_w
+        # self.rewards.action_rate.weight = rewards_params.action_rate_w
+        
+        # self.rewards.incoming_wrench_mag = RewTerm(
+        #     func=mdp.incoming_wrench_mag,
+        #     params={"asset_cfg": self.observations.policy.wrist_wrench.params["asset_cfg"]},
+        #     weight=rewards_params.incoming_wrench_mag_w,
+        # )
+        # if rewards_params.dtw_ref_traj_w > 0:
+        #     self.rewards.dtw_ref_traj = DTWReferenceTrajRewardCfg(
+        #         his_traj_len=10,
+        #         func=DTWReferenceTrajReward,
+        #         weight=rewards_params.dtw_ref_traj_w,
+        #     )
+        # self.rewards.contact_force_penalty = RewTerm(
+        #     func=mdp.contact_forces,
+        #     params={"threshold": 0, "sensor_cfg": SceneEntityCfg(name="contact_sensor")},
+        #     weight=rewards_params.contact_force_penalty_w,
+        # )
 
         # Update the DTWReferenceTrajReward
         rewards_params = self.params.rewards
