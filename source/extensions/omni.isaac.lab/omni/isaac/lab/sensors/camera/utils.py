@@ -143,7 +143,7 @@ def create_pointcloud_from_depth(
 
     # keep only valid entries if flag is set
     if not keep_invalid:
-        pts_idx_to_keep = torch.all(torch.logical_and(~torch.isnan(depth_cloud), ~torch.isinf(depth_cloud)), dim=1)
+        pts_idx_to_keep = torch.all(torch.logical_and(~torch.isnan(depth_cloud), ~torch.isinf(depth_cloud)), dim=-1)
         depth_cloud = depth_cloud[pts_idx_to_keep, ...]
 
     # return everything according to input type

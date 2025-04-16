@@ -87,8 +87,13 @@ def define_sensor() -> Camera:
     camera_cfg = CameraCfg(
         prim_path="/World/Origin_.*/CameraSensor",
         update_period=0,
-        height=480,
-        width=640,
+        height=200,
+        width=200,
+        offset=CameraCfg.OffsetCfg(
+            pos=(0.2, 0.2, 0.2),
+            rot=[1, 0, 0, 0],
+            convention="ros"
+        ),
         data_types=[
             "rgb",
             "distance_to_image_plane",

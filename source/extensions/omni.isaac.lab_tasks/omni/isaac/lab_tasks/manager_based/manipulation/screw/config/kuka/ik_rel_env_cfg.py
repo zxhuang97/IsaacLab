@@ -386,6 +386,7 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         rewards_params.upright_reward_w = rewards_params.get("upright_reward_w", 0.3)
         rewards_params.success_w = rewards_params.get("success_w", 1.0)
         rewards_params.action_rate_w = rewards_params.get("action_rate_w", -0.0)
+        rewards_params.action_l2_w = rewards_params.get("action_l2_w", -0.0)
         rewards_params.contact_force_penalty_w = rewards_params.get("contact_force_penalty_w", -0.01)
         rewards_params.incoming_wrench_mag_w = rewards_params.get("incoming_wrench_mag_w", 0.0)
         termination_params = self.params.terminations
@@ -593,31 +594,25 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
                 prim_path="{ENV_REGEX_NS}/Camera",
                 offset=TiledCameraCfg.OffsetCfg(
                 pos=(1., 0.1, 0.12),
-                # [ x: -2.3975473, y: 1.5188981, z: -2.3157065 ]
-                # rot=[0.4813639 , 0.5011198, 0.5182935, 0.4985375],
-                # [-90, 78, 179]
                 rot=[0.4497752 , 0.4401843, 0.5533875, 0.545621],
-                # [90, 90, 180] on rotation converter website
-                # rot=[0.5, 0.5, 0.5, 0.5],
                 convention="opengl"
-                # pos=(0.1, 0, 0.04),  # Match viewer eye position
-                # rot=(0.5, 0.5, -0.5, 0.5),  # 90 degree rotation around 
-                # convention="opengl"
             ),
             data_types=["rgb"],
             spawn=sim_utils.PinholeCameraCfg(
-                focal_length=24.0, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.0001, 20.0)
+                focal_length=18.0, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.0001, 20.0)
             ),
             width=720,
             height=720,
             )
         if obs_params.use_depth_camera:
             self.scene.depth_camera =TiledCameraCfg(
-                prim_path="{ENV_REGEX_NS}/Camera",
+                prim_path="{ENV_REGEX_NS}/DepthCamera",
                 offset=TiledCameraCfg.OffsetCfg(
                 pos=(1., 0.1, 0.12),
-                rot=[0.4497752 , 0.4401843, 0.5533875, 0.545621],
-                convention="opengl"
+                rot=[ 0.4402, -0.4498, -0.5456,  0.5534],
+                convention="ros"
+                # pos=(1.2, 0.1, 0.24),
+                # rot=[ 0.51804, 0.38444, 0.4596, 0.61042],
             ),
             data_types=["distance_to_image_plane"],
             spawn=sim_utils.PinholeCameraCfg(clipping_range=(0.0001, 0.5)
@@ -625,6 +620,8 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
             width=200,
             height=200,
             )
+            # -90 78 179
+            # -30 71 121
 
         # events
         event_params = self.params.events
