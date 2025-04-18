@@ -87,7 +87,7 @@ asset_factory = {
         "nut_geom_name": "factory_nut",
         "float_gain": 10.0,
         "float_damp": 0.01,
-        "nut_origin_offset": OffsetCfg(pos=(0.0, 0.0, 0.0044)),
+        "nut_origin_bottom_offset": OffsetCfg(pos=(0.0, 0.0, -0.0044)),
     },
     "m8_loose": {
         "nut_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_nut_m8_loose/factory_nut_m8_loose.usd",
@@ -105,7 +105,7 @@ asset_factory = {
         "bolt_geom_name": "factory_bolt",
         "float_gain": 10.0,
         "float_damp": 0.01,
-        "nut_origin_offset": OffsetCfg(pos=(0.0, 0.0, -0.0012)),
+        "nut_origin_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.0012)),
     },
     "m8_tight": {
         "nut_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_nut_m8_tight/factory_nut_m8_tight.usd",
@@ -124,7 +124,7 @@ asset_factory = {
         "bolt_geom_name": "factory_bolt",
         "float_gain": 10.0,
         "float_damp": 0.01,
-        "nut_origin_offset": OffsetCfg(pos=(0.0, 0.0, -0.0012)),
+        "nut_origin_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.0012)),
     },
     "m12_tight": {
         "nut_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_nut_m8_tight/factory_nut_m12_tight.usd",
@@ -143,7 +143,7 @@ asset_factory = {
         "bolt_geom_name": "factory_bolt",
         "float_gain": 10.0,
         "float_damp": 0.01,
-        "nut_origin_offset": OffsetCfg(pos=(0.0, 0.0, -0.007)),
+        "nut_origin_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.007)),
     },
     "m16_tight": {
         "nut_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_nut_m16_tight/factory_nut_m16_tight.usd",
@@ -158,12 +158,11 @@ asset_factory = {
         "nut_frame_offset": OffsetCfg(pos=(0.0, 0.0, 0.0225)),
         "bolt_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.0)),
         "bolt_tip_offset": OffsetCfg(pos=(0.0, 0.0, 0.041)),
-        "bolt_height": 0.048,
         "nut_geom_name": "factory_nut",
         "bolt_geom_name": "factory_bolt",
         "float_gain": 10.0,
         "float_damp": 0.01,
-        "nut_origin_offset": OffsetCfg(pos=(0.0, 0.0, -0.0160)),
+        "nut_origin_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.0160)),
     },
     "m16_loose": {
         "nut_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_nut_m16_loose/factory_nut_m16_loose.usd",
@@ -178,12 +177,11 @@ asset_factory = {
         "nut_frame_offset": OffsetCfg(pos=(0.0, 0.0, 0.0225)),
         "bolt_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.0)),
         "bolt_tip_offset": OffsetCfg(pos=(0.0, 0.0, 0.041)),
-        "bolt_height": 0.048,
         "nut_geom_name": "factory_nut",
         "bolt_geom_name": "factory_bolt",
         "float_gain": 10.0,
         "float_damp": 0.01,
-        "nut_origin_offset": OffsetCfg(pos=(0.0, 0.0, -0.0125)),
+        "nut_origin_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.0160)),
     },   
     "m16": {
         "nut_path": f"{ISAAC_NUCLEUS_DIR}/IsaacLab/Factory/factory_nut_m16.usd",
@@ -199,12 +197,11 @@ asset_factory = {
         "nut_frame_offset": OffsetCfg(pos=(0.0, 0.0, 0.0225)),
         "bolt_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.0)),
         "bolt_tip_offset": OffsetCfg(pos=(0.0, 0.0, 0.041)),
-        "bolt_height": 0.048,
         "nut_geom_name": "factory_nut_loose",
         "bolt_geom_name": "factory_bolt_loose",
         "float_gain": 10.0,
         "float_damp": 0.01,
-        "nut_origin_offset": OffsetCfg(pos=(0.0, 0.0, -0.0125)),
+        "nut_origin_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.0160)),
     },
     "m20": {
         "nut_path": f"{ISAAC_NUCLEUS_DIR}/IsaacLab/Factory/factory_nut_m20.usd",
@@ -224,10 +221,9 @@ asset_factory = {
         "bolt_geom_name": "factory_bolt_loose",
         "float_gain": 10.0,
         "float_damp": 0.01,
-        "nut_origin_offset": OffsetCfg(pos=(0.0, 0.0, -0.018)),
+        "nut_origin_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.0180)),
     },
 }
-
 
 @configclass
 class ScrewSceneCfg(InteractiveSceneCfg):

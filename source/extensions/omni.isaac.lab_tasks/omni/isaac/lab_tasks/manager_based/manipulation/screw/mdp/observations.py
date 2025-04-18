@@ -21,7 +21,7 @@ def rel_nut_bolt_distance(env: ManagerBasedRLEnv, bolt_part_name: str) -> torch.
         upright_quat = env.cfg.upright_relative_rot
         # Get nut quantities
         # If set, use nut bottom as reference for distance
-        if env.cfg.reference_nut_bottom:
+        if env.cfg.params.events.reference_nut_part == "bottom":
             nut_rel_pos = env.cfg.scaled_nut_bottom_offset
         # Otherwise use nut center offset
         else:
@@ -41,7 +41,8 @@ def rel_nut_bolt_distance(env: ManagerBasedRLEnv, bolt_part_name: str) -> torch.
         )
 
         dis_scaled = nut_frame_pos - bolt_frame_pos
-        # return dis_scaled
+        # print(dis_scaled.norm(p=2, dim=-1)[0].item())
+        return dis_scaled
 
         # nut_frame =  nut_state @ nut_frame_offset
         # get nut_frame manually by using math_utils.combine_frame_transforms

@@ -62,7 +62,12 @@ def spawn_nut_with_rigid_grasp_scaled(
     # nut_init_pos = init_pos_repeated - self.nut_orig_offset
     # 0.02 - origin offset
 
-    # Randomize in hand pose
+    # Radomize in hand pose
+    # rand_delta_pos, rand_delta_quat = some_sampling()
+    # grasp_rel_pos, grasl_rel_quat = math_utils.combine_frame_transforms(
+    #     gras_rel_pos, grasl_rel_quat, rand_delta_pos, rand_delta_quat
+    # )
+    # ...existing code...
 
     nut_pos, nut_quat = math_utils.combine_frame_transforms(tool_pos, tool_quat, grasp_rel_pos, grasp_rel_quat)
 
@@ -303,6 +308,9 @@ class IKRelKukaNutThreadScaledEnvCfg(IKRelKukaNutThreadEnvCfg):
         if events_params.reset_scale_method not in ["none", "uniform", "gaussian"]:
             raise ValueError(f"Invalid reset_scale_method: {events_params.reset_scale_method}. Must be 'none', 'uniform' or 'gaussian'.")
         events_params.reset_scale_range = events_params.get("reset_scale_range", (0.8, 1.2))
+        events_params.reference_nut_part = events_params.get("reference_nut_part", "center")
+        if events_params.reference_nut_part not in ["center", "bottom"]:
+            raise ValueError(f"Invalid reference_nut_part: {events_params.reference_nut_part}. Must be 'center' or 'bottom'.")
 
         # Add whether scale is observed
         obs_params = self.params.observations
@@ -386,7 +394,8 @@ class IKRelKukaNutThreadScaledEnvCfg(IKRelKukaNutThreadEnvCfg):
 
         # Cache the size of the bolt
         screw_dict = asset_factory[self.params.scene.screw_type]
-        self.base_bolt_height = screw_dict["bolt_height"]
+        # 1.15 seems to work well
+        self.base_bolt_height = screw_dict["bolt_tip_offset"].pos[2]*1.15
 
         # Override the create_fixed_joint function for scaled environment
         nut_params = self.params.scene.nut
@@ -405,7 +414,7 @@ class IKRelKukaNutThreadScaledEnvCfg(IKRelKukaNutThreadEnvCfg):
 
         # Since origin of nut is below the body of the nut, we need to compensate
         # So that the bottom surface of nut is aligned relative to gripper for various sizes of nut. 
-        origin_offset = np.array(self.scene.screw_dict["nut_origin_offset"].pos).reshape(1,3)
+        origin_offset = np.array(self.scene.screw_dict["nut_origin_bottom_offset"].pos).reshape(1,3)
         scales = self.asset_scale_samples.cpu().numpy().reshape(-1,1)
         self.nut_orig_offset = origin_offset * (scales-1)
 
@@ -425,11 +434,11 @@ class IKRelKukaNutThreadScaledEnvCfg(IKRelKukaNutThreadEnvCfg):
             ).reshape(1,-1).repeat(self.params.num_envs, axis=0)
 
         # Compute the compensated init pos
-        nut_init_pos = init_pos_repeated - self.nut_orig_offset
+        nut_init_pos = init_pos_repeated + self.nut_orig_offset
         nut.init_state.pos = torch.from_numpy(nut_init_pos).to(self.device)
 
         # Re-compute the relative position for reset frame
-        nut_rel_pos = init_pos_repeated - frame_offset + self.nut_orig_offset
+        nut_rel_pos = init_pos_repeated - frame_offset - self.nut_orig_offset
         nut_rel_pose = np.concatenate([nut_rel_pos, init_rot_repeated], axis=-1)
 
         # Pass scale as observation
@@ -494,21 +503,19 @@ class IKRelKukaNutThreadScaledEnvCfg(IKRelKukaNutThreadEnvCfg):
             marker_cfg.target_frames[0].offset = OffsetCfg(pos=scaled_offset_pos)
 
         # Also compute scaled offset for distance computation
-        nut_bottom_offset_pos = screw_dict["nut_origin_offset"].pos
-        self.scaled_nut_bottom_offset = (-1) * torch.tensor(
+        nut_bottom_offset_pos = screw_dict["nut_origin_bottom_offset"].pos
+        self.scaled_nut_bottom_offset = torch.tensor(
             nut_bottom_offset_pos, device=self.device
         ).reshape(1,3) * self.asset_scale_samples.reshape(-1,1)
         
         # Configure if we want to use the bottom of the nut as reference
-        # Default to False --> center of nut as reference
-        self.reference_nut_bottom = True
-        if self.reference_nut_bottom:
+        if event_params.reference_nut_part == "bottom":
             for marker_cfg in [
                 self.scene.nut_frame,
                 self.scene.nut_frame_plate,
             ]:
-                offset_pos = screw_dict["nut_origin_offset"].pos
-                scaled_offset_pos = (-1)*np.array(offset_pos) * self.asset_scale_samples[0].cpu().numpy()
+                offset_pos = screw_dict["nut_origin_bottom_offset"].pos
+                scaled_offset_pos = np.array(offset_pos) * self.asset_scale_samples[0].cpu().numpy()
                 # scaled_offset_pos = np.zeros_like(scaled_offset_pos)
                 scaled_offset_pos = tuple(scaled_offset_pos.tolist())
                 marker_cfg.target_frames[0].offset = OffsetCfg(pos=scaled_offset_pos)
