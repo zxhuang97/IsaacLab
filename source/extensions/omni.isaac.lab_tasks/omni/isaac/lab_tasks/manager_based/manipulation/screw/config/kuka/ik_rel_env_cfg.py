@@ -153,8 +153,10 @@ class reset_scene_to_grasp_state(ManagerTermBase):
         self.reset_use_adr = cfg.reset_use_adr
         self.reset_close_gripper = cfg.reset_close_gripper
         self.nut_rel_pose = cfg.nut_rel_pose
-        self.rand_init_configurations = None
-        self.num_buckets = int(5e3)
+        self.rand_init_robot_joint = None
+        self.rand_init_nut_state = None
+        self.num_buckets = int(2e3)
+        # self.num_buckets = 1
         self.bucket_update_freq = 4
         self.gripper_action = mdp.Robotiq3FingerAction(mdp.Robotiq3FingerActionCfg(
             asset_name="robot",
@@ -176,7 +178,7 @@ class reset_scene_to_grasp_state(ManagerTermBase):
             # step b: maximize noise
             raise NotImplementedError
         full_joint_state = cached_state["robot"]["joint_state"]["position"]
-
+        full_nut_state = cached_state["nut"]["root_state"]
         # nut_rel_pos = np.array(nut.init_state.pos) - np.array(
         #     self.scene.nut_frame.target_frames[0].offset.pos
         # )
@@ -203,20 +205,26 @@ class reset_scene_to_grasp_state(ManagerTermBase):
                 delta_rot[:, 0], delta_rot[:, 1], delta_rot[:, 2]
             )
 
+            # [-0.15, -0.5, -0.8]
             delta_pose = Pose(position=torch.zeros((B, 3), device=env.device), quaternion=delta_quat)
             randomized_nut_pose = default_nut_pose.multiply(delta_pose)
             randomized_nut_pose.position += delta_trans
-            randomized_tool_pose = randomized_nut_pose.multiply(nut_rel_pose.inverse())
+            randomized_tool_pose = randomized_nut_pose.multiply(nut_rel_pose)
+
+            # this should give you randomized_nut_pose.
+            # print(math_utils.combine_frame_transforms(randomized_tool_pose.position[:1], randomized_tool_pose.quaternion[:1], nut_rel_pose.position, nut_rel_pose.quaternion))
+
             ik_result = self.curobo_arm.compute_ik(randomized_tool_pose)
             randomized_joint_state = full_joint_state.repeat(B, 1).contiguous()
             randomized_joint_state[:, :7] = ik_result.solution.squeeze(1)
+            randomized_nut_state = full_nut_state.repeat(B, 1).contiguous()
             if self.reset_close_gripper is not None:
                 cur_gripper_joint = full_joint_state[:, self.gripper_action._joint_ids]
                 target_gripper_joint = torch.zeros(B, 11, device=env.device, dtype=torch.float32)
                 cur_finger_open = mdp.inverse_compute_finger_angles_jit(cur_gripper_joint)[:, 0]
                 cur_finger_scissor = mdp.inverse_compute_scissor_angle_jit(cur_gripper_joint[:, -2:])[:, 0]
-                close_finger_open = 0.33
-                close_finger_scissor = 0.275
+                close_finger_open = torch.tensor(0.32, device=env.device)
+                close_finger_scissor = torch.tensor(0.275, device=env.device)
                 if self.reset_close_gripper == "close":
                     tgt_finger_open = close_finger_open
                     tgt_finger_scissor = close_finger_scissor
@@ -232,13 +240,17 @@ class reset_scene_to_grasp_state(ManagerTermBase):
                 target_gripper_joint[:, 6:9] = target_gripper_joint[:, 0:3]
                 mdp.compute_scissor_angle_jit(tgt_finger_scissor, target_gripper_joint[:, 9:11])
                 randomized_joint_state[:, self.gripper_action._joint_ids] = target_gripper_joint
+            nut_pose_w = self.robot_base_pose.repeat(B).multiply(randomized_nut_pose)
+            randomized_nut_state[:, :3] = nut_pose_w.position
+            randomized_nut_state[:, 3:7] = nut_pose_w.quaternion
         elif self.reset_randomize_mode == "joint":
             raise NotImplementedError
             randomized_joint_state = torch.randn_like(full_joint_state) * self.reset_joint_std + full_joint_state
         else:  # no randomization
             randomized_joint_state = full_joint_state.repeat(B, 1).contiguous()
         # self.rand_init_configurations = randomized_joint_state.detach().cpu().numpy()
-        self.rand_init_configurations = randomized_joint_state
+        self.rand_init_robot_joint = randomized_joint_state
+        self.rand_init_nut_state = randomized_nut_state
 
     def __call__(self, env: ManagerBasedEnv, env_ids: torch.Tensor):
         cached_state = self.cached_state[env_ids].clone()
@@ -249,12 +261,13 @@ class reset_scene_to_grasp_state(ManagerTermBase):
         if self.reset_randomize_mode is not None:
             # draw random initializations
             select = torch.randint(0, self.num_buckets, (env_ids.shape[0],), device=env.device)
-            randomized_joint_state = self.rand_init_configurations[select].clone()
+            randomized_joint_state = self.rand_init_robot_joint[select].clone()
             # select = np.random.choice(self.num_buckets, env_ids.shape[0], replace=True)
             # randomized_joint_state = self.rand_init_configurations[select].copy()
             # randomized_joint_state = torch.tensor(randomized_joint_state, device=env.device)
             cached_state["robot"]["joint_state"]["position"] = randomized_joint_state
             cached_state["robot"]["joint_state"]["position_target"] = randomized_joint_state
+            cached_state["nut"]["root_state"] = self.rand_init_nut_state[select].clone()
 
         env.unwrapped.write_state(cached_state, env_ids)
 
@@ -745,9 +758,11 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         #         "rest_offset": robot_params.rest_offset},
         #     mode="startup",
         # )
+        # this is for randomize alongthe nut_pose frame
         nut_rel_pos = np.array(nut.init_state.pos) - np.array(
             self.scene.nut_frame.target_frames[0].offset.pos
         )
+        nut_rel_pos = nut.init_state.pos
         self.events.reset_default = GraspResetEventTermCfg(
             func=reset_scene_to_grasp_state,
             mode="reset",

@@ -62,19 +62,19 @@ KUKA_VICTOR_LEFT_CFG = ArticulationCfg(
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             enabled_self_collisions=False, solver_position_iteration_count=8, solver_velocity_iteration_count=4
         ),
-        # collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.002),
+        collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.002, rest_offset=0.001),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
         pos=(0, 0, 0),
         joint_pos={
             # arm states
-            "victor_left_arm_joint_1": 1.3363,
-            "victor_left_arm_joint_2": -0.59862,
-            "victor_left_arm_joint_3": 2.4486,
-            "victor_left_arm_joint_4": 1.7066,
-            "victor_left_arm_joint_5": -2.2058,
-            "victor_left_arm_joint_6": 1.0290,
-            "victor_left_arm_joint_7": 0.42154,
+            "victor_left_arm_joint_1": 0.8577,
+            "victor_left_arm_joint_2": -0.2224,
+            "victor_left_arm_joint_3": 2.6055,
+            "victor_left_arm_joint_4": 1.5286,
+            "victor_left_arm_joint_5": -1.7623,
+            "victor_left_arm_joint_6": 1.2837,
+            "victor_left_arm_joint_7": 8.6436,
             "victor_left_finger_a_joint_1": 0.73443,
             "victor_left_finger_a_joint_2": 0,
             "victor_left_finger_a_joint_3": -0.73443,
@@ -129,7 +129,7 @@ KUKA_VICTOR_CFG = ArticulationCfg(
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             enabled_self_collisions=True, solver_position_iteration_count=8, solver_velocity_iteration_count=0
         ),
-        collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.002, rest_offset=0),
+        collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.002, rest_offset=0.001),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
         # pos=(-0.4, -0.35, -0.8),
