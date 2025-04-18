@@ -71,6 +71,24 @@ BLUE_VIZ_MARKER_CFG.markers["height"].visual_material = sim_utils.PreviewSurface
 # PLATE_ARROW_CFG.markers["frame"] = FRAME_MARKER_SMALL_CFG.markers["frame"]
 
 asset_factory = {
+    "m4_tight": {
+        "nut_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_nut_m8_loose/factory_nut_m4_tight.usd",
+        "bolt_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_bolt_m8_loose/factory_bolt_m4_tight.usd",
+        "nut_init_state_tighten": RigidObjectCfg.InitialStateCfg(
+            pos=(6.3000e-01, 2.0661e-06, 3.0895e-03), rot=(-2.1609e-01, 6.6671e-05, -6.6467e-05, 9.7637e-01)
+        ),
+        "nut_init_state_thread": RigidObjectCfg.InitialStateCfg(
+            pos=(6.3000e-01, 4.0586e-06, 0.02), rot=(9.9833e-01, 1.2417e-04, -1.2629e-05, 5.7803e-02)
+        ),
+        "bolt_init_state": RigidObjectCfg.InitialStateCfg(pos=(0.63, 0.0, 0.0)),
+        "nut_frame_offset": OffsetCfg(pos=(0.0, 0.0, 0.011)),
+        "bolt_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.012)),
+        "bolt_tip_offset": OffsetCfg(pos=(0.0, 0.0, 0.0261)),
+        "nut_geom_name": "factory_nut",
+        "float_gain": 10.0,
+        "float_damp": 0.01,
+        "nut_origin_offset": OffsetCfg(pos=(0.0, 0.0, 0.0044)),
+    },
     "m8_loose": {
         "nut_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_nut_m8_loose/factory_nut_m8_loose.usd",
         "bolt_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_bolt_m8_loose/factory_bolt_m8_loose.usd",
@@ -84,8 +102,10 @@ asset_factory = {
         "nut_frame_offset": OffsetCfg(pos=(0.0, 0.0, 0.011)),
         "bolt_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.012)),
         "bolt_tip_offset": OffsetCfg(pos=(0.0, 0.0, 0.0261)),
+        "bolt_geom_name": "factory_bolt",
         "float_gain": 10.0,
         "float_damp": 0.01,
+        "nut_origin_offset": OffsetCfg(pos=(0.0, 0.0, -0.0012)),
     },
     "m8_tight": {
         "nut_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_nut_m8_tight/factory_nut_m8_tight.usd",
@@ -100,8 +120,30 @@ asset_factory = {
         "nut_frame_offset": OffsetCfg(pos=(0.0, 0.0, 0.011)),
         "bolt_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.0)),
         "bolt_tip_offset": OffsetCfg(pos=(0.0, 0.0, 0.0261)),
+        "nut_geom_name": "factory_nut",
+        "bolt_geom_name": "factory_bolt",
         "float_gain": 10.0,
         "float_damp": 0.01,
+        "nut_origin_offset": OffsetCfg(pos=(0.0, 0.0, -0.0012)),
+    },
+    "m12_tight": {
+        "nut_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_nut_m8_tight/factory_nut_m12_tight.usd",
+        "bolt_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_bolt_m8_tight/factory_bolt_m12_tight.usd",
+        "nut_init_state_tighten": RigidObjectCfg.InitialStateCfg(
+            pos=(6.3000e-01, 2.0661e-06, 3.0895e-03), rot=(-2.1609e-01, 6.6671e-05, -6.6467e-05, 9.7637e-01)
+        ),
+        "nut_init_state_thread": RigidObjectCfg.InitialStateCfg(
+            pos=(6.3000e-01, 4.0586e-06, 0.02), rot=(9.9833e-01, 1.2417e-04, -1.2629e-05, 5.7803e-02)
+        ),
+        "bolt_init_state": RigidObjectCfg.InitialStateCfg(pos=(0.63, 0.0, 0.0)),
+        "nut_frame_offset": OffsetCfg(pos=(0.0, 0.0, 0.011)),
+        "bolt_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.0)),
+        "bolt_tip_offset": OffsetCfg(pos=(0.0, 0.0, 0.0261)),
+        "nut_geom_name": "factory_nut",
+        "bolt_geom_name": "factory_bolt",
+        "float_gain": 10.0,
+        "float_damp": 0.01,
+        "nut_origin_offset": OffsetCfg(pos=(0.0, 0.0, -0.007)),
     },
     "m16_tight": {
         "nut_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_nut_m16_tight/factory_nut_m16_tight.usd",
@@ -116,17 +158,18 @@ asset_factory = {
         "nut_frame_offset": OffsetCfg(pos=(0.0, 0.0, 0.0225)),
         "bolt_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.0)),
         "bolt_tip_offset": OffsetCfg(pos=(0.0, 0.0, 0.041)),
+        "bolt_height": 0.048,
         "nut_geom_name": "factory_nut",
         "bolt_geom_name": "factory_bolt",
         "float_gain": 10.0,
         "float_damp": 0.01,
+        "nut_origin_offset": OffsetCfg(pos=(0.0, 0.0, -0.0160)),
     },
     "m16_loose": {
         "nut_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_nut_m16_loose/factory_nut_m16_loose.usd",
         "bolt_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_bolt_m16_loose/factory_bolt_m16_loose.usd",
         "nut_init_state_tighten": RigidObjectCfg.InitialStateCfg(
             pos=(6.3000e-01, 2.0661e-06, 3.0895e-03), rot=(-2.1609e-01, 6.6671e-05, -6.6467e-05, 9.7637e-01)
-
         ),
         "nut_init_state_thread": RigidObjectCfg.InitialStateCfg(
             pos=(6.3000e-01, 4.0586e-06, 0.03), rot=(9.9833e-01, 1.2417e-04, -1.2629e-05, 5.7803e-02)
@@ -135,10 +178,12 @@ asset_factory = {
         "nut_frame_offset": OffsetCfg(pos=(0.0, 0.0, 0.0225)),
         "bolt_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.0)),
         "bolt_tip_offset": OffsetCfg(pos=(0.0, 0.0, 0.041)),
+        "bolt_height": 0.048,
         "nut_geom_name": "factory_nut",
         "bolt_geom_name": "factory_bolt",
         "float_gain": 10.0,
         "float_damp": 0.01,
+        "nut_origin_offset": OffsetCfg(pos=(0.0, 0.0, -0.0125)),
     },   
     "m16": {
         "nut_path": f"{ISAAC_NUCLEUS_DIR}/IsaacLab/Factory/factory_nut_m16.usd",
@@ -154,10 +199,32 @@ asset_factory = {
         "nut_frame_offset": OffsetCfg(pos=(0.0, 0.0, 0.0225)),
         "bolt_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.0)),
         "bolt_tip_offset": OffsetCfg(pos=(0.0, 0.0, 0.041)),
+        "bolt_height": 0.048,
         "nut_geom_name": "factory_nut_loose",
         "bolt_geom_name": "factory_bolt_loose",
         "float_gain": 10.0,
         "float_damp": 0.01,
+        "nut_origin_offset": OffsetCfg(pos=(0.0, 0.0, -0.0125)),
+    },
+    "m20": {
+        "nut_path": f"{ISAAC_NUCLEUS_DIR}/IsaacLab/Factory/factory_nut_m20.usd",
+        "bolt_path": f"{ISAAC_NUCLEUS_DIR}/IsaacLab/Factory/factory_bolt_m20.usd",
+        "nut_init_state_tighten": ArticulationCfg.InitialStateCfg(
+            pos=(6.3000e-01, 2.0661e-06, 3.0895e-03), rot=(-2.1609e-01, 6.6671e-05, -6.6467e-05, 9.7637e-01),
+            joint_pos={}, joint_vel={}
+        ),
+        "nut_init_state_thread": RigidObjectCfg.InitialStateCfg(
+            pos=(6.3000e-01, 4.0586e-06, 0.03), rot=(9.9833e-01, 1.2417e-04, -1.2629e-05, 5.7803e-02)
+        ),
+        "bolt_init_state": RigidObjectCfg.InitialStateCfg(pos=(0.63, 0.0, 0.0)),
+        "nut_frame_offset": OffsetCfg(pos=(0.0, 0.0, 0.0225)),
+        "bolt_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.0)),
+        "bolt_tip_offset": OffsetCfg(pos=(0.0, 0.0, 0.041)),
+        "nut_geom_name": "factory_nut_loose",
+        "bolt_geom_name": "factory_bolt_loose",
+        "float_gain": 10.0,
+        "float_damp": 0.01,
+        "nut_origin_offset": OffsetCfg(pos=(0.0, 0.0, -0.018)),
     },
 }
 
@@ -605,26 +672,26 @@ class BaseNutThreadEnvCfg(BaseScrewEnvCfg):
             update_period=0.0,
         )
 
-        self.auto_markers_cfg = VecAutoUpdateVisualizationMarkersCfg(
-            prim_path="World/Auto_visuals",
-            markers={
-                "viz_nut": sim_utils.UsdFileCfg(
-                    usd_path=self.scene.screw_dict["nut_path"],
-                    visual_material=sim_utils.PreviewSurfaceCfg(
-                        diffuse_color=(1.0, 0.0, 0.0),  # Red color
-                        opacity=0.1             # Half transparent
-                    )
-                ),
-                "obs_viz_nut": sim_utils.UsdFileCfg(
-                    usd_path=self.scene.screw_dict["nut_path"],
-                    visual_material=sim_utils.PreviewSurfaceCfg(
-                        diffuse_color=(0.0, 0.0, 1.0),  # Blue color
-                        opacity=0.4             # Half transparent
-                    )
-                ),
-            },
-            num_markers_per_type_env={
-                "viz_nut": 1,
-                "obs_viz_nut": 1,
-            }
-        )
+        # self.auto_markers_cfg = VecAutoUpdateVisualizationMarkersCfg(
+        #     prim_path="World/Auto_visuals",
+        #     markers={
+        #         "viz_nut": sim_utils.UsdFileCfg(
+        #             usd_path=self.scene.screw_dict["nut_path"],
+        #             visual_material=sim_utils.PreviewSurfaceCfg(
+        #                 diffuse_color=(1.0, 0.0, 0.0),  # Red color
+        #                 opacity=0.1             # Half transparent
+        #             )
+        #         ),
+        #         "obs_viz_nut": sim_utils.UsdFileCfg(
+        #             usd_path=self.scene.screw_dict["nut_path"],
+        #             visual_material=sim_utils.PreviewSurfaceCfg(
+        #                 diffuse_color=(0.0, 0.0, 1.0),  # Blue color
+        #                 opacity=0.4             # Half transparent
+        #             )
+        #         ),
+        #     },
+        #     num_markers_per_type_env={
+        #         "viz_nut": 1,
+        #         "obs_viz_nut": 1,
+        #     }
+        # )
