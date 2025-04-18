@@ -104,6 +104,7 @@ class GraspResetEventTermCfg(EventTerm):
         reset_joint_std: float = 0.0,
         reset_randomize_mode: Literal["task", "joint", None] = "task",
         reset_use_adr: bool = False,
+        reset_close_gripper: Literal["adaptive", "close", None] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -113,7 +114,7 @@ class GraspResetEventTermCfg(EventTerm):
         self.reset_joint_std = reset_joint_std
         self.reset_randomize_mode = reset_randomize_mode
         self.reset_use_adr = reset_use_adr
-
+        self.reset_close_gripper = reset_close_gripper
 
 class reset_scene_to_grasp_state(ManagerTermBase):
     def __init__(self, cfg: GraspResetEventTermCfg, env: ManagerBasedEnv):
@@ -150,6 +151,7 @@ class reset_scene_to_grasp_state(ManagerTermBase):
         self.reset_rot_std = 0.2 * cfg.reset_range_scale
         self.reset_joint_std = cfg.reset_joint_std
         self.reset_use_adr = cfg.reset_use_adr
+        self.reset_close_gripper = cfg.reset_close_gripper
         self.nut_rel_pose = cfg.nut_rel_pose
         self.rand_init_configurations = None
         self.num_buckets = int(5e3)
@@ -206,17 +208,30 @@ class reset_scene_to_grasp_state(ManagerTermBase):
             randomized_nut_pose.position += delta_trans
             randomized_tool_pose = randomized_nut_pose.multiply(nut_rel_pose.inverse())
             ik_result = self.curobo_arm.compute_ik(randomized_tool_pose)
-            gripper_joint = torch.zeros(B, 11, device=env.device, dtype=torch.float32)
-            gripper_openness = torch.ones(B, device=env.device, dtype=torch.float32) * 0.33
-            gripper_scissor = torch.ones(B, device=env.device, dtype=torch.float32) * 0.275
-            mdp.compute_finger_angles_jit(gripper_openness, gripper_joint)
-            gripper_joint[:, 3:6] = gripper_joint[:, 0:3]
-            gripper_joint[:, 6:9] = gripper_joint[:, 0:3]
-            mdp.compute_scissor_angle_jit(gripper_scissor, gripper_joint[:, 9:11])
-            # gripper_state
             randomized_joint_state = full_joint_state.repeat(B, 1).contiguous()
             randomized_joint_state[:, :7] = ik_result.solution.squeeze(1)
-            randomized_joint_state[:, self.gripper_action._joint_ids] = gripper_joint
+            if self.reset_close_gripper is not None:
+                cur_gripper_joint = full_joint_state[:, self.gripper_action._joint_ids]
+                target_gripper_joint = torch.zeros(B, 11, device=env.device, dtype=torch.float32)
+                cur_finger_open = mdp.inverse_compute_finger_angles_jit(cur_gripper_joint)[:, 0]
+                cur_finger_scissor = mdp.inverse_compute_scissor_angle_jit(cur_gripper_joint[:, -2:])[:, 0]
+                close_finger_open = 0.33
+                close_finger_scissor = 0.275
+                if self.reset_close_gripper == "close":
+                    tgt_finger_open = close_finger_open
+                    tgt_finger_scissor = close_finger_scissor
+                elif self.reset_close_gripper == "adaptive":
+                    global_step = env._sim_step_counter // env.cfg.decimation
+                    ratio = global_step / 80 * 600 # fully close at 600 iters
+                    tgt_finger_open = cur_finger_open + (close_finger_open - cur_finger_open) * ratio
+                    tgt_finger_scissor = cur_finger_scissor + (close_finger_scissor - cur_finger_scissor) * ratio
+                tgt_finger_open = tgt_finger_open.repeat(B)
+                tgt_finger_scissor = tgt_finger_scissor.repeat(B)
+                mdp.compute_finger_angles_jit(tgt_finger_open, target_gripper_joint)
+                target_gripper_joint[:, 3:6] = target_gripper_joint[:, 0:3]
+                target_gripper_joint[:, 6:9] = target_gripper_joint[:, 0:3]
+                mdp.compute_scissor_angle_jit(tgt_finger_scissor, target_gripper_joint[:, 9:11])
+                randomized_joint_state[:, self.gripper_action._joint_ids] = target_gripper_joint
         elif self.reset_randomize_mode == "joint":
             raise NotImplementedError
             randomized_joint_state = torch.randn_like(full_joint_state) * self.reset_joint_std + full_joint_state
@@ -456,6 +471,7 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         events_params.reset_joint_std = events_params.get("reset_joint_std", 0.0)
         events_params.reset_randomize_mode = events_params.get("reset_randomize_mode", "task")
         events_params.reset_use_adr = events_params.get("reset_use_adr", False)
+        events_params.reset_close_gripper = events_params.get("reset_close_gripper", None)
 
         curri_params = self.params.curriculum
         curri_params.use_obs_noise_curri = curri_params.get("use_obs_noise_curri", False)
@@ -741,6 +757,7 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
             reset_randomize_mode=event_params.reset_randomize_mode,
             reset_joint_std=event_params.reset_joint_std,
             reset_use_adr=event_params.reset_use_adr,
+            reset_close_gripper=event_params.reset_close_gripper,
         )
 
         # terminations
