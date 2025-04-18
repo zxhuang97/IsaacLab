@@ -120,7 +120,7 @@ class GraspResetEventTermScaledCfg(EventTermCfg):
 class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
     def __init__(self, cfg: GraspResetEventTermScaledCfg, env: ManagerBasedEnv):
         super().__init__(cfg, env)
-        self.num_buckets = 1
+        self.num_buckets = 10
         self.bucket_update_freq = 2
         self.max_ik_batch_size = 10240
 
