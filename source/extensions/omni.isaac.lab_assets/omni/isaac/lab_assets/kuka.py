@@ -100,8 +100,8 @@ KUKA_VICTOR_LEFT_CFG = ArticulationCfg(
             joint_names_expr=["victor_left.*finger.*"],
             effort_limit=200.0,
             velocity_limit=0.2,
-            stiffness=2e2,
-            damping=1e2,
+            stiffness=50,
+            damping=10,
         ),
     },
     soft_joint_pos_limit_factor=1.0,
@@ -129,7 +129,7 @@ KUKA_VICTOR_CFG = ArticulationCfg(
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             enabled_self_collisions=True, solver_position_iteration_count=8, solver_velocity_iteration_count=0
         ),
-        collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.001, rest_offset=0),
+        collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.002, rest_offset=0),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
         # pos=(-0.4, -0.35, -0.8),
