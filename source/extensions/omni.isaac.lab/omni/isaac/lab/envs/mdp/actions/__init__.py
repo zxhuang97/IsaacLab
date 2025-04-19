@@ -10,3 +10,4 @@ from .binary_joint_actions import *
 from .joint_actions import *
 from .joint_actions_to_limits import *
 from .non_holonomic_actions import *
+from .robotiq_3f_actions import *

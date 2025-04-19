@@ -156,6 +156,7 @@ class RewardManager(ManagerBase):
 
             # Update current reward for this step.
             self._step_reward[:, self._term_names.index(name)] = value / dt
+            # print(f"Reward for {name}: {value / dt}")
 
         return self._reward_buf
 

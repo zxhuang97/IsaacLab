@@ -168,9 +168,10 @@ class RslRlVecEnvWrapper(VecEnv):
 
     def reset(self) -> tuple[torch.Tensor, dict]:  # noqa: D102
         # reset the environment
-        obs_dict, _ = self.env.reset()
+        obs_dict, extras = self.env.reset()
+        extras["observations"] = obs_dict
         # return observations
-        return obs_dict["policy"], {"observations": obs_dict}
+        return obs_dict["policy"], extras
 
     def step(self, actions: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict]:
         # record step information
