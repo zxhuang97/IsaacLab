@@ -440,8 +440,9 @@ class BaseScrewEnvCfg(ManagerBasedRLEnvCfg):
         # Initialize params structure
         if self.params is None:
             self.params = OmegaConf.create()
+        # NOTE(zixuan): replicate_physics should be true by default
         if not hasattr(self, "replicate_physics"):
-            self.replicate_physics = False
+            self.replicate_physics = True
         params = self.params
         params.scene = params.get("scene", OmegaConf.create())
         params.sim = params.get("sim", OmegaConf.create())
@@ -476,12 +477,12 @@ class BaseScrewEnvCfg(ManagerBasedRLEnvCfg):
             num_envs=4096,
             env_spacing=2.5,
             screw_type=self.screw_type,
-            replicate_physics=False
+            replicate_physics=self.replicate_physics,
         )
         # general settings
         self.decimation = self.params.decimation
         self.sim.render_interval = self.decimation
-        # self.rerender_on_reset = True
+        self.rerender_on_reset = True
         self.sim.dt = self.params.sim.dt
         self.sim.physx.friction_offset_threshold = self.params.sim.physx.friction_offset_threshold
         self.sim.physx.enable_ccd = self.params.sim.physx.enable_ccd
@@ -601,6 +602,7 @@ class NutThreadRewardsCfg:
     upright_reward = RewTerm(func=nut_upright_reward_forge, params={"a": 700, "b": 0, "tol": 1e-3}, weight=2)
     success = RewTerm(func=mdp.nut_successfully_threaded, params={"threshold": 3e-4}, weight=1)
     action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.000001)
+    action_l2 = RewTerm(func=mdp.action_l2, weight=-0.000001)
 
 
 @configclass

@@ -139,6 +139,7 @@ class ManagerBasedEnv:
             print("[INFO]: Starting the simulation. This may take a few seconds. Please wait...")
             with Timer("[INFO]: Time taken for simulation start", "simulation_start"):
                 self.sim.reset()
+                self.scene.update(dt=self.physics_dt)
             # add timeline event to load managers
             self.load_managers()
 

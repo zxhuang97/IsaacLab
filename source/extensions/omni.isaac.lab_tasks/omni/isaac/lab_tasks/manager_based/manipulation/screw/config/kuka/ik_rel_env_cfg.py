@@ -28,7 +28,10 @@ from omni.isaac.lab.assets import Articulation, RigidObject
 from omni.isaac.lab.controllers.operational_space_cfg import OperationalSpaceControllerCfg
 from omni.isaac.lab.controllers.differential_ik_cfg import DifferentialIKControllerCfg
 from omni.isaac.lab.envs import ManagerBasedEnv
-from omni.isaac.lab.envs.mdp.actions.actions_cfg import DifferentialInverseKinematicsActionCfg, OperationalSpaceControllerActionCfg
+from omni.isaac.lab.envs.mdp.actions.actions_cfg import (
+    DifferentialInverseKinematicsActionCfg,
+    OperationalSpaceControllerActionCfg,
+)
 from omni.isaac.lab.managers import CurriculumTermCfg as CurrTerm
 from omni.isaac.lab.managers import EventTermCfg as EventTerm
 from omni.isaac.lab.managers import ManagerTermBase
@@ -37,7 +40,7 @@ from omni.isaac.lab.managers import RewardTermCfg as RewTerm
 from omni.isaac.lab.managers import SceneEntityCfg
 from omni.isaac.lab.managers import TerminationTermCfg as DoneTerm
 from omni.isaac.lab.sensors import ContactSensorCfg
-from omni.isaac.lab.utils import  configclass
+from omni.isaac.lab.utils import configclass
 from omni.isaac.lab.sensors import TiledCameraCfg
 
 
@@ -52,10 +55,10 @@ from curobo.types.math import Pose
 from curobo.types.base import TensorDeviceType
 import time
 import numpy as np
+
 ##
 # Pre-defined configs
 from omni.isaac.lab_assets.kuka import KUKA_VICTOR_LEFT_HIGH_PD_CFG
-
 
 
 @configclass
@@ -75,7 +78,9 @@ class IKRelKukaNutTightenEnvCfg(BaseNutTightenEnvCfg):
             asset_name="robot",
             joint_names=["victor_left_arm_joint.*"],
             body_name="victor_left_tool0",
-            controller=DifferentialIKControllerCfg(command_type="pose", use_relative_mode=True, ik_method="dls"),
+            controller=DifferentialIKControllerCfg(
+                command_type="pose", use_relative_mode=True, ik_method="dls"
+            ),
             scale=scale,
         )
         self.actions.gripper_action = mdp.Robotiq3FingerActionCfg(
@@ -89,12 +94,15 @@ class IKRelKukaNutTightenEnvCfg(BaseNutTightenEnvCfg):
 class GraspResetEventTermCfg(EventTerm):
     def __init__(
         self,
-        reset_target: Literal["pre_grasp", "grasp", "mate", "rigid_grasp", "rigid_grasp_open_align"] = "grasp",
-        nut_rel_pose: tuple[float, float, float, ] | None = None,
+        reset_target: Literal[
+            "pre_grasp", "grasp", "mate", "rigid_grasp", "rigid_grasp_open_align"
+        ] = "grasp",
+        nut_rel_pose: tuple[float, float, float, float] | None = None,
         reset_range_scale: float = 1.0,
         reset_joint_std: float = 0.0,
         reset_randomize_mode: Literal["task", "joint", None] = "task",
         reset_use_adr: bool = False,
+        reset_close_gripper: Literal["adaptive", "close", None] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -104,6 +112,7 @@ class GraspResetEventTermCfg(EventTerm):
         self.reset_joint_std = reset_joint_std
         self.reset_randomize_mode = reset_randomize_mode
         self.reset_use_adr = reset_use_adr
+        self.reset_close_gripper = reset_close_gripper
 
 class reset_scene_to_grasp_state(ManagerTermBase):
     def __init__(self, cfg: GraspResetEventTermCfg, env: ManagerBasedEnv):
@@ -111,67 +120,130 @@ class reset_scene_to_grasp_state(ManagerTermBase):
 
         screw_type = env.cfg.scene.screw_type
         col_approx = env.cfg.params.scene.robot.collision_approximation
-        cached_state = pickle.load(open(f"cached/{col_approx}/{screw_type}/kuka_{cfg.reset_target}.pkl", "rb"))
+        cached_state = pickle.load(
+            open(f"cached/{col_approx}/{screw_type}/kuka_{cfg.reset_target}.pkl", "rb")
+        )
         cached_state = SmartDict(cached_state).to_tensor(device=env.device)
-        self.cached_state = cached_state.apply(lambda x: repeat(x, "1 ... -> n ...", n=env.num_envs).clone())
-        
+        self.cached_state = cached_state.apply(
+            lambda x: repeat(x, "1 ... -> n ...", n=env.num_envs).clone()
+        )
+
         # randomization parameters
         self.tensor_args = TensorDeviceType(device=env.device)
         self.robot_base_pose = Pose.from_list([-0.15, -0.5, -0.8, 1, 0, 0, 0], self.tensor_args)
-        self.curobo_arm = CuRoboArm("victor_left.yml", 
-                                    external_asset_path=os.path.abspath("assets/victor"),
-                                    base_pose=self.robot_base_pose, num_ik_seeds=10, device=env.device,
-                                    )
+        self.curobo_arm = CuRoboArm(
+            "victor_left.yml",
+            external_asset_path=os.path.abspath("assets/victor"),
+            base_pose=self.robot_base_pose,
+            num_ik_seeds=10,
+            device=env.device,
+        )
         self.curobo_arm.update_world()
         self.reset_randomize_mode = cfg.reset_randomize_mode
-        self.reset_trans_low = torch.tensor([-0.03, -0.03, -0.0], device=env.device) * cfg.reset_range_scale
-        self.reset_trans_high = torch.tensor([0.03, 0.03, 0.02], device=env.device) * cfg.reset_range_scale
+        self.reset_trans_low = (
+            torch.tensor([-0.03, -0.03, -0.0], device=env.device) * cfg.reset_range_scale
+        )
+        self.reset_trans_high = (
+            torch.tensor([0.03, 0.03, 0.04], device=env.device) * cfg.reset_range_scale
+        )
         self.reset_rot_std = 0.2 * cfg.reset_range_scale
         self.reset_joint_std = cfg.reset_joint_std
         self.reset_use_adr = cfg.reset_use_adr
+        self.reset_close_gripper = cfg.reset_close_gripper
         self.nut_rel_pose = cfg.nut_rel_pose
-        self.rand_init_configurations = None
-        self.num_buckets = int(5e3)
+        self.rand_init_robot_joint = None
+        self.rand_init_nut_state = None
+        self.num_buckets = int(2e3)
+        # self.num_buckets = 1
         self.bucket_update_freq = 4
+        self.gripper_action = mdp.Robotiq3FingerAction(mdp.Robotiq3FingerActionCfg(
+            asset_name="robot",
+            side="left",
+            lows=[-0.005, -0.005],
+            highs=[0.005, 0.005],
+            use_relative_mode=True,
+            is_accumulate_action=False,
+            keep_grasp_state=False
+        ), env)
         # self.update_random_initializations(env)
 
-    def update_random_initializations(self, env:ManagerBasedEnv):
+    def update_random_initializations(self, env: ManagerBasedEnv):
         cached_state = self.cached_state[0:1].clone()
         B = self.num_buckets
-        noise_scale = 1.
+        noise_scale = 1.0
         if self.reset_use_adr:
             # step a: activate noise
             # step b: maximize noise
             raise NotImplementedError
-        
+        full_joint_state = cached_state["robot"]["joint_state"]["position"]
+        full_nut_state = cached_state["nut"]["root_state"]
+
         if self.reset_randomize_mode == "task":
-            arm_state = cached_state["robot"]["joint_state"]["position"][:, :7]
+            arm_state = full_joint_state[:, :7]
             default_tool_pose = self.curobo_arm.forward_kinematics(arm_state.clone()).ee_pose
             nut_rel_pose = Pose.from_list(self.nut_rel_pose, self.tensor_args)
             default_nut_pose = default_tool_pose.multiply(nut_rel_pose)
             default_nut_pose = default_nut_pose.repeat(B)
-            delta_trans = torch.rand((B, 3), device=env.device) * (self.reset_trans_high - self.reset_trans_low) + self.reset_trans_low
+            delta_trans = (
+                torch.rand((B, 3), device=env.device) * (self.reset_trans_high - self.reset_trans_low)
+                + self.reset_trans_low
+            )
             delta_trans *= noise_scale
-            
-            delta_rot = 2 * torch.rand((B, 3), device=env.device) * self.reset_rot_std - self.reset_rot_std
-            delta_quat = math_utils.quat_from_euler_xyz(delta_rot[:, 0], delta_rot[:, 1], delta_rot[:, 2])
-  
+
+            delta_rot = (
+                2 * torch.rand((B, 3), device=env.device) * self.reset_rot_std - self.reset_rot_std
+            )
+            delta_quat = math_utils.quat_from_euler_xyz(
+                delta_rot[:, 0], delta_rot[:, 1], delta_rot[:, 2]
+            )
+
+            # [-0.15, -0.5, -0.8]
             delta_pose = Pose(position=torch.zeros((B, 3), device=env.device), quaternion=delta_quat)
             randomized_nut_pose = default_nut_pose.multiply(delta_pose)
             randomized_nut_pose.position += delta_trans
-            randomized_tool_pose = randomized_nut_pose.multiply(nut_rel_pose.inverse())
+            randomized_tool_pose = randomized_nut_pose.multiply(nut_rel_pose)
+
+            # this should give you randomized_nut_pose.
+            # print(math_utils.combine_frame_transforms(randomized_tool_pose.position[:1], randomized_tool_pose.quaternion[:1], nut_rel_pose.position, nut_rel_pose.quaternion))
 
             ik_result = self.curobo_arm.compute_ik(randomized_tool_pose)
-            randomized_joint_state = ik_result.solution.squeeze(1)
-
-
+            randomized_joint_state = full_joint_state.repeat(B, 1).contiguous()
+            randomized_joint_state[:, :7] = ik_result.solution.squeeze(1)
+            randomized_nut_state = full_nut_state.repeat(B, 1).contiguous()
+            if self.reset_close_gripper is not None:
+                cur_gripper_joint = full_joint_state[:, self.gripper_action._joint_ids]
+                target_gripper_joint = torch.zeros(B, 11, device=env.device, dtype=torch.float32)
+                cur_finger_open = mdp.inverse_compute_finger_angles_jit(cur_gripper_joint)[:, 0]
+                cur_finger_scissor = mdp.inverse_compute_scissor_angle_jit(cur_gripper_joint[:, -2:])[:, 0]
+                close_finger_open = torch.tensor(0.32, device=env.device)
+                close_finger_scissor = torch.tensor(0.275, device=env.device)
+                if self.reset_close_gripper == "close":
+                    tgt_finger_open = close_finger_open
+                    tgt_finger_scissor = close_finger_scissor
+                elif self.reset_close_gripper == "adaptive":
+                    global_step = env._sim_step_counter // env.cfg.decimation
+                    ratio = np.clip(global_step / 80 * 600, 0.0, 1.0)# fully close at 600 iters
+                    tgt_finger_open = cur_finger_open + (close_finger_open - cur_finger_open) * ratio
+                    tgt_finger_scissor = cur_finger_scissor + (close_finger_scissor - cur_finger_scissor) * ratio
+                tgt_finger_open = tgt_finger_open.repeat(B)
+                tgt_finger_scissor = tgt_finger_scissor.repeat(B)
+                mdp.compute_finger_angles_jit(tgt_finger_open, target_gripper_joint)
+                target_gripper_joint[:, 3:6] = target_gripper_joint[:, 0:3]
+                target_gripper_joint[:, 6:9] = target_gripper_joint[:, 0:3]
+                mdp.compute_scissor_angle_jit(tgt_finger_scissor, target_gripper_joint[:, 9:11])
+                randomized_joint_state[:, self.gripper_action._joint_ids] = target_gripper_joint
+            nut_pose_w = self.robot_base_pose.repeat(B).multiply(randomized_nut_pose)
+            randomized_nut_state[:, :3] = nut_pose_w.position
+            randomized_nut_state[:, 3:7] = nut_pose_w.quaternion
         elif self.reset_randomize_mode == "joint":
-            randomized_joint_state = torch.randn_like(arm_state) * self.reset_joint_std + arm_state
-        else:
-            arm_state = cached_state["robot"]["joint_state"]["position"][:, :7].repeat(B, 1)
-            randomized_joint_state = arm_state
-        self.rand_init_configurations = randomized_joint_state.detach().cpu().numpy()
-        
+            raise NotImplementedError
+            randomized_joint_state = torch.randn_like(full_joint_state) * self.reset_joint_std + full_joint_state
+        else:  # no randomization
+            randomized_joint_state = full_joint_state.repeat(B, 1).contiguous()
+        # self.rand_init_configurations = randomized_joint_state.detach().cpu().numpy()
+        self.rand_init_robot_joint = randomized_joint_state
+        self.rand_init_nut_state = randomized_nut_state
+
     def __call__(self, env: ManagerBasedEnv, env_ids: torch.Tensor):
         cached_state = self.cached_state[env_ids].clone()
         global_step = env._sim_step_counter // env.cfg.decimation
@@ -180,15 +252,17 @@ class reset_scene_to_grasp_state(ManagerTermBase):
                 self.update_random_initializations(env)
         if self.reset_randomize_mode is not None:
             # draw random initializations
-            # select = torch.randint(0, self.num_buckets, (env_ids.shape[0],), device=env.device)
-            # randomized_joint_state = self.rand_init_configurations[select].clone()
-            select = np.random.choice(self.num_buckets, env_ids.shape[0], replace=True)
-            randomized_joint_state = self.rand_init_configurations[select].copy()
-            randomized_joint_state = torch.tensor(randomized_joint_state, device=env.device)
-            cached_state["robot"]["joint_state"]["position"][:, :7] = randomized_joint_state
-            cached_state["robot"]["joint_state"]["position_target"][:, :7] = randomized_joint_state
-        
+            select = torch.randint(0, self.num_buckets, (env_ids.shape[0],), device=env.device)
+            randomized_joint_state = self.rand_init_robot_joint[select].clone()
+            # select = np.random.choice(self.num_buckets, env_ids.shape[0], replace=True)
+            # randomized_joint_state = self.rand_init_configurations[select].copy()
+            # randomized_joint_state = torch.tensor(randomized_joint_state, device=env.device)
+            cached_state["robot"]["joint_state"]["position"] = randomized_joint_state
+            cached_state["robot"]["joint_state"]["position_target"] = randomized_joint_state
+            cached_state["nut"]["root_state"] = self.rand_init_nut_state[select].clone()
+
         env.unwrapped.write_state(cached_state, env_ids)
+
 
 class DTWReferenceTrajRewardCfg(RewTerm):
     def __init__(self, his_traj_len: int = 10, soft_dtw_gamma: float = 0.01, **kwargs):
@@ -222,11 +296,6 @@ class DTWReferenceTrajReward(ManagerTermBase):
         imitation_rwd, new_nut_traj_his = mdp.get_imitation_reward_from_dtw(
             self.nut_ref_pos_traj, cur_nut_pos, self.nut_traj_his, self.soft_dtw_criterion, env.device
         )
-        # imitation_rwd2,_ = mdp.get_imitation_reward_from_dtw_v2(self.nut_ref_pos_traj, cur_nut_pos,
-        #                                                 self.nut_traj_his,
-        #                                                 self.soft_dtw_criterion,
-        #                                                 env.device)
-        # print(torch.norm(imitation_rwd - imitation_rwd2, dim=-1))
         self.nut_traj_his = new_nut_traj_his
         return imitation_rwd
 
@@ -244,14 +313,22 @@ def spawn_nut_with_rigid_grasp(
     tool_pos = tuple(tool_pose.ExtractTranslation())
     tool_pos = torch.tensor(tool_pos)[None]
     tool_quat = tool_pose.ExtractRotationQuat()
-    tool_quat = [tool_quat.real, tool_quat.imaginary[0], tool_quat.imaginary[1], tool_quat.imaginary[2]]
+    tool_quat = [
+        tool_quat.real,
+        tool_quat.imaginary[0],
+        tool_quat.imaginary[1],
+        tool_quat.imaginary[2],
+    ]
     tool_quat = torch.tensor(tool_quat)[None]
 
     grasp_rel_pos = torch.tensor(translation)[None]
     grasp_rel_quat = torch.tensor(orientation)[None]
 
-    nut_pos, nut_quat = math_utils.combine_frame_transforms(tool_pos, tool_quat, grasp_rel_pos, grasp_rel_quat)
-
+    nut_pos, nut_quat = math_utils.combine_frame_transforms(
+        tool_pos, tool_quat, grasp_rel_pos, grasp_rel_quat
+    )
+    #    nut.init_state.pos = (0, 0, 0.02)
+    #     nut.init_state.rot = (0, 1, 0, 0)
     nut_prim = sim_utils.spawn_from_usd(prim_path, cfg, nut_pos[0], nut_quat[0])
     return nut_prim
 
@@ -317,17 +394,15 @@ def initialize_contact_properties(
     cur_rest_offset[env_ids] = rest_offset
     asset.root_physx_view.set_rest_offset(cur_rest_offset, env_ids)
 
+
 # curriculum
-def modify_noise_scale(
-    env: ManagerBasedEnv, 
-    env_ids: torch.Tensor,
-    begin_steps: int, end_steps: int
-):
+def modify_noise_scale(env: ManagerBasedEnv, env_ids: torch.Tensor, begin_steps: int, end_steps: int):
     modifier = env.observation_manager.get_term_cfg("policy", "nut_pos").modifiers[0].func
     # linear
-    scale = max(0., env.common_step_counter-begin_steps)/(begin_steps-end_steps)
-    scale = min(1., scale)
+    scale = max(0.0, env.common_step_counter - begin_steps) / (begin_steps - end_steps)
+    scale = min(1.0, scale)
     modifier.noise_scale = scale
+
 
 @configclass
 class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
@@ -338,13 +413,12 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         self.params.sim.dt = self.params.sim.get("dt", 1.0 / 120.0)
         self.params.use_factory_params = self.params.get("use_factory_params", False)
         self.params.scene.robot = self.params.scene.get("robot", OmegaConf.create())
-
-        self.device = self.params.get("device", "cuda:0")
-        self.seed = self.params.get("seed", 1)
-
+        self.params.agent = self.params.get("agent", OmegaConf.create())
         # self.pre_grasp_path
         robot_params = self.params.scene.robot
-        robot_params.collision_approximation = robot_params.get("collision_approximation", "convexHull2")
+        robot_params.collision_approximation = robot_params.get(
+            "collision_approximation", "convexHull2"
+        )
         robot_params.contact_offset = robot_params.get("contact_offset", 0.002)
         robot_params.rest_offset = robot_params.get("rest_offset", 0.001)
         robot_params.max_depenetration_velocity = robot_params.get("max_depenetration_velocity", 0.5)
@@ -362,7 +436,7 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
 
         nut_params = self.params.scene.nut
         nut_params.rigid_grasp = nut_params.get("rigid_grasp", True)
-        # nut_params.rigid_grasp = False
+
         action_params = self.params.actions
         action_params.controller_type = action_params.get("controller_type", "ik")
         action_params.ik_lambda = action_params.get("ik_lambda", 0.001)
@@ -382,6 +456,8 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         obs_params.nut_pos.bias_mean = obs_params.nut_pos.get("bias_mean", 0.0)
         obs_params.nut_pos.bias_std = obs_params.nut_pos.get("bias_std", 0.0)
         obs_params.critic_privil_obs = obs_params.get("critic_privil_obs", False)
+        obs_params.use_obs_camera = obs_params.get("use_obs_camera", False)
+        obs_params.obs_camera_type = obs_params.get("obs_camera_type", ["distance_to_image_plane"])
 
         rewards_params = self.params.rewards
         rewards_params.dtw_ref_traj_w = rewards_params.get("dtw_ref_traj_w", 0.0)
@@ -390,6 +466,7 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         rewards_params.upright_reward_w = rewards_params.get("upright_reward_w", 0.3)
         rewards_params.success_w = rewards_params.get("success_w", 1.0)
         rewards_params.action_rate_w = rewards_params.get("action_rate_w", -0.0)
+        rewards_params.action_l2_w = rewards_params.get("action_l2_w", -0.0)
         rewards_params.contact_force_penalty_w = rewards_params.get("contact_force_penalty_w", -0.01)
         rewards_params.incoming_wrench_mag_w = rewards_params.get("incoming_wrench_mag_w", 0.0)
         termination_params = self.params.terminations
@@ -402,21 +479,29 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         events_params.reset_joint_std = events_params.get("reset_joint_std", 0.0)
         events_params.reset_randomize_mode = events_params.get("reset_randomize_mode", "task")
         events_params.reset_use_adr = events_params.get("reset_use_adr", False)
-        
+        events_params.reset_close_gripper = events_params.get("reset_close_gripper", None)
+
         curri_params = self.params.curriculum
         curri_params.use_obs_noise_curri = curri_params.get("use_obs_noise_curri", False)
         curri_params.use_contact_force_curri = curri_params.get("use_contact_force_curri", False)
         
+
+        agent_params = self.params.agent
+        agent_params.policy = agent_params.get("policy", OmegaConf.create())
+        agent_params.policy.class_name = agent_params.get("class_name", "ActorCritic")
+
     def __post_init__(self):
         super().__post_init__()
-        # robot 
+        # robot
         self.scene.robot = KUKA_VICTOR_LEFT_HIGH_PD_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
         robot = self.scene.robot
         nut = self.scene.nut
         bolt = self.scene.bolt
         robot_params = self.params.scene.robot
         if robot_params.collision_approximation == "convexHull":
-            robot.spawn.usd_path = "assets/victor/victor_left_arm_with_gripper_v2/victor_left_arm_with_gripper_v2.usd"
+            robot.spawn.usd_path = (
+                "assets/victor/victor_left_arm_with_gripper_v2/victor_left_arm_with_gripper_v2.usd"
+            )
         elif robot_params.collision_approximation == "convexHull2":
             robot.spawn.usd_path = "assets/victor/victor_left_arm/victor_left_arm.usd"
             # robot.spawn.usd_path = "assets/victor/victor_left_arm_v2/victor_left_arm_v2.usd"
@@ -447,43 +532,49 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
                     dynamic_friction=1.0,
                 ),
             )
-            robot.spawn.articulation_props=sim_utils.ArticulationRootPropertiesCfg(
+            robot.spawn.articulation_props = sim_utils.ArticulationRootPropertiesCfg(
                 enabled_self_collisions=False,
                 solver_position_iteration_count=192,
                 solver_velocity_iteration_count=1,
             )
-            robot.spawn.collision_props = sim_utils.CollisionPropertiesCfg(contact_offset=0.005, rest_offset=0.0)
-            
-            nut.spawn.rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                    disable_gravity=True,
-                    max_depenetration_velocity=5.0,
-                    linear_damping=0.0,
-                    angular_damping=0.0,
-                    max_linear_velocity=1000.0,
-                    max_angular_velocity=3666.0,
-                    enable_gyroscopic_forces=True,
-                    solver_position_iteration_count=192,
-                    solver_velocity_iteration_count=1,
-                    max_contact_impulse=1e32,
-                )
-            nut.spawn.mass_props=sim_utils.MassPropertiesCfg(mass=0.05)
-            nut.spawn.collision_props = sim_utils.CollisionPropertiesCfg(contact_offset=0.005, rest_offset=0.0)
-            
-            bolt.spawn.rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                    disable_gravity=False,
-                    max_depenetration_velocity=5.0,
-                    linear_damping=0.0,
-                    angular_damping=0.0,
-                    max_linear_velocity=1000.0,
-                    max_angular_velocity=3666.0,
-                    enable_gyroscopic_forces=True,
-                    solver_position_iteration_count=192,
-                    solver_velocity_iteration_count=1,
-                    max_contact_impulse=1e32,
-                )
-            bolt.spawn.mass_props=sim_utils.MassPropertiesCfg(mass=0.05)
-            bolt.spawn.collision_props = sim_utils.CollisionPropertiesCfg(contact_offset=0.005, rest_offset=0.0)
-            
+            robot.spawn.collision_props = sim_utils.CollisionPropertiesCfg(
+                contact_offset=0.005, rest_offset=0.0
+            )
+
+            nut.spawn.rigid_props = sim_utils.RigidBodyPropertiesCfg(
+                disable_gravity=True,
+                max_depenetration_velocity=5.0,
+                linear_damping=0.0,
+                angular_damping=0.0,
+                max_linear_velocity=1000.0,
+                max_angular_velocity=3666.0,
+                enable_gyroscopic_forces=True,
+                solver_position_iteration_count=192,
+                solver_velocity_iteration_count=1,
+                max_contact_impulse=1e32,
+            )
+            nut.spawn.mass_props = sim_utils.MassPropertiesCfg(mass=0.05)
+            nut.spawn.collision_props = sim_utils.CollisionPropertiesCfg(
+                contact_offset=0.005, rest_offset=0.0
+            )
+
+            bolt.spawn.rigid_props = sim_utils.RigidBodyPropertiesCfg(
+                disable_gravity=False,
+                max_depenetration_velocity=5.0,
+                linear_damping=0.0,
+                angular_damping=0.0,
+                max_linear_velocity=1000.0,
+                max_angular_velocity=3666.0,
+                enable_gyroscopic_forces=True,
+                solver_position_iteration_count=192,
+                solver_velocity_iteration_count=1,
+                max_contact_impulse=1e32,
+            )
+            bolt.spawn.mass_props = sim_utils.MassPropertiesCfg(mass=0.05)
+            bolt.spawn.collision_props = sim_utils.CollisionPropertiesCfg(
+                contact_offset=0.005, rest_offset=0.0
+            )
+
         robot.actuators["victor_left_arm"].stiffness = robot_params.arm_stiffness
         robot.actuators["victor_left_arm"].damping = robot_params.arm_damping
         robot.actuators["victor_left_gripper"].velocity_limit = 1
@@ -500,8 +591,10 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         # arm_lows = [-0.002, -0.002, -0.002, -0.01, -0.01, -0.4]
         # arm_highs = [0.002, 0.002, 0.002, 0.01, 0.01, 0.4]
         # scale = [0.002, 0.002, 0.002, 0.01, 0.01, 0.4]
-        if self.params.events.reset_target == "rigid_grasp_open_tilt" or \
-                self.params.events.reset_joint_std > 0:
+        if (
+            self.params.events.reset_target == "rigid_grasp_open_tilt"
+            or self.params.events.reset_joint_std > 0
+        ):
             arm_lows = [-0.002, -0.002, -0.002, -0.01, -0.01, -0.5]
             arm_highs = [0.002, 0.002, 0.002, 0.01, 0.01, 0.5]
             scale = [0.002, 0.002, 0.002, 0.01, 0.01, 0.5]
@@ -515,15 +608,15 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
                 joint_names=["victor_left_arm_joint.*"],
                 body_name="victor_left_tool0",
                 controller=DifferentialIKControllerCfg(
-                command_type="pose",
-                use_relative_mode=True,
-                ik_method="dls",
-                ik_params={"lambda_val": action_params.ik_lambda},
-            ),
-            lows=arm_lows,
-            highs=arm_highs,
-            scale=scale,
-        )
+                    command_type="pose",
+                    use_relative_mode=True,
+                    ik_method="dls",
+                    ik_params={"lambda_val": action_params.ik_lambda},
+                ),
+                lows=arm_lows,
+                highs=arm_highs,
+                scale=scale,
+            )
         elif action_params.controller_type == "osc":
             self.scene.robot.actuators["victor_left_arm"].stiffness = 0.0
             self.scene.robot.actuators["victor_left_arm"].damping = 0.0
@@ -554,16 +647,16 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         #     lows=self.gripper_act_lows,
         #     highs=self.gripper_act_highs,
         #     use_relative_mode=True,
-        #     is_accumulate_action=True,
+        #     is_accumulate_action=False,
         #     keep_grasp_state=action_params.keep_grasp_state
         # )
-        
+
         nut.init_state.pos = (0, 0, 0.02)
         nut.init_state.rot = (0, 1, 0, 0)
         nut_params = self.params.scene.nut
         if nut_params.rigid_grasp:
             self.scene.nut.spawn.func = spawn_nut_with_rigid_grasp
-            
+
         # observations
         obs_params = self.params.observations
         self.observations.policy.history_length = obs_params.history_length
@@ -587,7 +680,9 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         if obs_params.include_wrench:
             self.observations.policy.wrist_wrench = ObsTerm(
                 func=mdp.body_incoming_wrench,
-                params={"asset_cfg": SceneEntityCfg("robot", body_names=[obs_params.wrench_target_body])},
+                params={
+                    "asset_cfg": SceneEntityCfg("robot", body_names=[obs_params.wrench_target_body])
+                },
                 scale=1,
             )
             if obs_params.critic_privil_obs:
@@ -620,19 +715,32 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
                 params={"action_name": "arm_action"},
                 scale=1,
             )
-            if obs_params.critic_privil_obs:
-                self.observations.critic.last_action = ObsTerm(
-                    func=mdp.last_action,
-                    params={"action_name": "arm_action"},
-                    scale=1,
-                )
-            # if agent_class.startswith("ActorCriticRMA"):
-            #     self.observations.aux_observations.last_action = ObsTerm(
-            #         func=mdp.last_action,
-            #         params={"action_name": "arm_action"},
-            #         scale=1,
-            #     )
-                
+        # observation space for oracle - noise-free
+        if obs_params.critic_privil_obs:
+            self.observations.critic = copy.deepcopy(self.observations.policy)
+        self.observations.policy.nut_pos.modifiers = [
+            NoiseModifierCfg(
+                noise_cfg=GaussianNoiseCfg(
+                    mean=0.0, std=obs_params.nut_pos.noise_std, operation="add"
+                ),
+                bias_noise_cfg=GaussianNoiseCfg(
+                    mean=0.0, std=obs_params.nut_pos.bias_std, operation="abs"
+                ),
+            )
+        ]
+        if obs_params.critic_privil_obs:
+            self.observations.critic.last_action = ObsTerm(
+                func=mdp.last_action,
+                params={"action_name": "arm_action"},
+                scale=1,
+            )
+        # if agent_class.startswith("ActorCriticRMA"):
+        #     self.observations.aux_observations.last_action = ObsTerm(
+        #         func=mdp.last_action,
+        #         params={"action_name": "arm_action"},
+        #         scale=1,
+        #     )
+
         self.observations.policy.nut_pos.modifiers = [NoiseModifierCfg(
             noise_cfg=GaussianNoiseCfg(mean=0.0, std=obs_params.nut_pos.noise_std, operation="add"),
             bias_noise_cfg=GaussianNoiseCfg(mean=0.0, std=obs_params.nut_pos.bias_std, operation="abs"),
@@ -645,25 +753,35 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
             self.scene.tiled_camera = TiledCameraCfg(
                 prim_path="{ENV_REGEX_NS}/Camera",
                 offset=TiledCameraCfg.OffsetCfg(
-                pos=(1., 0.1, 0.12),
-                # [ x: -2.3975473, y: 1.5188981, z: -2.3157065 ]
-                # rot=[0.4813639 , 0.5011198, 0.5182935, 0.4985375],
-                # [-90, 78, 179]
-                rot=[0.4497752 , 0.4401843, 0.5533875, 0.545621],
-                # [90, 90, 180] on rotation converter website
-                # rot=[0.5, 0.5, 0.5, 0.5],
-                convention="opengl"
-                # pos=(0.1, 0, 0.04),  # Match viewer eye position
-                # rot=(0.5, 0.5, -0.5, 0.5),  # 90 degree rotation around 
-                # convention="opengl"
-            ),
-            data_types=["rgb"],
-            spawn=sim_utils.PinholeCameraCfg(
-                focal_length=24.0, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.0001, 20.0)
-            ),
-            width=720,
-            height=720,
+                    pos=(1.0, 0.1, 0.12),
+                    rot=[0.4497752, 0.4401843, 0.5533875, 0.545621],
+                    convention="opengl",
+                ),
+                data_types=["rgb"],
+                spawn=sim_utils.PinholeCameraCfg(
+                    focal_length=18.0,
+                    focus_distance=400.0,
+                    horizontal_aperture=20.955,
+                    clipping_range=(0.0001, 20.0),
+                ),
+                width=720,
+                height=720,
             )
+        if obs_params.use_obs_camera:
+            self.scene.obs_camera = TiledCameraCfg(
+                prim_path="{ENV_REGEX_NS}/DepthCamera",
+                offset=TiledCameraCfg.OffsetCfg(
+                    pos=(1.0, 0.1, 0.12),
+                    rot=[0.4402, -0.4498, -0.5456, 0.5534],
+                    convention="ros",
+                ),
+                data_types=obs_params.obs_camera_type,
+                spawn=sim_utils.PinholeCameraCfg(clipping_range=(0.0001, 0.5)),
+                width=200,
+                height=200,
+            )
+            # -90 78 179
+            # -30 71 121
 
         # events
         event_params = self.params.events
@@ -674,7 +792,10 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
             params={
                 "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
                 "static_friction_range": (robot_params.static_friction, robot_params.static_friction),
-                "dynamic_friction_range": (robot_params.dynamic_friction, robot_params.dynamic_friction),
+                "dynamic_friction_range": (
+                    robot_params.dynamic_friction,
+                    robot_params.dynamic_friction,
+                ),
                 "restitution_range": (0.0, 0.0),
                 "num_buckets": 1,
             },
@@ -692,7 +813,11 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         #         "rest_offset": robot_params.rest_offset},
         #     mode="startup",
         # )
-        nut_rel_pos = np.array(nut.init_state.pos) - np.array(self.scene.nut_frame.target_frames[0].offset.pos)
+        # this is for randomize alongthe nut_pose frame
+        nut_rel_pos = np.array(nut.init_state.pos) - np.array(
+            self.scene.nut_frame.target_frames[0].offset.pos
+        )
+        nut_rel_pos = nut.init_state.pos
         self.events.reset_default = GraspResetEventTermCfg(
             func=reset_scene_to_grasp_state,
             mode="reset",
@@ -702,6 +827,7 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
             reset_randomize_mode=event_params.reset_randomize_mode,
             reset_joint_std=event_params.reset_joint_std,
             reset_use_adr=event_params.reset_use_adr,
+            reset_close_gripper=event_params.reset_close_gripper,
         )
 
         # terminations
@@ -719,7 +845,8 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         self.rewards.upright_reward.weight = rewards_params.upright_reward_w
         self.rewards.success.weight = rewards_params.success_w
         self.rewards.action_rate.weight = rewards_params.action_rate_w
-        
+        self.rewards.action_l2.weight = rewards_params.action_l2_w
+
         self.rewards.incoming_wrench_mag = RewTerm(
             func=mdp.incoming_wrench_mag,
             params={"asset_cfg": self.observations.policy.wrist_wrench.params["asset_cfg"]},
@@ -743,10 +870,10 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         if curri_params.use_obs_noise_curri:
             self.curriculum.modify_nut_pos_noise = CurrTerm(
                 func=modify_noise_scale,
-                params={"begin_steps": 500*32, "end_steps": 2000*32},
+                params={"begin_steps": 500 * 32, "end_steps": 2000 * 32},
             )
         if curri_params.use_contact_force_curri:
             self.curriculum.modify_contact_force_penalty = CurrTerm(
                 func=mdp.modify_reward_weight,
-                params={"term_name": "contact_force_penalty", "weight": -0.1, "num_steps": 800*32},
+                params={"term_name": "contact_force_penalty", "weight": -0.1, "num_steps": 800 * 32},
             )

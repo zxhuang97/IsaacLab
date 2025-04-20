@@ -48,7 +48,7 @@ import gymnasium as gym
 import os
 import torch
 
-from force_tool.visualization.plot_utils import get_img_from_fig, save_numpy_as_mp4
+from force_tool.visualization.plot_utils import get_img_from_fig, save_numpy_video
 from rsl_rl.runners import OnPolicyRunner
 
 from omni.isaac.lab.envs import DirectMARLEnv, multi_agent_to_single_agent
@@ -184,7 +184,7 @@ def main():
                     frames = np.array(frames)
                     wrench_frames = np.array(wrench_frames)
                     combined_frames = np.concatenate([frames, wrench_frames], axis=2)
-                    save_numpy_as_mp4(np.array(combined_frames), "nut.mp4")
+                    save_numpy_video(np.array(combined_frames), "nut.mp4")
                     frames = []
                 break
 

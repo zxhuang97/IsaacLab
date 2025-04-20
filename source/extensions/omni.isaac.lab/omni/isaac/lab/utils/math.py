@@ -910,7 +910,7 @@ def apply_delta_pose(
     return target_pos, target_rot
 
 
-# @torch.jit.script
+@torch.jit.script
 def transform_points(
     points: torch.Tensor, pos: torch.Tensor | None = None, quat: torch.Tensor | None = None
 ) -> torch.Tensor:

@@ -161,7 +161,31 @@ class ViewportCameraController:
         # set origin type to asset_root
         self.cfg.origin_type = "asset_root"
         # update the camera origins
-        self.viewer_origin = self._env.scene[self.cfg.asset_name].data.root_link_pos_w[self.cfg.env_index]
+        self.viewer_origin = self._env.scene[self.cfg.asset_name].data.root_pos_w[self.cfg.env_index]
+        # update the camera view
+        self.update_view_location()
+
+    def update_view_to_asset_root(self, asset_name: str):
+        """Updates the viewer's origin based upon the root of an asset in the scene.
+
+        Args:
+            asset_name: The name of the asset in the scene. The name should match the name of the
+                asset in the scene.
+
+        Raises:
+            ValueError: If the asset is not in the scene.
+        """
+        # check if the asset is in the scene
+        if self.cfg.asset_name != asset_name:
+            asset_entities = [*self._env.scene.rigid_objects.keys(), *self._env.scene.articulations.keys()]
+            if asset_name not in asset_entities:
+                raise ValueError(f"Asset '{asset_name}' is not in the scene. Available entities: {asset_entities}.")
+        # update the asset name
+        self.cfg.asset_name = asset_name
+        # set origin type to asset_root
+        self.cfg.origin_type = "asset_root"
+        # update the camera origins
+        self.viewer_origin = self._env.scene[self.cfg.asset_name].data.root_pos_w[self.cfg.env_index]
         # update the camera view
         self.update_view_location()
 
@@ -194,9 +218,7 @@ class ViewportCameraController:
         # set origin type to asset_body
         self.cfg.origin_type = "asset_body"
         # update the camera origins
-        self.viewer_origin = (
-            self._env.scene[self.cfg.asset_name].data.body_link_pos_w[self.cfg.env_index, body_id].view(3)
-        )
+        self.viewer_origin = self._env.scene[self.cfg.asset_name].data.body_pos_w[self.cfg.env_index, body_id].view(3)
         # update the camera view
         self.update_view_location()
 
