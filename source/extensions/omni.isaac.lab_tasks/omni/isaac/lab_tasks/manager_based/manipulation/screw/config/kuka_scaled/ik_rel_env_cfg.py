@@ -162,9 +162,9 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
             rand_range = (self.reset_trans_high-self.reset_trans_low).reshape(1,-1)
 
             # ONLY FOR TESTING
-            low[:,:2] = 0.0
-            rand_range = torch.zeros_like(rand_range)
-            self.reset_rot_std = 0.0
+            # low[:,:2] = 0.0
+            # rand_range = torch.zeros_like(rand_range)
+            # self.reset_rot_std = 0.0
             delta_trans = torch.rand((B*num_envs, 3), device=env.device) * rand_range + low
             delta_trans *= noise_scale
             
@@ -278,6 +278,9 @@ class IKRelKukaNutThreadScaledEnvCfg(IKRelKukaNutThreadEnvCfg):
         events_params.in_hand_rand_pos_range = events_params.get("in_hand_rand_pos_range", (0.01, 0.01, 0.0))
         events_params.in_hand_rand_rot_std = events_params.get("in_hand_rand_rot_std", (0.01, 0.01, 0.01))
 
+        obs_params = self.params.observations
+        obs_params.include_relative = obs_params.get("include_relative", True)
+
         # Add whether scale is observed
         obs_params = self.params.observations
         obs_params.include_scale = obs_params.get("include_scale", False)
@@ -362,7 +365,7 @@ class IKRelKukaNutThreadScaledEnvCfg(IKRelKukaNutThreadEnvCfg):
         # Cache the size of the bolt
         screw_dict = asset_factory[self.params.scene.screw_type]
         # 1.15 seems to work well
-        self.base_bolt_height = screw_dict["bolt_tip_offset"].pos[2]*1.2
+        self.base_bolt_height = screw_dict["bolt_tip_offset"].pos[2]
 
         # Override the create_fixed_joint function for scaled environment
         nut_params = self.params.scene.nut
@@ -541,7 +544,6 @@ class IKRelKukaNutThreadScaledEnvCfg(IKRelKukaNutThreadEnvCfg):
             self.observations.policy.asset_scale = ObsTerm(
                 func=get_env_scales,
                 scale=1,
-                history_length=1,
             )
 
         self.events.reset_default = GraspResetEventTermScaledCfg(
@@ -567,3 +569,9 @@ class IKRelKukaNutThreadScaledEnvCfg(IKRelKukaNutThreadEnvCfg):
                 weight=rewards_params.dtw_ref_traj_w,
             )
     
+        if obs_params.include_relative:
+            self.observations.policy.nut_bolt_relative = ObsTerm(
+                func=mdp.rel_nut_bolt_distance,
+                params={"bolt_part_name": "bolt_tip"},
+                scale=1,
+            )

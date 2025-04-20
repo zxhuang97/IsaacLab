@@ -125,7 +125,7 @@ class reset_scene_to_grasp_state(ManagerTermBase):
         self.curobo_arm.update_world()
         self.reset_randomize_mode = cfg.reset_randomize_mode
         self.reset_trans_low = torch.tensor([-0.03, -0.03, -0.0], device=env.device) * cfg.reset_range_scale
-        self.reset_trans_high = torch.tensor([0.03, 0.03, 0.04], device=env.device) * cfg.reset_range_scale
+        self.reset_trans_high = torch.tensor([0.03, 0.03, 0.02], device=env.device) * cfg.reset_range_scale
         self.reset_rot_std = 0.2 * cfg.reset_range_scale
         self.reset_joint_std = cfg.reset_joint_std
         self.reset_use_adr = cfg.reset_use_adr
