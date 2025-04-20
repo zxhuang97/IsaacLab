@@ -508,7 +508,7 @@ class IKRelKukaNutThreadScaledEnvCfg(IKRelKukaNutThreadEnvCfg):
         # B: relative pose of the center of nut to nut origin
         # Compute relative transformations
         self.upright_relative_rot = torch.tensor(
-            [[0.0, 1.0, 0.0, 0.0]]
+            [[1.0, 0.0, 0.0, 0.0]]
         ).repeat(self.params.num_envs, 1).to(self.params.device)
         B = Pose.from_batch_list(
             torch.cat([
@@ -579,7 +579,7 @@ class IKRelKukaNutThreadScaledEnvCfg(IKRelKukaNutThreadEnvCfg):
                 scale=1,
                 history_length=1,
             )
-
+        nut_rel_pose = torch.cat([nut.init_state.pos, nut.init_state.rot], dim=-1)
         self.events.reset_default = GraspResetEventTermScaledCfg(
             func=reset_scene_to_grasp_state_scaled,
             mode="reset",
