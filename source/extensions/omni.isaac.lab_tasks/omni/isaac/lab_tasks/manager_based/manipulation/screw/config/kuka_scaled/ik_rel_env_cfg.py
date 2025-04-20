@@ -148,6 +148,7 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
             # Compute scaled tool position
             default_tool_pose = self.curobo_arm.forward_kinematics(arm_state.clone()).ee_pose
             default_tool_pose = default_tool_pose.repeat(num_envs)
+            default_tool_pose.position[:, 2] += 0.01
 
             # Compute nut relative position scaled
             # annoyingly difficult to initialize
@@ -163,7 +164,7 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
             low = self.reset_trans_low.clone().reshape(1,-1)
             low = low.repeat(num_envs* B, 1)
             # Add z to low
-            delta_z = env.cfg.base_bolt_height * torch.clip(scales-1, 0.0, 10.0).reshape(-1,1)
+            delta_z = (env.cfg.base_bolt_height) * torch.clip(scales-1, 0.0, 10.0).reshape(-1,1)
             low[:,2] += delta_z[:,0]
             rand_range = (self.reset_trans_high-self.reset_trans_low).reshape(1,-1)
 
@@ -183,7 +184,7 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
             randomized_nut_pose.position += delta_trans
             nut_rel_pose = nut_rel_pose.repeat(B)
 
-            randomized_tool_pose = randomized_nut_pose.multiply(nut_rel_pose)
+            randomized_tool_pose = randomized_nut_pose.multiply(nut_rel_pose.inverse())
             
             # Do IK
             ik_results = []
@@ -310,8 +311,8 @@ class IKRelKukaNutThreadScaledEnvCfg(IKRelKukaNutThreadEnvCfg):
         if events_params.reference_nut_part not in ["center", "bottom"]:
             raise ValueError(f"Invalid reference_nut_part: {events_params.reference_nut_part}. Must be 'center' or 'bottom'.")
 
-        events_params.in_hand_rand_pos_range = events_params.get("in_hand_rand_pos_range", (0.01, 0.01, 0.0))
-        events_params.in_hand_rand_rot_std = events_params.get("in_hand_rand_rot_std", (0.01, 0.01, 0.01))
+        events_params.in_hand_rand_pos_range = events_params.get("in_hand_rand_pos_range", (0.0, 0.0, 0.0))
+        events_params.in_hand_rand_rot_std = events_params.get("in_hand_rand_rot_std", (0.0, 0.0, 0.0))
 
         # Add whether scale is observed
         obs_params = self.params.observations
@@ -524,7 +525,7 @@ class IKRelKukaNutThreadScaledEnvCfg(IKRelKukaNutThreadEnvCfg):
         # --------------- Sample
         low_pos = -torch.tensor(events_params.in_hand_rand_pos_range, device=self.params.device)/2.0
         # in x,y axis sample +- from current, while in z axis only sample up to prevent init collision
-        low_pos[2] -= events_params.in_hand_rand_pos_range[2]/3.0
+        low_pos[2] += events_params.in_hand_rand_pos_range[2] / 2
         range_pos = torch.tensor(events_params.in_hand_rand_pos_range, device=self.params.device)
         euler_rot_std = torch.tensor(events_params.in_hand_rand_rot_std, device=self.params.device)
         noise_scale = 1.0
