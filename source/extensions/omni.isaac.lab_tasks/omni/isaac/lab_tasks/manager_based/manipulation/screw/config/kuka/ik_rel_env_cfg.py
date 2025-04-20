@@ -177,13 +177,7 @@ class reset_scene_to_grasp_state(ManagerTermBase):
             raise NotImplementedError
         full_joint_state = cached_state["robot"]["joint_state"]["position"]
         full_nut_state = cached_state["nut"]["root_state"]
-        # nut_rel_pos = np.array(nut.init_state.pos) - np.array(
-        #     self.scene.nut_frame.target_frames[0].offset.pos
-        # )
-        # self.events.reset_default = GraspResetEventTermCfg(
-        #     func=reset_scene_to_grasp_state,
-        #     mode="reset",
-        #     nut_rel_pose=np.concatenate([nut_rel_pos, nut.init_state.rot]).tolist(),
+
         if self.reset_randomize_mode == "task":
             arm_state = full_joint_state[:, :7]
             default_tool_pose = self.curobo_arm.forward_kinematics(arm_state.clone()).ee_pose
@@ -419,6 +413,7 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         self.params.sim.dt = self.params.sim.get("dt", 1.0 / 120.0)
         self.params.use_factory_params = self.params.get("use_factory_params", False)
         self.params.scene.robot = self.params.scene.get("robot", OmegaConf.create())
+        self.params.agent = self.params.get("agent", OmegaConf.create())
         # self.pre_grasp_path
         robot_params = self.params.scene.robot
         robot_params.collision_approximation = robot_params.get(
@@ -489,6 +484,11 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         curri_params = self.params.curriculum
         curri_params.use_obs_noise_curri = curri_params.get("use_obs_noise_curri", False)
         curri_params.use_contact_force_curri = curri_params.get("use_contact_force_curri", False)
+        
+
+        agent_params = self.params.agent
+        agent_params.policy = agent_params.get("policy", OmegaConf.create())
+        agent_params.policy.class_name = agent_params.get("class_name", "ActorCritic")
 
     def __post_init__(self):
         super().__post_init__()
@@ -728,18 +728,18 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
                 ),
             )
         ]
-            if obs_params.critic_privil_obs:
-                self.observations.critic.last_action = ObsTerm(
-                    func=mdp.last_action,
-                    params={"action_name": "arm_action"},
-                    scale=1,
-                )
-            # if agent_class.startswith("ActorCriticRMA"):
-            #     self.observations.aux_observations.last_action = ObsTerm(
-            #         func=mdp.last_action,
-            #         params={"action_name": "arm_action"},
-            #         scale=1,
-            #     )
+        if obs_params.critic_privil_obs:
+            self.observations.critic.last_action = ObsTerm(
+                func=mdp.last_action,
+                params={"action_name": "arm_action"},
+                scale=1,
+            )
+        # if agent_class.startswith("ActorCriticRMA"):
+        #     self.observations.aux_observations.last_action = ObsTerm(
+        #         func=mdp.last_action,
+        #         params={"action_name": "arm_action"},
+        #         scale=1,
+        #     )
 
         self.observations.policy.nut_pos.modifiers = [NoiseModifierCfg(
             noise_cfg=GaussianNoiseCfg(mean=0.0, std=obs_params.nut_pos.noise_std, operation="add"),
