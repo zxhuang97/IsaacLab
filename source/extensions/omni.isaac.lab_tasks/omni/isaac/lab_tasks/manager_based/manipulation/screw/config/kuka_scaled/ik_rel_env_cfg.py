@@ -69,7 +69,7 @@ def spawn_nut_with_rigid_grasp_scaled(
     #     gras_rel_pos, grasl_rel_quat, rand_delta_pos, rand_delta_quat
     # )
     # ...existing code...
-
+    # NOTE(zixuan): what is origin_pos? where is in-hand pose randomized around?
     nut_pos, nut_quat = math_utils.combine_frame_transforms(tool_pos, tool_quat, grasp_rel_pos, grasp_rel_quat)
 
     nut_prim = sim_utils.spawn_from_usd(prim_path, cfg, nut_pos[0]-origin_pos, nut_quat[0])
@@ -198,6 +198,7 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
             randomized_joint_state[:, :7] = torch.cat(ik_results, dim=0)
             randomized_nut_state = full_nut_state.repeat(num_envs*B, 1).contiguous()
             if self.reset_close_gripper is not None:
+                # NOTE(zixuan): adjust the close_finger_open according to nut scale.
                 cur_gripper_joint = full_joint_state[:, self.gripper_action._joint_ids]
                 target_gripper_joint = torch.zeros(num_envs*B, 11, device=env.device, dtype=torch.float32)
                 cur_finger_open = mdp.inverse_compute_finger_angles_jit(cur_gripper_joint)[:, 0]
@@ -523,7 +524,7 @@ class IKRelKukaNutThreadScaledEnvCfg(IKRelKukaNutThreadEnvCfg):
         # --------------- Sample
         low_pos = -torch.tensor(events_params.in_hand_rand_pos_range, device=self.params.device)/2.0
         # in x,y axis sample +- from current, while in z axis only sample up to prevent init collision
-        low_pos[2] += events_params.in_hand_rand_pos_range[2]/2.0
+        low_pos[2] -= events_params.in_hand_rand_pos_range[2]/3.0
         range_pos = torch.tensor(events_params.in_hand_rand_pos_range, device=self.params.device)
         euler_rot_std = torch.tensor(events_params.in_hand_rand_rot_std, device=self.params.device)
         noise_scale = 1.0

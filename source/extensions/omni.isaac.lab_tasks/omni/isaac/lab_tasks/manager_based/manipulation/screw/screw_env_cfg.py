@@ -440,8 +440,9 @@ class BaseScrewEnvCfg(ManagerBasedRLEnvCfg):
         # Initialize params structure
         if self.params is None:
             self.params = OmegaConf.create()
-        if not hasattr(self, "replicate_physics"):
-            self.replicate_physics = False
+        # NOTE(zixuan): replicate_physics should be true by default
+        # if not hasattr(self, "replicate_physics"):
+        #     self.replicate_physics = False
         params = self.params
         params.scene = params.get("scene", OmegaConf.create())
         params.sim = params.get("sim", OmegaConf.create())
