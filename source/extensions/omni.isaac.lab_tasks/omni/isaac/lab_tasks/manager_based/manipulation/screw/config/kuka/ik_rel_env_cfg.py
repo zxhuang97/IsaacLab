@@ -222,7 +222,7 @@ class reset_scene_to_grasp_state(ManagerTermBase):
                     tgt_finger_scissor = close_finger_scissor
                 elif self.reset_close_gripper == "adaptive":
                     global_step = env._sim_step_counter // env.cfg.decimation
-                    ratio = global_step / 80 * 600 # fully close at 600 iters
+                    ratio = np.clip(global_step / 80 * 600, 0.0, 1.0)# fully close at 600 iters
                     tgt_finger_open = cur_finger_open + (close_finger_open - cur_finger_open) * ratio
                     tgt_finger_scissor = cur_finger_scissor + (close_finger_scissor - cur_finger_scissor) * ratio
                 tgt_finger_open = tgt_finger_open.repeat(B)

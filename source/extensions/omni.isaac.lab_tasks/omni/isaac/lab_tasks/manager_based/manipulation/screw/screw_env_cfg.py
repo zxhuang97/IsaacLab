@@ -441,8 +441,8 @@ class BaseScrewEnvCfg(ManagerBasedRLEnvCfg):
         if self.params is None:
             self.params = OmegaConf.create()
         # NOTE(zixuan): replicate_physics should be true by default
-        # if not hasattr(self, "replicate_physics"):
-        #     self.replicate_physics = False
+        if not hasattr(self, "replicate_physics"):
+            self.replicate_physics = True
         params = self.params
         params.scene = params.get("scene", OmegaConf.create())
         params.sim = params.get("sim", OmegaConf.create())
@@ -477,7 +477,7 @@ class BaseScrewEnvCfg(ManagerBasedRLEnvCfg):
             num_envs=4096,
             env_spacing=2.5,
             screw_type=self.screw_type,
-            replicate_physics=False
+            replicate_physics=self.replicate_physics,
         )
         # general settings
         self.decimation = self.params.decimation
