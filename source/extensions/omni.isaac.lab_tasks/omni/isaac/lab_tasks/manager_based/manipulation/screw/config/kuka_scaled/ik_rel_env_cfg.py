@@ -70,6 +70,8 @@ def spawn_nut_with_rigid_grasp_scaled(
     # )
     # ...existing code...
     # NOTE(zixuan): what is origin_pos? where is in-hand pose randomized around?
+    # tool_pos is global since gotten from Usd
+    # spawn_from_usd expects local offset, default to relative to env origin
     nut_pos, nut_quat = math_utils.combine_frame_transforms(tool_pos, tool_quat, grasp_rel_pos, grasp_rel_quat)
 
     nut_prim = sim_utils.spawn_from_usd(prim_path, cfg, nut_pos[0]-origin_pos, nut_quat[0])
@@ -512,7 +514,6 @@ class IKRelKukaNutThreadScaledEnvCfg(IKRelKukaNutThreadEnvCfg):
         # B: relative pose of the center of nut to nut origin
         # Compute relative transformations
         self.upright_relative_rot = torch.tensor(
-            [[1.0, 0.0, 0.0, 0.0]]
             [[1.0, 0.0, 0.0, 0.0]]
         ).repeat(self.params.num_envs, 1).to(self.params.device)
         B = Pose.from_batch_list(
