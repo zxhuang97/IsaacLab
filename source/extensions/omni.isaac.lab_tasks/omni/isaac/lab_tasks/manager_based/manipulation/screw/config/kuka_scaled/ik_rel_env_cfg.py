@@ -171,8 +171,8 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
             rand_range = (self.reset_trans_high-self.reset_trans_low).reshape(1,-1)
 
             # ONLY FOR TESTING
-            low[:,:2] = 0.0
-            rand_range = torch.zeros_like(rand_range)
+            # low[:,:2] = 0.0
+            # rand_range = torch.zeros_like(rand_range)
             # self.reset_rot_std = 0.0
             delta_trans = torch.rand((num_envs*B, 3), device=env.device) * rand_range + low
             delta_trans *= noise_scale
@@ -225,6 +225,9 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
                 randomized_joint_state[:, self.gripper_action._joint_ids] = target_gripper_joint
             randomized_joint_state = randomized_joint_state.reshape(num_envs, B, -1)
             randomized_nut_state[:, :7] = randomized_nut_pose.get_pose_vector()
+            robot_origin_pos = cached_state["robot"]["root_state"][:, :3]
+            robot_origin_pos = robot_origin_pos.repeat(num_envs*B, 1).contiguous()
+            randomized_nut_state[:, :3] += robot_origin_pos
             randomized_nut_state = randomized_nut_state.reshape(num_envs, B, -1)
 
         elif self.reset_randomize_mode == "joint":
