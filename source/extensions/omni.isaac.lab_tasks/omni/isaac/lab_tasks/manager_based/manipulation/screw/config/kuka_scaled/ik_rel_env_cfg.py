@@ -170,7 +170,7 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
             # ONLY FOR TESTING
             low[:,:2] = 0.0
             rand_range = torch.zeros_like(rand_range)
-            self.reset_rot_std = 0.0
+            # self.reset_rot_std = 0.0
             delta_trans = torch.rand((num_envs*B, 3), device=env.device) * rand_range + low
             delta_trans *= noise_scale
             
@@ -184,7 +184,19 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
             nut_rel_pose = nut_rel_pose.repeat(B)
 
             randomized_tool_pose = randomized_nut_pose.multiply(nut_rel_pose)
-            
+
+            # assert torch.allclose(
+            #     randomized_nut_pose.position,
+            #     randomized_tool_pose.multiply(nut_rel_pose.inverse()).position,
+            #     atol=1e-5,
+            # )
+
+            # assert torch.allclose(
+            #     default_tool_pose.position,
+            #     randomized_tool_pose.position,
+            #     atol=1e-5,
+            # )
+
             # Do IK
             ik_results = []
             # This is just to do batch IK in case of CUDA out of memory error for large bucket size
@@ -302,19 +314,19 @@ class IKRelKukaNutThreadScaledEnvCfg(IKRelKukaNutThreadEnvCfg):
         super().get_default_env_params()
         
         events_params = self.params.events
-        events_params.reset_scale_method = events_params.get("reset_scale_method", "none")
-        if events_params.reset_scale_method not in ["none", "uniform", "gaussian"]:
-            raise ValueError(f"Invalid reset_scale_method: {events_params.reset_scale_method}. Must be 'none', 'uniform' or 'gaussian'.")
-        events_params.reset_scale_range = events_params.get("reset_scale_range", (0.8, 1.2))
+        events_params.reset_scale_method = events_params.get("reset_scale_method", "uniform")
+        if events_params.reset_scale_method not in ["uniform", "gaussian", "discrete"]:
+            raise ValueError(f"Invalid reset_scale_method: {events_params.reset_scale_method}. Must be 'uniform', 'gaussian', or 'discrete'.")
+        events_params.reset_scale_range = events_params.get("reset_scale_range", (1.0, 1.1))
         events_params.reference_nut_part = events_params.get("reference_nut_part", "center")
         if events_params.reference_nut_part not in ["center", "bottom"]:
             raise ValueError(f"Invalid reference_nut_part: {events_params.reference_nut_part}. Must be 'center' or 'bottom'.")
 
         events_params.in_hand_rand_pos_range = events_params.get("in_hand_rand_pos_range", (0.01, 0.01, 0.0))
-        events_params.in_hand_rand_rot_std = events_params.get("in_hand_rand_rot_std", (0.01, 0.01, 0.01))
+        events_params.in_hand_rand_rot_std = events_params.get("in_hand_rand_rot_std", (0.5, 0.5, 0.5))
 
         obs_params = self.params.observations
-        obs_params.include_relative = obs_params.get("include_relative", True)
+        obs_params.include_relative = obs_params.get("include_relative", False)
 
         # Add whether scale is observed
         obs_params = self.params.observations
@@ -511,7 +523,7 @@ class IKRelKukaNutThreadScaledEnvCfg(IKRelKukaNutThreadEnvCfg):
         # B: relative pose of the center of nut to nut origin
         # Compute relative transformations
         self.upright_relative_rot = torch.tensor(
-            [[0.0, 1.0, 0.0, 0.0]]
+            [[1.0, 0.0, 0.0, 0.0]]
         ).repeat(self.params.num_envs, 1).to(self.params.device)
         B = Pose.from_batch_list(
             torch.cat([
@@ -539,10 +551,6 @@ class IKRelKukaNutThreadScaledEnvCfg(IKRelKukaNutThreadEnvCfg):
         in_hand_delta_quat = math_utils.quat_from_euler_xyz(
             in_hand_delta_rot[:, 0], in_hand_delta_rot[:, 1], in_hand_delta_rot[:, 2]
         )
-        # in_hand_delta_trans = torch.zeros_like(in_hand_delta_trans)
-        # in_hand_delta_quat = torch.tensor(
-        #     [[1.0, 0.0, 0.0, 0.0]]
-        # ).repeat(self.params.num_envs, 1).to(self.params.device)
         # ---------- End of Sample
 
         # R: random transforms of the center of nut
