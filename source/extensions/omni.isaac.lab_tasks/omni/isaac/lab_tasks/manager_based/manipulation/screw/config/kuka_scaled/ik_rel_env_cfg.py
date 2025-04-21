@@ -222,6 +222,7 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
                 mdp.compute_scissor_angle_jit(tgt_finger_scissor, target_gripper_joint[:, 9:11])
                 randomized_joint_state[:, self.gripper_action._joint_ids] = target_gripper_joint
             randomized_joint_state = randomized_joint_state.reshape(num_envs, B, -1)
+            randomized_nut_pose = self.robot_base_pose.repeat(num_envs*B).multiply(randomized_nut_pose)
             randomized_nut_state[:, :7] = randomized_nut_pose.get_pose_vector()
             randomized_nut_state = randomized_nut_state.reshape(num_envs, B, -1)
 
