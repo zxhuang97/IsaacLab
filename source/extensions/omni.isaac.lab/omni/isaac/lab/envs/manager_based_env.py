@@ -16,6 +16,7 @@ from omni.isaac.lab.scene import InteractiveScene
 from omni.isaac.lab.sim import SimulationContext
 from omni.isaac.lab.ui.widgets import ManagerLiveVisualizer
 from omni.isaac.lab.utils.timer import Timer
+from omni.isaac.lab.markers import VecAutoUpdateVisualizationMarkers
 
 from .common import VecEnvObs
 from .manager_based_env_cfg import ManagerBasedEnvCfg
@@ -162,6 +163,14 @@ class ManagerBasedEnv:
 
         # initialize observation buffers
         self.obs_buf = {}
+
+        # Initialize auto_markers
+        if hasattr(cfg, 'auto_markers_cfg'):
+            self.auto_markers = VecAutoUpdateVisualizationMarkers(
+                cfg.auto_markers_cfg, self.num_envs, self.scene.env_origins, None, self.device
+            )
+        else:
+            self.auto_markers = None
 
     def __del__(self):
         """Cleanup for the environment."""
@@ -396,6 +405,11 @@ class ManagerBasedEnv:
             self.scene.write_data_to_sim()
             # simulate
             self.sim.step(render=False)
+
+            # Deal with auto-markers
+            if self.auto_markers is not None:
+                self.auto_markers.step()
+
             # render between steps only if the GUI or an RTX sensor needs it
             # note: we assume the render interval to be the shortest accepted rendering interval.
             #    If a camera needs rendering at a faster frequency, this will lead to unexpected behavior.

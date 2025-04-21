@@ -62,6 +62,18 @@ class GaussianNoiseCfg(NoiseCfg):
     std: torch.Tensor | float = 1.0
     """The standard deviation of the noise. Defaults to 1.0."""
 
+@configclass
+class RadialNoiseCfg(NoiseCfg):
+    """Configuration for radial noise with a fixed magnitude."""
+    
+    # Associate this config with the radial_noise function for convenience
+    func = noise_model.radial_noise  # Will be set after we define radial_noise
+    
+    mean: torch.Tensor | float = 1.0
+    """
+    The magnitude of the radial offset. Each data point will be offset by
+    a random direction (uniformly sampled) with this fixed magnitude.
+    """
 
 ##
 # Noise models

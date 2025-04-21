@@ -9,8 +9,17 @@ from omni.isaac.lab.assets import ArticulationCfg
 from omni.isaac.lab.envs import DirectRLEnvCfg
 from omni.isaac.lab.scene import InteractiveSceneCfg
 from omni.isaac.lab.sim import PhysxCfg, SimulationCfg
+from omni.isaac.lab.managers import SceneEntityCfg
 from omni.isaac.lab.sim.spawners.materials.physics_materials_cfg import RigidBodyMaterialCfg
 from omni.isaac.lab.utils import configclass
+
+
+from omni.isaac.lab.sensors import TiledCameraCfg, ContactSensorCfg, CameraCfg
+from omni.isaac.lab.sim.spawners.sensors import PinholeCameraCfg
+
+
+from omegaconf import OmegaConf
+from omegaconf.listconfig import ListConfig
 
 from .factory_tasks_cfg import ASSET_DIR, FactoryTask, GearMesh, NutThread, PegInsert
 
@@ -43,7 +52,8 @@ STATE_DIM_CFG = {
 
 @configclass
 class ObsRandCfg:
-    fixed_asset_pos = [0.001, 0.001, 0.001]
+    # fixed_asset_pos = [0.001, 0.001, 0.001]
+    fixed_asset_pos = [0.0, 0.0, 0.0]
 
 
 @configclass
@@ -88,8 +98,8 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         "fixed_quat",
     ]
 
-    task_name: str = "peg_insert"  # peg_insert, gear_mesh, nut_thread
-    task: FactoryTask = FactoryTask()
+    name: str = "peg_insert"  # peg_insert, gear_mesh, nut_thread
+    task_class: FactoryTask = FactoryTask()
     obs_rand: ObsRandCfg = ObsRandCfg()
     ctrl: CtrlCfg = CtrlCfg()
 
@@ -108,6 +118,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
             gpu_max_rigid_contact_count=2**23,
             gpu_max_rigid_patch_count=2**23,
             gpu_max_num_partitions=1,  # Important for stable simulation.
+            gpu_collision_stack_size=2048*(2**20),# For 1024 parallel scenes, too many collisions
         ),
         physics_material=RigidBodyMaterialCfg(
             static_friction=1.0,
@@ -149,7 +160,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
                 "panda_joint4": -1.49139,
                 "panda_joint5": -0.00083,
                 "panda_joint6": 1.38774,
-                "panda_joint7": 0.0,
+            "panda_joint7": 0.0,
                 "panda_finger_joint2": 0.04,
             },
             pos=(0.0, 0.0, 0.0),
@@ -186,23 +197,183 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         },
     )
 
+    # contact_filter_path = [
+    #     "/World/envs/env_.*/FixedAsset",
+    #     "/World/envs/env_.*/LargeGearAsset",
+    #     "/World/envs/env_.*/SmallGearAsset",
+    # ]
+    # contact_filter_path = [
+    #     "/World/envs/env_.*/FixedAsset/.*",
+    #     "/World/envs/env_.*/LargeGearAsset/.*",
+    #     "/World/envs/env_.*/SmallGearAsset/.*",
+    # ]
+    contact_filter_path = [
+        "/World/envs/env_.*/FixedAsset/forge_hole_8mm/forge_hole_8mm",
+        "/World/envs/env_.*/FixedAsset/factory_bolt_loose",
+        "/World/envs/env_.*/FixedAsset/factory_gear_base_loose",
+        "/World/envs/env_.*/LargeGearAsset/factory_gear_large",
+        "/World/envs/env_.*/SmallGearAsset/factory_gear_small",
+    ]
+
+    # Wrench config
+    wrench_joint_cfg = SceneEntityCfg("robot", body_names=["panda_link7"])
+
+    cam_offset_cfg = CameraCfg.OffsetCfg(
+        pos=(1, 0.0, 0.15),
+        rot=[0.4497752, 0.4401843, 0.5533875, 0.545621],
+        convention='opengl'
+    )
+    ph_cfg = PinholeCameraCfg(visible=True,
+        semantic_tags=None,
+        copy_from_source=True,
+        projection_type='pinhole',
+        clipping_range=(0.0001, 20.0),
+        focal_length=24.0,
+        focus_distance=400.0,
+        f_stop=0.0,
+        horizontal_aperture=20.955,
+        vertical_aperture=None,
+        horizontal_aperture_offset=0.0,
+        vertical_aperture_offset=0.0,
+        lock_camera=True
+    )
+    tiled_camera_cfg = TiledCameraCfg(
+        width=720, height=720,
+        offset=cam_offset_cfg,
+        prim_path='/World/envs/env_.*/Camera',
+        spawn=ph_cfg
+    )
+
+    # Add in scale randomization of assets. 
+    randomize_scale_method= "none"    # gaussian/uniform/none, implemented in factory_env
+    # Scale range for held asset
+    # For uniform, [min, max]
+    # For gaussian, [mean, std]
+    randomize_scale_range = (0.5, 2.0)
+
+
+    # To enable experiments with cfg dicts
+    params = OmegaConf.create()
+
+    def update_env_params(self):
+        """Set default environment parameters."""
+        # Initialize params structure
+        params = self.params
+
+        # def update_terminals(container, config, keys):
+        #     """
+        #     Update each attribute in 'container' with the corresponding value
+        #     from 'config'. If a key is missing, leave the current value in 'container'.
+        #     """
+        #     for key in keys:
+        #         var = getattr(container, key)
+        #         var = config.get(key, var)
+
+        # params.scene = params.get("scene", OmegaConf.create())
+
+        # Hard Coded
+        # params.scene.nut = params.scene.get("nut", OmegaConf.create())
+        # params.scene.screw_type = params.scene.get("screw_type", "m16_loose")  # m8_tight m16_tight
+        # update_terminals(self, params, ["decimation"])
+
+        # Sim
+        params_sim = params.get("sim", OmegaConf.create())
+        self.sim.dt = params_sim.get("dt", self.sim.dt)
+        # Physx
+        # params.sim.physx = params.sim.get("physx", OmegaConf.create())
+        # update_terminals(self.sim.physx, params.sim.physx, [    
+        #     "friction_offset_threshold", 
+        #     "enable_ccd"
+        # ])  
+
+        # # --- Observation Randomization Config ---
+        # # Here we keep the whole config group in params.
+        params_obs_rand = params.get("obs_rand", OmegaConf.create())
+        custom_obs_rand = params_obs_rand.get("fixed_asset_pos", None)
+        if custom_obs_rand is not None:
+            ObsRandCfg.fixed_asset_pos = custom_obs_rand
+            self.obs_rand = ObsRandCfg(fixed_asset_pos=custom_obs_rand)
+            # self.obs_rand.fixed_asset_pos = custom_obs_rand
+        
+        # # --- Control Config ---
+        # params.ctrl = params.get("ctrl", {})
+        # update_terminals(self.ctrl, params.ctrl, [
+        #     "pos_action_bounds",
+        #     "rot_action_bounds",
+        #     "pos_action_threshold",
+        #     "rot_action_threshold",
+        #     "reset_joints",
+        #     "reset_task_prop_gains",
+        #     "reset_rot_deriv_scale",
+        #     "default_task_prop_gains"
+        # ])
+
+        # # NutThread Task related properties
+        params_taskcfg = params.get("taskcfg", {})
+        asset_scale_randomization = params_taskcfg.get("randomize_scale_method", "none")
+        if asset_scale_randomization not in ["gaussian", "uniform", "none"]:
+            print(f"Warning: asset_scale_randomization '{asset_scale_randomization}' is not recognized, using 'none'.")
+        self.randomize_scale_method = asset_scale_randomization
+        # Update scale
+        if self.randomize_scale_method in ["gaussian", "uniform"]:
+            scale_range = params_taskcfg.get("randomize_scale_range", None)
+            if scale_range is not None:
+                if len(scale_range) == 2:
+                    if isinstance(scale_range, ListConfig):
+                        scale_range = OmegaConf.to_container(scale_range, resolve=True)
+                    self.randomize_scale_range = tuple(scale_range)
+                else:
+                    print(f"Warning: 'randomize_scale_range' should be a list/tuple of length 2, using default {self.randomize_scale_range}.")
+        
+        # update_terminals(self.task_class, params.task_class, [
+        #     "hand_init_pos",
+        #     "hand_init_pos_noise",
+        #     "hand_init_orn",
+        #     "hand_init_orn_noise",
+        #     "unidirectional_rot",
+        #     "fixed_asset_init_pos_noise",
+        #     "fixed_asset_init_orn_deg",
+        #     "fixed_asset_init_orn_range_deg",
+        #     "held_asset_pos_noise",
+        #     "held_asset_rot_init",
+        # ])
+
+        # Sensors
+        params_observations = params.get("observations", OmegaConf.create())
+        self.use_tiled_camera = params_observations.get("use_tiled_camera", False)
+
+    def __post_init__(self):
+        """Post initialization."""
+        self.update_env_params()
+        self.sim.render_interval = self.decimation
+
+        # self.episode_length_s = 24   # 24, 10 for sim quality test
+        self.viewer.origin_type = "asset_root"
+        self.viewer.asset_name = "fixed_asset"
+        self.viewer.eye = (0.1, 0.1, 0.06)
+        self.viewer.lookat = (0, 0.0, 0.04)
+        self.viewer.resolution = (720, 720)
+
+
 
 @configclass
 class FactoryTaskPegInsertCfg(FactoryEnvCfg):
-    task_name = "peg_insert"
-    task = PegInsert()
+    name = "peg_insert"
+    task_class = PegInsert()
     episode_length_s = 10.0
 
 
 @configclass
 class FactoryTaskGearMeshCfg(FactoryEnvCfg):
-    task_name = "gear_mesh"
-    task = GearMesh()
+    name = "gear_mesh"
+    task_class = GearMesh()
     episode_length_s = 20.0
 
 
+from omegaconf import OmegaConf
+
 @configclass
 class FactoryTaskNutThreadCfg(FactoryEnvCfg):
-    task_name = "nut_thread"
-    task = NutThread()
+    name = "nut_thread"
+    task_class = NutThread()
     episode_length_s = 30.0

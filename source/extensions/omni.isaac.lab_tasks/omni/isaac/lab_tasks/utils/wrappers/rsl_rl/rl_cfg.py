@@ -32,7 +32,6 @@ class RslRlPpoActorCriticCfg:
     
     rnn_type: str = "lstm"
 
-
 @configclass
 class RslRlPpoAlgorithmCfg:
     """Configuration for the PPO algorithm."""

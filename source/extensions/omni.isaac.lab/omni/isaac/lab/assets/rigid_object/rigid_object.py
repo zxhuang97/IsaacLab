@@ -402,14 +402,33 @@ class RigidObject(AssetBase):
         # default state
         # -- root state
         # note: we cast to tuple to avoid torch/numpy type mismatch.
-        default_root_state = (
-            tuple(self.cfg.init_state.pos)
-            + tuple(self.cfg.init_state.rot)
-            + tuple(self.cfg.init_state.lin_vel)
-            + tuple(self.cfg.init_state.ang_vel)
-        )
-        default_root_state = torch.tensor(default_root_state, dtype=torch.float, device=self.device)
-        self._data.default_root_state = default_root_state.repeat(self.num_instances, 1)
+        if isinstance(self.cfg.init_state.pos, torch.Tensor):
+            assert isinstance(self.cfg.init_state.rot, torch.Tensor)
+            default_vel = (
+                tuple(self.cfg.init_state.lin_vel)
+                + tuple(self.cfg.init_state.ang_vel)
+            )
+            default_vel = torch.tensor(
+                default_vel, dtype=torch.float, device=self.device
+            ).repeat(self.num_instances, 1)
+            default_root_state = torch.cat(
+                (
+                    self.cfg.init_state.pos,
+                    self.cfg.init_state.rot,
+                    default_vel,
+                ),
+                dim=-1,
+            )
+            self._data.default_root_state = default_root_state
+        else:
+            default_root_state = (
+                tuple(self.cfg.init_state.pos)
+                + tuple(self.cfg.init_state.rot)
+                + tuple(self.cfg.init_state.lin_vel)
+                + tuple(self.cfg.init_state.ang_vel)
+            )
+            default_root_state = torch.tensor(default_root_state, dtype=torch.float, device=self.device)
+            self._data.default_root_state = default_root_state.repeat(self.num_instances, 1)
 
     """
     Internal simulation callbacks.

@@ -23,17 +23,17 @@ from omni.isaac.lab.managers import ObservationTermCfg as ObsTerm
 from omni.isaac.lab.managers import RewardTermCfg as RewTerm
 from omni.isaac.lab.managers import SceneEntityCfg
 from omni.isaac.lab.managers import TerminationTermCfg as DoneTerm
-from omni.isaac.lab.markers.visualization_markers import VisualizationMarkersCfg
+from omni.isaac.lab.markers import VecAutoUpdateVisualizationMarkersCfg, VisualizationMarkersCfg
 from omni.isaac.lab.scene import InteractiveSceneCfg
 from omni.isaac.lab.sensors import FrameTransformerCfg, ContactSensorCfg
 from omni.isaac.lab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
-from omni.isaac.lab.sim.schemas.schemas_cfg import MassPropertiesCfg, RigidBodyPropertiesCfg
+# from omni.isaac.lab.sim.schemas.schemas_cfg import MassPropertiesCfg, RigidBodyPropertiesCfg
 from omni.isaac.lab.sim.simulation_cfg import PhysxCfg, SimulationCfg
 from omni.isaac.lab.utils import configclass
 from omni.isaac.lab.utils.assets import ISAAC_NUCLEUS_DIR
-from omni.isaac.lab.utils.noise import AdditiveUniformNoiseCfg as Unoise
+# from omni.isaac.lab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 
-from omni.isaac.lab.sim.spawners.materials.physics_materials_cfg import RigidBodyMaterialCfg
+# from omni.isaac.lab.sim.spawners.materials.physics_materials_cfg import RigidBodyMaterialCfg
 import omni.isaac.lab_tasks.manager_based.manipulation.screw.mdp as mdp
 
 from omni.isaac.lab.markers.config import (  # isort: skip
@@ -59,12 +59,36 @@ BLUE_PLATE_MARKER_CFG = RED_PLATE_MARKER_CFG.copy()
 BLUE_PLATE_MARKER_CFG.markers["height"].visual_material = sim_utils.PreviewSurfaceCfg(
     diffuse_color=(0, 0, 1.0), opacity=0.5
 )
+BLUE_VIZ_MARKER_CFG = BLUE_PLATE_MARKER_CFG.copy()
+BLUE_VIZ_MARKER_CFG.markers["height"].height = 0.03
+BLUE_VIZ_MARKER_CFG.markers["height"].visual_material = sim_utils.PreviewSurfaceCfg(
+    diffuse_color=(0, 0, 1.0), opacity=0.2
+)
+
 
 # For some reasons, can't visualize two markers at the same time
 # PLATE_ARROW_CFG = BLUE_PLATE_MARKER_CFG.copy()
 # PLATE_ARROW_CFG.markers["frame"] = FRAME_MARKER_SMALL_CFG.markers["frame"]
 
 asset_factory = {
+    "m4_tight": {
+        "nut_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_nut_m8_loose/factory_nut_m4_tight.usd",
+        "bolt_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_bolt_m8_loose/factory_bolt_m4_tight.usd",
+        "nut_init_state_tighten": RigidObjectCfg.InitialStateCfg(
+            pos=(6.3000e-01, 2.0661e-06, 3.0895e-03), rot=(-2.1609e-01, 6.6671e-05, -6.6467e-05, 9.7637e-01)
+        ),
+        "nut_init_state_thread": RigidObjectCfg.InitialStateCfg(
+            pos=(6.3000e-01, 4.0586e-06, 0.02), rot=(9.9833e-01, 1.2417e-04, -1.2629e-05, 5.7803e-02)
+        ),
+        "bolt_init_state": RigidObjectCfg.InitialStateCfg(pos=(0.63, 0.0, 0.0)),
+        "nut_frame_offset": OffsetCfg(pos=(0.0, 0.0, 0.011)),
+        "bolt_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.012)),
+        "bolt_tip_offset": OffsetCfg(pos=(0.0, 0.0, 0.0261)),
+        "nut_geom_name": "factory_nut",
+        "float_gain": 10.0,
+        "float_damp": 0.01,
+        "nut_origin_bottom_offset": OffsetCfg(pos=(0.0, 0.0, -0.0044)),
+    },
     "m8_loose": {
         "nut_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_nut_m8_loose/factory_nut_m8_loose.usd",
         "bolt_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_bolt_m8_loose/factory_bolt_m8_loose.usd",
@@ -78,8 +102,10 @@ asset_factory = {
         "nut_frame_offset": OffsetCfg(pos=(0.0, 0.0, 0.011)),
         "bolt_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.012)),
         "bolt_tip_offset": OffsetCfg(pos=(0.0, 0.0, 0.0261)),
+        "bolt_geom_name": "factory_bolt",
         "float_gain": 10.0,
         "float_damp": 0.01,
+        "nut_origin_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.0012)),
     },
     "m8_tight": {
         "nut_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_nut_m8_tight/factory_nut_m8_tight.usd",
@@ -94,8 +120,30 @@ asset_factory = {
         "nut_frame_offset": OffsetCfg(pos=(0.0, 0.0, 0.011)),
         "bolt_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.0)),
         "bolt_tip_offset": OffsetCfg(pos=(0.0, 0.0, 0.0261)),
+        "nut_geom_name": "factory_nut",
+        "bolt_geom_name": "factory_bolt",
         "float_gain": 10.0,
         "float_damp": 0.01,
+        "nut_origin_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.0012)),
+    },
+    "m12_tight": {
+        "nut_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_nut_m8_tight/factory_nut_m12_tight.usd",
+        "bolt_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_bolt_m8_tight/factory_bolt_m12_tight.usd",
+        "nut_init_state_tighten": RigidObjectCfg.InitialStateCfg(
+            pos=(6.3000e-01, 2.0661e-06, 3.0895e-03), rot=(-2.1609e-01, 6.6671e-05, -6.6467e-05, 9.7637e-01)
+        ),
+        "nut_init_state_thread": RigidObjectCfg.InitialStateCfg(
+            pos=(6.3000e-01, 4.0586e-06, 0.02), rot=(9.9833e-01, 1.2417e-04, -1.2629e-05, 5.7803e-02)
+        ),
+        "bolt_init_state": RigidObjectCfg.InitialStateCfg(pos=(0.63, 0.0, 0.0)),
+        "nut_frame_offset": OffsetCfg(pos=(0.0, 0.0, 0.011)),
+        "bolt_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.0)),
+        "bolt_tip_offset": OffsetCfg(pos=(0.0, 0.0, 0.0261)),
+        "nut_geom_name": "factory_nut",
+        "bolt_geom_name": "factory_bolt",
+        "float_gain": 10.0,
+        "float_damp": 0.01,
+        "nut_origin_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.007)),
     },
     "m16_tight": {
         "nut_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_nut_m16_tight/factory_nut_m16_tight.usd",
@@ -114,13 +162,13 @@ asset_factory = {
         "bolt_geom_name": "factory_bolt",
         "float_gain": 10.0,
         "float_damp": 0.01,
+        "nut_origin_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.0160)),
     },
     "m16_loose": {
         "nut_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_nut_m16_loose/factory_nut_m16_loose.usd",
         "bolt_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_bolt_m16_loose/factory_bolt_m16_loose.usd",
         "nut_init_state_tighten": RigidObjectCfg.InitialStateCfg(
             pos=(6.3000e-01, 2.0661e-06, 3.0895e-03), rot=(-2.1609e-01, 6.6671e-05, -6.6467e-05, 9.7637e-01)
-
         ),
         "nut_init_state_thread": RigidObjectCfg.InitialStateCfg(
             pos=(6.3000e-01, 4.0586e-06, 0.03), rot=(9.9833e-01, 1.2417e-04, -1.2629e-05, 5.7803e-02)
@@ -133,6 +181,7 @@ asset_factory = {
         "bolt_geom_name": "factory_bolt",
         "float_gain": 10.0,
         "float_damp": 0.01,
+        "nut_origin_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.0160)),
     },   
     "m16": {
         "nut_path": f"{ISAAC_NUCLEUS_DIR}/IsaacLab/Factory/factory_nut_m16.usd",
@@ -152,9 +201,29 @@ asset_factory = {
         "bolt_geom_name": "factory_bolt_loose",
         "float_gain": 10.0,
         "float_damp": 0.01,
+        "nut_origin_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.0160)),
+    },
+    "m20": {
+        "nut_path": f"{ISAAC_NUCLEUS_DIR}/IsaacLab/Factory/factory_nut_m20.usd",
+        "bolt_path": f"{ISAAC_NUCLEUS_DIR}/IsaacLab/Factory/factory_bolt_m20.usd",
+        "nut_init_state_tighten": ArticulationCfg.InitialStateCfg(
+            pos=(6.3000e-01, 2.0661e-06, 3.0895e-03), rot=(-2.1609e-01, 6.6671e-05, -6.6467e-05, 9.7637e-01),
+            joint_pos={}, joint_vel={}
+        ),
+        "nut_init_state_thread": RigidObjectCfg.InitialStateCfg(
+            pos=(6.3000e-01, 4.0586e-06, 0.03), rot=(9.9833e-01, 1.2417e-04, -1.2629e-05, 5.7803e-02)
+        ),
+        "bolt_init_state": RigidObjectCfg.InitialStateCfg(pos=(0.63, 0.0, 0.0)),
+        "nut_frame_offset": OffsetCfg(pos=(0.0, 0.0, 0.0225)),
+        "bolt_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.0)),
+        "bolt_tip_offset": OffsetCfg(pos=(0.0, 0.0, 0.041)),
+        "nut_geom_name": "factory_nut_loose",
+        "bolt_geom_name": "factory_bolt_loose",
+        "float_gain": 10.0,
+        "float_damp": 0.01,
+        "nut_origin_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.0180)),
     },
 }
-
 
 @configclass
 class ScrewSceneCfg(InteractiveSceneCfg):
@@ -201,13 +270,14 @@ class ScrewSceneCfg(InteractiveSceneCfg):
             obj_cfg = functools.partial(ArticulationCfg, actuators={})
         else:
             obj_cfg = functools.partial(RigidObjectCfg)
-        
+
         self.nut: RigidObjectCfg = obj_cfg(
             prim_path="{ENV_REGEX_NS}/Nut",
             spawn=sim_utils.UsdFileCfg(
                 usd_path=self.screw_dict["nut_path"],
-                rigid_props=sim_utils.RigidBodyPropertiesCfg(disable_gravity=True),
-                # articulation_props=sim_utils.ArticulationRootPropertiesCfg(articulation_enabled=False)
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                    disable_gravity=True,
+                ),
             ),
         )
 
@@ -215,8 +285,7 @@ class ScrewSceneCfg(InteractiveSceneCfg):
             prim_path="{ENV_REGEX_NS}/Bolt",
             spawn=sim_utils.UsdFileCfg(
                 usd_path=self.screw_dict["bolt_path"],
-                # articulation_props=sim_utils.ArticulationRootPropertiesCfg(articulation_enabled=False)
-                ),
+            ),
             init_state=self.screw_dict["bolt_init_state"],
         )
 
@@ -226,6 +295,7 @@ class ScrewSceneCfg(InteractiveSceneCfg):
             spawn=sim_utils.DomeLightCfg(color=(0.75, 0.75, 0.75), intensity=2500.0),
         )
 
+        # self.nut_frame = MISSING
         self.nut_frame = FrameTransformerCfg(
             prim_path="{ENV_REGEX_NS}/Origin",
             debug_vis=True,
@@ -234,7 +304,6 @@ class ScrewSceneCfg(InteractiveSceneCfg):
                 FrameTransformerCfg.FrameCfg(
                     # prim_path="{ENV_REGEX_NS}/Nut/factory_nut",
                     prim_path="{ENV_REGEX_NS}/Nut/" + f"{self.screw_dict['nut_geom_name']}",
-
                     name="nut",
                     offset=self.screw_dict["nut_frame_offset"],
                 )
@@ -242,9 +311,8 @@ class ScrewSceneCfg(InteractiveSceneCfg):
         )
 
         self.bolt_frame: FrameTransformerCfg = MISSING
-
-
-##
+        
+## 
 # MDP settings
 ##
 @configclass
@@ -254,7 +322,6 @@ class BaseActionsCfg:
     nut_action: ActionTerm | None = None
     arm_action: ActionTerm | None = None
     gripper_action: ActionTerm | None = None
-
 
 @configclass
 class BaseObservationsCfg:
@@ -277,7 +344,7 @@ class BaseObservationsCfg:
 
     # Make a noise-free auxiliary task nut pose
     @configclass
-    class AuxCfg(ObsGroup):
+    class AuxNutPoseCfg(ObsGroup):
         # bolt_pose = ObsTerm(func=mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("bolt")})
         nut_pos = ObsTerm(func=mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("nut")})
         nut_quat = ObsTerm(func=mdp.root_quat_w, params={"asset_cfg": SceneEntityCfg("nut")})
@@ -287,9 +354,39 @@ class BaseObservationsCfg:
             self.concatenate_terms = True
             self.history_length = 1
 
+    @configclass
+    class AuxNutPosCfg(ObsGroup):
+        # bolt_pose = ObsTerm(func=mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("bolt")})
+        nut_pos = ObsTerm(func=mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("nut")})
+        
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True
+            self.history_length = 1
+
+    # Make a noise-free critic
+    @configclass
+    class CriticCfg(ObsGroup):
+        # bolt_pose = ObsTerm(func=mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("bolt")})
+        nut_pos = ObsTerm(func=mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("nut")})
+        nut_quat = ObsTerm(func=mdp.root_quat_w, params={"asset_cfg": SceneEntityCfg("nut")})
+        nut_lin_vel = ObsTerm(func=mdp.root_lin_vel_w, params={"asset_cfg": SceneEntityCfg("nut")})
+        nut_ang_vel = ObsTerm(func=mdp.root_ang_vel_w, params={"asset_cfg": SceneEntityCfg("nut")})
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True
+            self.history_length = 1
+
+    # @configclass
+    # class RMAPrivilCfg(PolicyCfg):
+    #     def __post_init__(self):
+    #         self.enable_corruption = False
+    #         self.concatenate_terms = True
+    #         self.history_length = 5
+
     # observation groups
     policy: PolicyCfg = PolicyCfg()
-    aux_task: AuxCfg = AuxCfg()
 
 @configclass
 class EventCfg:
@@ -343,6 +440,9 @@ class BaseScrewEnvCfg(ManagerBasedRLEnvCfg):
         # Initialize params structure
         if self.params is None:
             self.params = OmegaConf.create()
+        # NOTE(zixuan): replicate_physics should be true by default
+        if not hasattr(self, "replicate_physics"):
+            self.replicate_physics = True
         params = self.params
         params.scene = params.get("scene", OmegaConf.create())
         params.sim = params.get("sim", OmegaConf.create())
@@ -373,7 +473,12 @@ class BaseScrewEnvCfg(ManagerBasedRLEnvCfg):
         """Post initialization."""
         self.get_default_env_params()
         self.screw_type = self.params.scene.screw_type
-        self.scene = ScrewSceneCfg(num_envs=4096, env_spacing=2.5, screw_type=self.screw_type)
+        self.scene = ScrewSceneCfg(
+            num_envs=4096,
+            env_spacing=2.5,
+            screw_type=self.screw_type,
+            replicate_physics=self.replicate_physics,
+        )
         # general settings
         self.decimation = self.params.decimation
         self.sim.render_interval = self.decimation
@@ -390,7 +495,7 @@ class BaseScrewEnvCfg(ManagerBasedRLEnvCfg):
         nut.spawn.rigid_props.linear_damping = nut_params.linear_damping
         nut.spawn.rigid_props.angular_damping = nut_params.angular_damping
 
-        self.episode_length_s = 24
+        self.episode_length_s = 24   # 24, 10 for sim quality test
         self.viewer.origin_type = "asset_root"
         self.viewer.asset_name = "bolt"
         self.viewer.eye = (0.1, 0, 0.04)
@@ -479,7 +584,6 @@ def nut_upright_reward_forge(env: ManagerBasedRLEnv, a: float = 300, b: float = 
     rewards = mdp.forge_kernel(1 - cos_sim, a, b, tol)
     return rewards
 
-
 @configclass
 class NutThreadRewardsCfg:
     """Reward terms for the MDP."""
@@ -546,6 +650,7 @@ class BaseNutThreadEnvCfg(BaseScrewEnvCfg):
                 )
             ],
         )
+
         self.scene.bolt_frame = FrameTransformerCfg(
             prim_path="{ENV_REGEX_NS}/Origin",
             debug_vis=True,
@@ -564,3 +669,27 @@ class BaseNutThreadEnvCfg(BaseScrewEnvCfg):
             filter_prim_paths_expr=["{ENV_REGEX_NS}/Bolt/" + f"{screw_dict['bolt_geom_name']}"],
             update_period=0.0,
         )
+
+        # self.auto_markers_cfg = VecAutoUpdateVisualizationMarkersCfg(
+        #     prim_path="World/Auto_visuals",
+        #     markers={
+        #         "viz_nut": sim_utils.UsdFileCfg(
+        #             usd_path=self.scene.screw_dict["nut_path"],
+        #             visual_material=sim_utils.PreviewSurfaceCfg(
+        #                 diffuse_color=(1.0, 0.0, 0.0),  # Red color
+        #                 opacity=0.1             # Half transparent
+        #             )
+        #         ),
+        #         "obs_viz_nut": sim_utils.UsdFileCfg(
+        #             usd_path=self.scene.screw_dict["nut_path"],
+        #             visual_material=sim_utils.PreviewSurfaceCfg(
+        #                 diffuse_color=(0.0, 0.0, 1.0),  # Blue color
+        #                 opacity=0.4             # Half transparent
+        #             )
+        #         ),
+        #     },
+        #     num_markers_per_type_env={
+        #         "viz_nut": 1,
+        #         "obs_viz_nut": 1,
+        #     }
+        # )

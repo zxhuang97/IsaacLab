@@ -10,14 +10,48 @@ from typing import TYPE_CHECKING
 
 from omni.isaac.lab.envs import ManagerBasedEnv
 import omni.isaac.lab.utils.math as math_utils
-from omni.isaac.lab.assets import ArticulationData
 from omni.isaac.lab.sensors import FrameTransformerData
 
 if TYPE_CHECKING:
     from omni.isaac.lab.envs import ManagerBasedRLEnv
 
-
 def rel_nut_bolt_distance(env: ManagerBasedRLEnv, bolt_part_name: str) -> torch.Tensor:
+    # If scaled, we need to compute scaled version of everything
+    if hasattr(env.cfg, "asset_scale_samples"):
+        upright_quat = env.cfg.upright_relative_rot
+        # Get nut quantities
+        # If set, use nut bottom as reference for distance
+        if env.cfg.params.events.reference_nut_part == "bottom":
+            nut_rel_pos = env.cfg.scaled_nut_bottom_offset
+        # Otherwise use nut center offset
+        else:
+            nut_rel_pos = env.cfg.scaled_nut_center_offset
+        nut_root_pos = env.unwrapped.scene.rigid_objects["nut"].data.root_pos_w
+        nut_root_quat = env.unwrapped.scene.rigid_objects["nut"].data.root_quat_w
+        nut_frame_pos, _ = math_utils.combine_frame_transforms(
+            nut_root_pos, nut_root_quat, nut_rel_pos, upright_quat
+        )
+
+        # Get bolt tip quantities
+        bolt_rel_pos = env.cfg.scaled_bolt_tip_offset
+        bolt_root_pos = env.unwrapped.scene.rigid_objects["bolt"].data.root_pos_w
+        bolt_root_quat = env.unwrapped.scene.rigid_objects["bolt"].data.root_quat_w
+        bolt_frame_pos, _ = math_utils.combine_frame_transforms(
+            bolt_root_pos, bolt_root_quat, bolt_rel_pos, upright_quat
+        )
+
+        dis_scaled = nut_frame_pos - bolt_frame_pos
+        # print(dis_scaled.norm(p=2, dim=-1)[0].item())
+        return dis_scaled
+
+        # nut_frame =  nut_state @ nut_frame_offset
+        # get nut_frame manually by using math_utils.combine_frame_transforms
+        # nut_pos_w = math_utils.combine_frame_transforms(
+        #     nut_state, scale_offset, 
+        # )
+        # nut_tf_data.target_pos_w = nut_pos_w
+
+    # Otherwise, compute as normal
     nut_tf_data: FrameTransformerData = env.scene["nut_frame"].data
     bolt_tf_data: FrameTransformerData = env.scene["bolt_frame"].data
     bolt_id = bolt_tf_data.target_frame_names.index(bolt_part_name)
@@ -27,7 +61,6 @@ def rel_nut_bolt_distance(env: ManagerBasedRLEnv, bolt_part_name: str) -> torch.
 
 def rel_nut_bolt_bottom_distance(env: ManagerBasedRLEnv) -> torch.Tensor:
     return rel_nut_bolt_distance(env, "bolt_bottom")
-
 
 def rel_nut_bolt_tip_distance(env: ManagerBasedRLEnv) -> torch.Tensor:
     return rel_nut_bolt_distance(env, "bolt_tip")

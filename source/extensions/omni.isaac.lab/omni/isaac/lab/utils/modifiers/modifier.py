@@ -292,7 +292,8 @@ class NoiseModifier(ModifierBase):
         # reset the bias term
         self._bias[env_ids] = self._bias_noise_cfg.func(self._bias[env_ids], self._bias_noise_cfg)
         # clamp the bias term using std
-        self._bias[env_ids] = self._bias[env_ids].clamp(min=-self._bias_noise_cfg.std, max=self._bias_noise_cfg.std)
+        if hasattr(self._bias_noise_cfg, "std"):
+            self._bias[env_ids] = self._bias[env_ids].clamp(min=-self._bias_noise_cfg.std, max=self._bias_noise_cfg.std)
     
     def __call__(self, data: torch.Tensor) -> torch.Tensor:
         noisy_data = self._noise_cfg.func(data, self._noise_cfg) + self._bias
