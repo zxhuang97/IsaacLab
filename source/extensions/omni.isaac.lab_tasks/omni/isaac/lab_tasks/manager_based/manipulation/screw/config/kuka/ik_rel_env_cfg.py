@@ -99,7 +99,7 @@ class GraspResetEventTermCfg(EventTerm):
         reset_target: Literal[
             "pre_grasp", "grasp", "mate", "rigid_grasp", "rigid_grasp_open_align"
         ] = "grasp",
-        nut_rel_pose: tuple[float, float, float, float] | None = None,
+        tool_nut_rel_pose: tuple[float, float, float, float] | None = None,
         reset_range_scale: float = 1.0,
         reset_joint_std: float = 0.0,
         reset_randomize_mode: Literal["task", "joint", None] = "task",
@@ -111,7 +111,7 @@ class GraspResetEventTermCfg(EventTerm):
     ):
         super().__init__(**kwargs)
         self.reset_target = reset_target
-        self.nut_rel_pose = nut_rel_pose
+        self.tool_nut_rel_pose = tool_nut_rel_pose
         self.reset_range_scale = reset_range_scale
         self.reset_joint_std = reset_joint_std
         self.reset_randomize_mode = reset_randomize_mode
@@ -124,16 +124,6 @@ class reset_scene_to_grasp_state(ManagerTermBase):
     def __init__(self, cfg: GraspResetEventTermCfg, env: ManagerBasedEnv):
         super().__init__(cfg, env)
 
-        screw_type = env.cfg.scene.screw_type
-        col_approx = env.cfg.params.scene.robot.collision_approximation
-        cached_state = pickle.load(
-            open(f"cached/{col_approx}/{screw_type}/kuka_{cfg.reset_target}.pkl", "rb")
-        )
-        cached_state = SmartDict(cached_state).to_tensor(device=env.device)
-        self.cached_state = cached_state.apply(
-            lambda x: repeat(x, "1 ... -> n ...", n=env.num_envs).clone()
-        )
-
         # randomization parameters
         self.tensor_args = TensorDeviceType(device=env.device)
         self.robot_base_pose = Pose.from_list(cfg.robot_base_pos + [1, 0, 0, 0], self.tensor_args)
@@ -145,6 +135,18 @@ class reset_scene_to_grasp_state(ManagerTermBase):
             device=env.device,
         )
         self.curobo_arm.update_world()
+
+        screw_type = env.cfg.scene.screw_type
+        col_approx = env.cfg.params.scene.robot.collision_approximation
+        cached_state = pickle.load(
+            open(f"cached/{col_approx}/{screw_type}/kuka_{cfg.reset_target}.pkl", "rb")
+        )
+        cached_state = SmartDict(cached_state).to_tensor(device=env.device)
+        cached_state["robot"]["root_state"][0,  :3] = self.robot_base_pose.position
+        self.cached_state = cached_state.apply(
+            lambda x: repeat(x, "1 ... -> n ...", n=env.num_envs).clone()
+        )
+
         self.reset_randomize_mode = cfg.reset_randomize_mode
         self.reset_trans_low = (
             torch.tensor([-0.03, -0.03, -0.0], device=env.device) * cfg.reset_range_scale
@@ -156,7 +158,7 @@ class reset_scene_to_grasp_state(ManagerTermBase):
         self.reset_joint_std = cfg.reset_joint_std
         self.reset_use_adr = cfg.reset_use_adr
         self.reset_close_gripper = cfg.reset_close_gripper
-        self.nut_rel_pose = cfg.nut_rel_pose
+        self.tool_nut_rel_pose = cfg.tool_nut_rel_pose
         self.rand_init_robot_joint = None
         self.rand_init_nut_state = None
         self.num_buckets = env.num_envs
@@ -183,11 +185,17 @@ class reset_scene_to_grasp_state(ManagerTermBase):
             raise NotImplementedError
         full_joint_state = cached_state["robot"]["joint_state"]["position"]
         full_nut_state = cached_state["nut"]["root_state"]
+        default_bolt_pos = torch.tensor([0.63, 0, 0.0], device=env.device)
+        tgt_bolt_pos = torch.tensor([0.63, 0, 0.0], device=env.device)
         if self.reset_randomize_mode == "task":
             arm_state = full_joint_state[:, :7]
             default_tool_pose = self.curobo_arm.forward_kinematics(arm_state.clone()).ee_pose
-            nut_rel_pose = Pose.from_list(self.nut_rel_pose, self.tensor_args)
-            default_nut_pose = default_tool_pose.multiply(nut_rel_pose)
+            default_tool_pose.position[0, 0] = 0.7797
+            default_tool_pose.position[0, 1] = 0.5
+            default_tool_pose.position[0, 2] = 0.8467
+            tool_nut_rel_pose = Pose.from_list(self.tool_nut_rel_pose, self.tensor_args)
+            default_nut_pose = default_tool_pose.multiply(tool_nut_rel_pose)
+            # default_
             default_nut_pose = default_nut_pose.repeat(B)
             delta_trans = (
                 torch.rand((B, 3), device=env.device) * (self.reset_trans_high - self.reset_trans_low)
@@ -206,10 +214,7 @@ class reset_scene_to_grasp_state(ManagerTermBase):
             delta_pose = Pose(position=torch.zeros((B, 3), device=env.device), quaternion=delta_quat)
             randomized_nut_pose = default_nut_pose.multiply(delta_pose)
             randomized_nut_pose.position += delta_trans
-            randomized_tool_pose = randomized_nut_pose.multiply(nut_rel_pose)
-
-            # this should give you randomized_nut_pose.
-            # print(math_utils.combine_frame_transforms(randomized_tool_pose.position[:1], randomized_tool_pose.quaternion[:1], nut_rel_pose.position, nut_rel_pose.quaternion))
+            randomized_tool_pose = randomized_nut_pose.multiply(tool_nut_rel_pose)
 
             ik_result = self.curobo_arm.compute_ik(randomized_tool_pose)
             randomized_joint_state = full_joint_state.repeat(B, 1).contiguous()
@@ -758,14 +763,11 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         #     mode="startup",
         # )
         # this is for randomize alongthe nut_pose frame
-        nut_rel_pos = np.array(nut.init_state.pos) - np.array(
-            self.scene.nut_frame.target_frames[0].offset.pos
-        )
-        nut_rel_pos = nut.init_state.pos
+        tool_nut_rel_pos = nut.init_state.pos
         self.events.reset_default = GraspResetEventTermCfg(
             func=reset_scene_to_grasp_state,
             mode="reset",
-            nut_rel_pose=np.concatenate([nut_rel_pos, nut.init_state.rot]).tolist(),
+            tool_nut_rel_pose=np.concatenate([tool_nut_rel_pos, nut.init_state.rot]).tolist(),
             reset_target=event_params.reset_target,
             reset_range_scale=event_params.reset_range_scale,
             reset_randomize_mode=event_params.reset_randomize_mode,

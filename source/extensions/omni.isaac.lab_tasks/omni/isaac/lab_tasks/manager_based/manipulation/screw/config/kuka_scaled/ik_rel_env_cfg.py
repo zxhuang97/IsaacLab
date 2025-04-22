@@ -7,7 +7,6 @@ from copy import deepcopy
 import torch
 import numpy as np
 
-from anyio import key
 import omni.isaac.lab.sim as sim_utils
 from omni.isaac.lab.utils import configclass
 from omni.isaac.lab.managers import ObservationTermCfg as ObsTerm
@@ -96,7 +95,7 @@ class GraspResetEventTermScaledCfg(EventTermCfg):
     def __init__(
         self,
         reset_target: Literal["pre_grasp", "grasp", "mate", "rigid_grasp", "rigid_grasp_open_align"] = "grasp",
-        nut_rel_pose: torch.Tensor = None,
+        tool_nut_rel_pose: torch.Tensor = None,
         reset_range_scale: float = 1.0,
         reset_joint_std: float = 0.0,
         reset_randomize_mode: Literal["task", "joint", None] = "task",
@@ -108,7 +107,7 @@ class GraspResetEventTermScaledCfg(EventTermCfg):
     ):
         super().__init__(**kwargs)
         self.reset_target = reset_target
-        self.nut_rel_pose = nut_rel_pose
+        self.tool_nut_rel_pose = tool_nut_rel_pose
         self.reset_range_scale = reset_range_scale
         self.reset_joint_std = reset_joint_std
         self.reset_randomize_mode = reset_randomize_mode
@@ -149,19 +148,19 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
             default_tool_pose.position[:, 2] += delta_z
             
             # Compute nut relative position scaled
-            rel_pose_list = self.nut_rel_pose.tolist()
-            nut_rel_pose = Pose.from_batch_list(rel_pose_list, self.tensor_args)
-            default_nut_pose = default_tool_pose.multiply(nut_rel_pose)
-            default_nut_pose = default_nut_pose.repeat(B) # (num_envs x B)
+            rel_pose_list = self.tool_nut_rel_pose.tolist()
+            tool_nut_rel_pose = Pose.from_batch_list(rel_pose_list, self.tensor_args)
+            default_nut_pose = default_tool_pose.multiply(tool_nut_rel_pose)
+            default_nut_pose = default_nut_pose.repeat(B) # (B x num_envs)
             
             # Compute range
-            low = self.reset_trans_low.clone().reshape(1,-1).repeat(num_envs* B, 1)
+            low = self.reset_trans_low.clone().reshape(1,-1).repeat(B * num_envs, 1)
             rand_range = (self.reset_trans_high-self.reset_trans_low).reshape(1,-1)
 
             # Compute delta transformations
-            delta_trans = torch.rand((num_envs*B, 3), device=env.device) * rand_range + low
+            delta_trans = torch.rand((B * num_envs, 3), device=env.device) * rand_range + low
             delta_trans *= noise_scale
-            delta_rot = 2 * torch.rand((num_envs*B, 3), device=env.device) * \
+            delta_rot = 2 * torch.rand((B * num_envs, 3), device=env.device) * \
                 self.reset_rot_std - self.reset_rot_std
             delta_quat = math_utils.quat_from_euler_xyz(
                 delta_rot[:, 0], delta_rot[:, 1], delta_rot[:, 2]
@@ -169,15 +168,15 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
 
             # Add together
             delta_pose = Pose(
-                position=torch.zeros((num_envs*B, 3), device=env.device),
+                position=torch.zeros((B * num_envs, 3), device=env.device),
                 quaternion=delta_quat
             )
             randomized_nut_pose = default_nut_pose.multiply(delta_pose)
             randomized_nut_pose.position += delta_trans
-            nut_rel_pose = nut_rel_pose.repeat(B)
 
             # Convert back to tool pose
-            randomized_tool_pose = randomized_nut_pose.multiply(nut_rel_pose.inverse())
+            tool_nut_rel_pose = tool_nut_rel_pose.repeat(B)
+            randomized_tool_pose = randomized_nut_pose.multiply(tool_nut_rel_pose.inverse())
             
             # Do IK
             ik_results = []
@@ -674,11 +673,11 @@ class IKRelKukaNutThreadScaledEnvCfg(IKRelKukaNutThreadEnvCfg):
         nut = self.scene.nut
         events_params = self.params.events
         robot_params = self.params.scene.robot
-        nut_rel_pose = torch.cat([nut.init_state.pos, nut.init_state.rot], dim=-1)
+        tool_nut_rel_pose = torch.cat([nut.init_state.pos, nut.init_state.rot], dim=-1)
         self.events.reset_default = GraspResetEventTermScaledCfg(
             func=reset_scene_to_grasp_state_scaled,
             mode="reset",
-            nut_rel_pose=nut_rel_pose,
+            tool_nut_rel_pose=tool_nut_rel_pose,
             reset_target=events_params.reset_target,
             reset_range_scale=events_params.reset_range_scale,
             reset_randomize_mode=events_params.reset_randomize_mode,
