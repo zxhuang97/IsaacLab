@@ -109,6 +109,8 @@ class GraspResetEventTermScaledCfg(EventTermCfg):
         reset_randomize_mode: Literal["task", "joint", None] = "task",
         reset_use_adr: bool = False,
         reset_close_gripper: Literal["adaptive", "close", None] = None,
+        robot_base_pos: tuple[float] | None = None,
+        robot_no_joint_limit: bool = True,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -119,6 +121,8 @@ class GraspResetEventTermScaledCfg(EventTermCfg):
         self.reset_randomize_mode = reset_randomize_mode
         self.reset_use_adr = reset_use_adr
         self.reset_close_gripper = reset_close_gripper
+        self.robot_base_pos = robot_base_pos
+        self.robot_no_joint_limit = robot_no_joint_limit
 
 class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
     def __init__(self, cfg: GraspResetEventTermScaledCfg, env: ManagerBasedEnv):
@@ -592,6 +596,8 @@ class IKRelKukaNutThreadScaledEnvCfg(IKRelKukaNutThreadEnvCfg):
             reset_joint_std=events_params.reset_joint_std,
             reset_use_adr=events_params.reset_use_adr,
             reset_close_gripper=events_params.reset_close_gripper,
+            robot_base_pos=self.scene.robot.init_state.pos,
+            robot_no_joint_limit=self.robot_no_joint_limit,
         )
 
         # Nut Frame is used in nut_upright_reward_forge(), but only quat data
