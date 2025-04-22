@@ -142,47 +142,44 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
         if self.reset_randomize_mode == "task":
             arm_state = full_joint_state[:, :7]
             num_envs = env.num_envs
-            scales = env.cfg.asset_scale_samples
 
-            # Vectorize this!!!!!!
-            # Compute scaled tool position
+            # Compute scaled tool default position
+            # Account for differences of bolt heights
             default_tool_pose = self.curobo_arm.forward_kinematics(arm_state.clone()).ee_pose
             default_tool_pose = default_tool_pose.repeat(num_envs)
-            default_tool_pose.position[:, 2] += 0.01
-
+            delta_z = (env.cfg.bolt_heights - env.cfg.base_bolt_height).reshape(-1)
+            # delta_z += 0.005
+            default_tool_pose.position[:, 2] += delta_z
+            
             # Compute nut relative position scaled
-            # annoyingly difficult to initialize
             rel_pose_list = self.nut_rel_pose.tolist()
             nut_rel_pose = Pose.from_batch_list(rel_pose_list, self.tensor_args)
-            # nut_rel_pose = Pose(torch.from_numpy(self.nut_rel_pose))
             default_nut_pose = default_tool_pose.multiply(nut_rel_pose)
             default_nut_pose = default_nut_pose.repeat(B) # (num_envs x B)
-
-            # Compute scaled obs bias
-            # scales = scales.repeat(B)
-            scales = repeat(scales, "n -> (n b)", b=B)
-            low = self.reset_trans_low.clone().reshape(1,-1)
-            low = low.repeat(num_envs* B, 1)
-            # Add z to low
-            low[:,2] += (env.cfg.bolt_heights - env.cfg.base_bolt_height).reshape(-1).repeat(B)
+            
+            # Compute range
+            low = self.reset_trans_low.clone().reshape(1,-1).repeat(num_envs* B, 1)
             rand_range = (self.reset_trans_high-self.reset_trans_low).reshape(1,-1)
 
-            # ONLY FOR TESTING
-            low[:,:2] = 0.0
-            rand_range = torch.zeros_like(rand_range)
-            self.reset_rot_std = 0.0
+            # Compute delta transformations
             delta_trans = torch.rand((num_envs*B, 3), device=env.device) * rand_range + low
             delta_trans *= noise_scale
-            
-            delta_rot = 2 * torch.rand((num_envs*B, 3), device=env.device) * self.reset_rot_std - self.reset_rot_std
-            delta_quat = math_utils.quat_from_euler_xyz(delta_rot[:, 0], delta_rot[:, 1], delta_rot[:, 2])
+            delta_rot = 2 * torch.rand((num_envs*B, 3), device=env.device) * \
+                self.reset_rot_std - self.reset_rot_std
+            delta_quat = math_utils.quat_from_euler_xyz(
+                delta_rot[:, 0], delta_rot[:, 1], delta_rot[:, 2]
+            )
 
             # Add together
-            delta_pose = Pose(position=torch.zeros((num_envs*B, 3), device=env.device), quaternion=delta_quat)
+            delta_pose = Pose(
+                position=torch.zeros((num_envs*B, 3), device=env.device),
+                quaternion=delta_quat
+            )
             randomized_nut_pose = default_nut_pose.multiply(delta_pose)
             randomized_nut_pose.position += delta_trans
             nut_rel_pose = nut_rel_pose.repeat(B)
 
+            # Convert back to tool pose
             randomized_tool_pose = randomized_nut_pose.multiply(nut_rel_pose.inverse())
             
             # Do IK
@@ -220,12 +217,13 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
                 target_gripper_joint[:, 6:9] = target_gripper_joint[:, 0:3]
                 mdp.compute_scissor_angle_jit(tgt_finger_scissor, target_gripper_joint[:, 9:11])
                 randomized_joint_state[:, self.gripper_action._joint_ids] = target_gripper_joint
-            randomized_joint_state = randomized_joint_state.reshape(num_envs, B, -1)
+            randomized_joint_state = randomized_joint_state.reshape(B, num_envs, -1)
             randomized_nut_state[:, :7] = randomized_nut_pose.get_pose_vector()
             robot_origin_pos = cached_state["robot"]["root_state"][:, :3]
             robot_origin_pos = robot_origin_pos.repeat(num_envs*B, 1).contiguous()
             randomized_nut_state[:, :3] += robot_origin_pos
-            randomized_nut_state = randomized_nut_state.reshape(num_envs, B, -1)
+            # randomized_nut_state = randomized_nut_state.reshape(num_envs, B, -1)
+            randomized_nut_state = randomized_nut_state.reshape(B, num_envs, -1)
 
         elif self.reset_randomize_mode == "joint":
             randomized_joint_state = torch.randn_like(arm_state) * self.reset_joint_std + arm_state
@@ -250,12 +248,12 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
                 self.update_random_initializations(env)
         if self.reset_randomize_mode is not None:
             select = np.random.choice(self.num_buckets, len(env_ids))
-            randomized_joint_state = self.rand_init_configurations[env_ids, select].clone()
+            randomized_joint_state = self.rand_init_configurations[select, env_ids].clone()
             # randomized_joint_state = self.sample_reset_poses(env_ids, env.device)
             cached_state["robot"]["joint_state"]["position"] = randomized_joint_state
             cached_state["robot"]["joint_state"]["position_target"] = randomized_joint_state
             # To prevent nut reset to within bolt mesh, we also overwrite default reset nut state
-            cached_state["nut"]["root_state"] = self.rand_init_nut_state[env_ids, select].clone()
+            cached_state["nut"]["root_state"] = self.rand_init_nut_state[select, env_ids].clone()
         env.unwrapped.write_state(cached_state, env_ids)
 
 
