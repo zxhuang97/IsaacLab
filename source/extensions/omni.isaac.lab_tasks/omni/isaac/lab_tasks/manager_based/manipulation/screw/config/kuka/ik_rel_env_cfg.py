@@ -190,9 +190,9 @@ class reset_scene_to_grasp_state(ManagerTermBase):
         if self.reset_randomize_mode == "task":
             arm_state = full_joint_state[:, :7]
             default_tool_pose = self.curobo_arm.forward_kinematics(arm_state.clone()).ee_pose
-            default_tool_pose.position[0, 0] = 0.7797
-            default_tool_pose.position[0, 1] = 0.5
-            default_tool_pose.position[0, 2] = 0.8467
+            # default_tool_pose.position[0, 0] = 0.7797
+            # default_tool_pose.position[0, 1] = 0.5
+            # default_tool_pose.position[0, 2] = 0.8467
             tool_nut_rel_pose = Pose.from_list(self.tool_nut_rel_pose, self.tensor_args)
             default_nut_pose = default_tool_pose.multiply(tool_nut_rel_pose)
             # default_
@@ -429,6 +429,7 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
             "collision_approximation", "convexHull2"
         )
         robot_params.no_joint_limit = robot_params.get("no_joint_limit", True)
+        robot_params.init_pos = robot_params.get("init_pos", [-0.15, -0.5, -0.8])   
         robot_params.contact_offset = robot_params.get("contact_offset", 0.002)
         robot_params.rest_offset = robot_params.get("rest_offset", 0.001)
         robot_params.max_depenetration_velocity = robot_params.get("max_depenetration_velocity", 0.5)
@@ -511,7 +512,8 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
                 robot.spawn.usd_path = "assets/victor/victor_left_arm/victor_left_arm.usd"
             else:
                 robot.spawn.usd_path = "assets/victor/victor_left_arm_real/victor_left_arm_real.usd"
-        robot.init_state.pos = [-0.15, -0.5, -0.8]
+        robot.init_state.pos = robot_params.init_pos
+        # robot.init_state.pos = list(robot.init_state.pos )
 
         # robot.spawn.collision_props.contact_offset = robot_params.contact_offset
         # robot.spawn.collision_props.rest_offset = robot_params.rest_offset
