@@ -12,7 +12,7 @@ import torch
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, ListConfig
 
 from .array import TENSOR_TYPE_CONVERSIONS, TENSOR_TYPES
 from .string import callable_to_string, string_to_callable, string_to_slice
@@ -59,7 +59,7 @@ def class_to_dict(obj: object) -> dict[str, Any]:
     data = dict()
     for key, value in obj_dict.items():
         # disregard builtin attributes
-        if key.startswith("__"):
+        if key.startswith("__") or key.startswith("_"):
             continue
         # check if attribute is callable -- function
         if callable(value):
@@ -67,6 +67,8 @@ def class_to_dict(obj: object) -> dict[str, Any]:
         # check if attribute is a dictionary
         elif hasattr(value, "__dict__") or isinstance(value, dict):
             data[key] = class_to_dict(value)
+        elif isinstance(value, ListConfig):
+            data[key] = list(value)
         # check if attribute is a list or tuple
         elif isinstance(value, (list, tuple)):
             data[key] = type(value)([class_to_dict(v) for v in value])
