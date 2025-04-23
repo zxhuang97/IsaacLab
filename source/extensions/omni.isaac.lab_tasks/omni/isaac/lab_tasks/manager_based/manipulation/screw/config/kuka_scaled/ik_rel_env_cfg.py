@@ -120,7 +120,7 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
     def __init__(self, cfg: GraspResetEventTermScaledCfg, env: ManagerBasedEnv):
         super().__init__(cfg, env)
         self.num_buckets = 2
-        self.bucket_update_freq = 4
+        self.bucket_update_freq = 8
         self.max_ik_batch_size = 10240
 
     def update_random_initializations(self, env:ManagerBasedEnv):
@@ -133,6 +133,7 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
             raise NotImplementedError
         
         full_joint_state = cached_state["robot"]["joint_state"]["position"]
+        # full_joint_state[:, 6] = -2.
         full_nut_state = cached_state["nut"]["root_state"]
         canonical_tool_pos = torch.tensor([0.7797, 0.4993, 0.8467], device=env.device)
         canonical_robot_base = torch.tensor([-0.15, -0.5, -0.8], device=env.device)
@@ -185,15 +186,24 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
             
             # Do IK
             ik_results = []
+            ik_errors = []
             # This is just to do batch IK in case of CUDA out of memory error for large bucket size
             for iter in range(0,num_envs*B, self.max_ik_batch_size):
                 end_idx = min(iter+self.max_ik_batch_size, num_envs*B)
-                ik_result = self.curobo_arm.compute_ik(
-                    randomized_tool_pose[iter:iter+end_idx]
-                )
+                ik_result = self.curobo_arm.compute_ik(randomized_tool_pose[iter:iter+end_idx])
                 ik_results.append(ik_result.solution.squeeze(1))
+                ik_errors.append(ik_result.error.squeeze(1))
             randomized_joint_state = full_joint_state.repeat(num_envs*B, 1).contiguous()
-            randomized_joint_state[:, :7] = torch.cat(ik_results, dim=0)
+            ik_results = torch.cat(ik_results, dim=0)
+            # ik_errors = torch.cat(ik_errors, dim=0)
+            # is_valid_ik = ik_errors < 6e-4
+            # valid_ik = ik_results[is_valid_ik, 0]
+            # valid_num = valid_ik.shape[0]
+            # select_index = torch.randint(0, valid_num, (B,), device=env.device)
+            # valid_ik = valid_ik[select_index]
+            # randomized_joint_state[:, :7] = valid_ik
+            # randomized_nut_pose = randomized_nut_pose[is_valid_ik][select_index]
+            randomized_joint_state[:, :7] = ik_results
             randomized_nut_state = full_nut_state.repeat(num_envs*B, 1).contiguous()
             if self.reset_close_gripper is not None:
                 # NOTE(zixuan): adjust the close_finger_open according to nut scale.

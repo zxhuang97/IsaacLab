@@ -152,7 +152,7 @@ class reset_scene_to_grasp_state(ManagerTermBase):
             torch.tensor([-0.03, -0.03, -0.0], device=env.device) * cfg.reset_range_scale
         )
         self.reset_trans_high = (
-            torch.tensor([0.03, 0.03, 0.04], device=env.device) * cfg.reset_range_scale
+            torch.tensor([0.03, 0.03, 0.03], device=env.device) * cfg.reset_range_scale
         )
         self.reset_rot_std = 0.2 * cfg.reset_range_scale
         self.reset_joint_std = cfg.reset_joint_std
@@ -161,7 +161,7 @@ class reset_scene_to_grasp_state(ManagerTermBase):
         self.tool_nut_rel_pose = cfg.tool_nut_rel_pose
         self.rand_init_robot_joint = None
         self.rand_init_nut_state = None
-        self.num_buckets = env.num_envs
+        self.num_buckets = int(2e3)
         # self.num_buckets = 1
         self.bucket_update_freq = 4
         self.gripper_action = mdp.Robotiq3FingerAction(mdp.Robotiq3FingerActionCfg(
@@ -184,6 +184,7 @@ class reset_scene_to_grasp_state(ManagerTermBase):
             # step b: maximize noise
             raise NotImplementedError
         full_joint_state = cached_state["robot"]["joint_state"]["position"]
+        # full_joint_state[:, 6] = -2.7
         full_nut_state = cached_state["nut"]["root_state"]
         canonical_tool_pos = torch.tensor([0.7797, 0.4993, 0.8467], device=env.device)
         canonical_robot_base = torch.tensor([-0.15, -0.5, -0.8], device=env.device)
@@ -192,7 +193,9 @@ class reset_scene_to_grasp_state(ManagerTermBase):
         if self.reset_randomize_mode == "task":
             arm_state = full_joint_state[:, :7]
             default_tool_pose = self.curobo_arm.forward_kinematics(arm_state.clone()).ee_pose
-            default_tool_pose.position = detault_tool_pos
+            if torch.norm(canonical_tool_pos - self.robot_base_pose.position) > 0.01:
+                default_tool_pose.position = detault_tool_pos
+            # default_tool_pose.position = detault_tool_pos
             # default_tool_pose.position[0, 0] = 0.7797
             # default_tool_pose.position[0, 1] = 0.5
             # default_tool_pose.position[0, 2] = 0.8467
@@ -213,14 +216,19 @@ class reset_scene_to_grasp_state(ManagerTermBase):
                 delta_rot[:, 0], delta_rot[:, 1], delta_rot[:, 2]
             )
 
-            # [-0.15, -0.5, -0.8]
             delta_pose = Pose(position=torch.zeros((B, 3), device=env.device), quaternion=delta_quat)
             randomized_nut_pose = default_nut_pose.multiply(delta_pose)
             randomized_nut_pose.position += delta_trans
-            randomized_tool_pose = randomized_nut_pose.multiply(tool_nut_rel_pose)
-
+            randomized_tool_pose = randomized_nut_pose.multiply(tool_nut_rel_pose.inverse())
             ik_result = self.curobo_arm.compute_ik(randomized_tool_pose)
             randomized_joint_state = full_joint_state.repeat(B, 1).contiguous()
+            # is_valid_ik = ik_result.error.squeeze(1) < 6e-4
+            # valid_ik = ik_result.solution[is_valid_ik, 0]
+            # valid_num = valid_ik.shape[0]
+            # select_index = torch.randint(0, valid_num, (B,), device=env.device)
+            # valid_ik = valid_ik[select_index]
+            # randomized_joint_state[:, :7] = valid_ik
+            # randomized_nut_pose = randomized_nut_pose[is_valid_ik][select_index]
             randomized_joint_state[:, :7] = ik_result.solution.squeeze(1)
             randomized_nut_state = full_nut_state.repeat(B, 1).contiguous()
             if self.reset_close_gripper is not None:
