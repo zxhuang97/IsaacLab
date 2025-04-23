@@ -387,6 +387,9 @@ def terminate_if_far_from_bolt(env):
     diff = mdp.rel_nut_bolt_tip_distance(env)
     return torch.norm(diff, dim=-1) > 0.05
 
+def terminate_if_nut_unstable(env):
+    nut_ang_vel = torch.norm(env.unwrapped.scene["nut"].data.root_ang_vel_w, dim=-1)
+    return nut_ang_vel > 50
 
 def initialize_contact_properties(
     env: ManagerBasedEnv,
@@ -493,7 +496,7 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         termination_params = self.params.terminations
         termination_params.far_from_bolt = termination_params.get("far_from_bolt", False)
         termination_params.nut_fallen = termination_params.get("nut_fallen", False)
-
+        termination_params.nut_unstable = termination_params.get("nut_unstable", False)
         events_params = self.params.events
         events_params.reset_target = events_params.get("reset_target", "rigid_grasp_open_align")
         events_params.reset_range_scale = events_params.get("reset_range_scale", 1.0)
@@ -797,6 +800,8 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
             self.terminations.nut_fallen = DoneTerm(func=terminate_if_nut_fallen)
         if termination_params.far_from_bolt:
             self.terminations.far_from_bolt = DoneTerm(func=terminate_if_far_from_bolt)
+        if termination_params.nut_unstable:
+            self.terminations.nut_unstable = DoneTerm(func=terminate_if_nut_unstable)
         self.scene.nut.spawn.activate_contact_sensors = True
 
         # rewards
