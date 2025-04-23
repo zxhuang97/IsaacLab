@@ -134,6 +134,10 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
         
         full_joint_state = cached_state["robot"]["joint_state"]["position"]
         full_nut_state = cached_state["nut"]["root_state"]
+        canonical_tool_pos = torch.tensor([0.7797, 0.4993, 0.8467], device=env.device)
+        canonical_robot_base = torch.tensor([-0.15, -0.5, -0.8], device=env.device)
+        detault_tool_pos = canonical_tool_pos + canonical_robot_base - self.robot_base_pose.position
+
 
         if self.reset_randomize_mode == "task":
             arm_state = full_joint_state[:, :7]
@@ -142,6 +146,7 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
             # Compute scaled tool default position
             # Account for differences of bolt heights
             default_tool_pose = self.curobo_arm.forward_kinematics(arm_state.clone()).ee_pose
+            default_tool_pose.position = detault_tool_pos
             default_tool_pose = default_tool_pose.repeat(num_envs)
             delta_z = (env.cfg.bolt_heights - env.cfg.base_bolt_height).reshape(-1)
             # delta_z += 0.005

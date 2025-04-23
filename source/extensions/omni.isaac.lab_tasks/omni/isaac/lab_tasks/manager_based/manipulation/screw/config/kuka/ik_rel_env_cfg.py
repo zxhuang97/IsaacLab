@@ -185,11 +185,14 @@ class reset_scene_to_grasp_state(ManagerTermBase):
             raise NotImplementedError
         full_joint_state = cached_state["robot"]["joint_state"]["position"]
         full_nut_state = cached_state["nut"]["root_state"]
-        default_bolt_pos = torch.tensor([0.63, 0, 0.0], device=env.device)
-        tgt_bolt_pos = torch.tensor([0.63, 0, 0.0], device=env.device)
+        canonical_tool_pos = torch.tensor([0.7797, 0.4993, 0.8467], device=env.device)
+        canonical_robot_base = torch.tensor([-0.15, -0.5, -0.8], device=env.device)
+        detault_tool_pos = canonical_tool_pos + canonical_robot_base - self.robot_base_pose.position
+
         if self.reset_randomize_mode == "task":
             arm_state = full_joint_state[:, :7]
             default_tool_pose = self.curobo_arm.forward_kinematics(arm_state.clone()).ee_pose
+            default_tool_pose.position = detault_tool_pos
             # default_tool_pose.position[0, 0] = 0.7797
             # default_tool_pose.position[0, 1] = 0.5
             # default_tool_pose.position[0, 2] = 0.8467
@@ -515,8 +518,8 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         robot.init_state.pos = robot_params.init_pos
         # robot.init_state.pos = list(robot.init_state.pos )
 
-        # robot.spawn.collision_props.contact_offset = robot_params.contact_offset
-        # robot.spawn.collision_props.rest_offset = robot_params.rest_offset
+        robot.spawn.collision_props.contact_offset = robot_params.contact_offset
+        robot.spawn.collision_props.rest_offset = robot_params.rest_offset
         robot.spawn.rigid_props.max_depenetration_velocity = robot_params.max_depenetration_velocity
         robot.spawn.rigid_props.sleep_threshold = robot_params.sleep_threshold
         robot.spawn.rigid_props.stabilization_threshold = robot_params.stabilization_threshold

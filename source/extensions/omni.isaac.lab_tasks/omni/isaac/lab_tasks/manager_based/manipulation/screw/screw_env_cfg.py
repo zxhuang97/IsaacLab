@@ -472,6 +472,8 @@ class BaseScrewEnvCfg(ManagerBasedRLEnvCfg):
         nut_params.stabilization_threshold = nut_params.get("stabilization_threshold", None)
         nut_params.linear_damping = nut_params.get("linear_damping", None)
         nut_params.angular_damping = nut_params.get("angular_damping", None)
+        nut_params.max_linear_velocity = nut_params.get("max_linear_velocity", None)
+        nut_params.max_angular_velocity = nut_params.get("max_angular_velocity", None)
 
     def __post_init__(self):
         """Post initialization."""
@@ -498,6 +500,8 @@ class BaseScrewEnvCfg(ManagerBasedRLEnvCfg):
         nut.spawn.rigid_props.stabilization_threshold = nut_params.stabilization_threshold
         nut.spawn.rigid_props.linear_damping = nut_params.linear_damping
         nut.spawn.rigid_props.angular_damping = nut_params.angular_damping
+        nut.spawn.rigid_props.max_linear_velocity = nut_params.max_linear_velocity
+        nut.spawn.rigid_props.max_angular_velocity = nut_params.max_angular_velocity
 
         self.episode_length_s = 24   # 24, 10 for sim quality test
         self.viewer.origin_type = "asset_root"
