@@ -734,20 +734,33 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
                 height=720,
             )
         if obs_params.use_obs_camera:
+            zivid_intrinsic = [
+            891.52, 0.0, -377.26,
+            0.0, 891.65, -215.05,
+            0.0, 0.0, 1.0
+            ]
             self.scene.obs_camera = TiledCameraCfg(
                 prim_path="{ENV_REGEX_NS}/DepthCamera",
                 offset=TiledCameraCfg.OffsetCfg(
-                    pos=(1.0, 0.1, 0.12),
+                    pos=(1.0, 0.1, 0.11),
                     rot=[0.4402, -0.4498, -0.5456, 0.5534],
+                    # pos=(1.0, 0., 0.2),
+                    # rot=[0.514943, -0.168307, -0.1039081, 0.8340919], # not working... buggy
                     convention="ros",
                 ),
                 data_types=obs_params.obs_camera_type,
                 spawn=sim_utils.PinholeCameraCfg(clipping_range=(0.0001, 0.5)),
-                width=200,
-                height=200,
+                # spawn=sim_utils.PinholeCameraCfg.from_intrinsic_matrix(
+                #     zivid_intrinsic, 200, 200, clipping_range=(0.0001, 0.7),
+                #     focal_length=24.0,
+                #     focus_distance=400.0,
+                #     ),
+                width=224,
+                height=224,
             )
             # -90 78 179
             # -30 71 121
+            # 0 75 90
 
         # events
         event_params = self.params.events
