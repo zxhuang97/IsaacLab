@@ -147,7 +147,7 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
             # Compute scaled tool default position
             # Account for differences of bolt heights
             default_tool_pose = self.curobo_arm.forward_kinematics(arm_state.clone()).ee_pose
-            default_tool_pose.position = detault_tool_pos
+            # default_tool_pose.position = detault_tool_pos
             default_tool_pose = default_tool_pose.repeat(num_envs)
             delta_z = (env.cfg.bolt_heights - env.cfg.base_bolt_height).reshape(-1)
             # delta_z += 0.005
@@ -206,7 +206,6 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
             randomized_joint_state[:, :7] = ik_results
             randomized_nut_state = full_nut_state.repeat(num_envs*B, 1).contiguous()
             if self.reset_close_gripper is not None:
-                # NOTE(zixuan): adjust the close_finger_open according to nut scale.
                 cur_gripper_joint = full_joint_state[:, self.gripper_action._joint_ids]
                 target_gripper_joint = torch.zeros(num_envs*B, 11, device=env.device, dtype=torch.float32)
                 cur_finger_open = mdp.inverse_compute_finger_angles_jit(cur_gripper_joint)[:, 0]

@@ -119,6 +119,12 @@ def incoming_wrench_mag(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> to
     wrench = mdp.body_incoming_wrench(env, asset_cfg)
     return torch.norm(wrench, dim=-1)
 
+def nut_ang_vel_reward(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+    # penalize if nut is unstable and move fast
+    nut_ang_vel = env.scene["nut"].data.root_ang_vel_w
+    nut_ang_vel_mag = torch.norm(nut_ang_vel, dim=-1)
+    nut_ang_vel_mag = torch.clamp(nut_ang_vel_mag-10, min=0, max=200)
+    return torch.norm(nut_ang_vel, dim=-1)
 # def incoming_wrench_smooth(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
 #     wrench = mdp.body_incoming_wrench(env, asset_cfg)
 #     return torch.norm(wrench, dim=-1)

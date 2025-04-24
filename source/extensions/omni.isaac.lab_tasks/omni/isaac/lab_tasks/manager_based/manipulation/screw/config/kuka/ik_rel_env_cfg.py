@@ -389,7 +389,8 @@ def terminate_if_far_from_bolt(env):
 
 def terminate_if_nut_unstable(env):
     nut_ang_vel = torch.norm(env.unwrapped.scene["nut"].data.root_ang_vel_w, dim=-1)
-    return nut_ang_vel > 50
+    terminate_flag = nut_ang_vel > 200
+    return terminate_flag
 
 def initialize_contact_properties(
     env: ManagerBasedEnv,
