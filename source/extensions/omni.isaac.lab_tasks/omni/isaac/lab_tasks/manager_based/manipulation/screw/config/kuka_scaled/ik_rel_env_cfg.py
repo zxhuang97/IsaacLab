@@ -210,7 +210,7 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
                 target_gripper_joint = torch.zeros(num_envs*B, 11, device=env.device, dtype=torch.float32)
                 cur_finger_open = mdp.inverse_compute_finger_angles_jit(cur_gripper_joint)[:, 0]
                 cur_finger_scissor = mdp.inverse_compute_scissor_angle_jit(cur_gripper_joint[:, -2:])[:, 0]
-                close_finger_open = torch.tensor(0.32, device=env.device) # 0.33 is fully closed for m16
+                close_finger_open = torch.tensor(0.31, device=env.device) # 0.33 is fully closed for m16
                 close_finger_scissor = torch.tensor(0.275, device=env.device)
                 if self.reset_close_gripper == "close":
                     tgt_finger_open = close_finger_open
