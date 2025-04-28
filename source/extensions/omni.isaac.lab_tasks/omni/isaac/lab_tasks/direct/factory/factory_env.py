@@ -20,7 +20,7 @@ from omni.isaac.lab.utils.math import axis_angle_from_quat
 
 from omni.isaac.lab.sensors import TiledCamera
 from omni.isaac.lab.sensors.contact_sensor import ContactSensor, ContactSensorCfg
-
+import omni.isaac.lab.utils.math as math_utils
 
 from . import factory_control as fc
 from .factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG, FactoryEnvCfg
@@ -57,7 +57,6 @@ class FactoryEnv(DirectRLEnv):
         self.default_gains = torch.tensor(self.cfg.ctrl.default_task_prop_gains, device=self.device).repeat(
             (self.num_envs, 1)
         )
-
         self.pos_threshold = torch.tensor(self.cfg.ctrl.pos_action_threshold, device=self.device).repeat(
             (self.num_envs, 1)
         )
@@ -185,7 +184,7 @@ class FactoryEnv(DirectRLEnv):
                 mean=mean, std=std, size=(self.num_envs,)
             ).to(self.device)
         else:
-            self.asset_scale_samples = None
+            self.asset_scale_samples = torch.ones((self.num_envs,)).to(self.device)
             return
         
         # Update all the parameters in the task config
@@ -356,29 +355,18 @@ class FactoryEnv(DirectRLEnv):
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
 
-        # Add contact sensor
-        # if self.cfg.name == "peg_insert":
-        #     contact_filter_path = self.cfg.peg_insert_contact_filter_path
-        # elif self.cfg.name == "gear_mesh":
-        #     contact_filter_path = self.cfg.gear_mesh_contact_filter_path
-        # elif self.cfg.name == "nut_thread":
-        #     contact_filter_path = self.cfg.nut_thread_contact_filter_path
         contact_filter_path = self.cfg.contact_filter_path
-        contact_sensor_cfg = ContactSensorCfg(
-            # prim_path="/World/envs/env_.*/HeldAsset/.*",
-            prim_path="/World/envs/env_.*/HeldAsset/.*",
-            filter_prim_paths_expr=contact_filter_path,
-            # debug_vis=True,
-            history_length=6,
-            update_period=1/60.0,
-        )
-        self._contact_sensor = ContactSensor(contact_sensor_cfg)
+        self._contact_sensor = ContactSensor(self.cfg.contact_sensor_cfg)
         self.scene.sensors["contact_sensor"] = self._contact_sensor
 
         # Add a camera
         if self.cfg.use_tiled_camera:
             self._tiled_camera = TiledCamera(self.cfg.tiled_camera_cfg)
             self.scene.sensors["tiled_camera"] = self._tiled_camera
+        if self.cfg.use_obs_camera:
+            self._obs_camera = TiledCamera(self.cfg.obs_camera_cfg)
+            self.scene.sensors["obs_camera"] = self._obs_camera
+
 
     def _compute_intermediate_values(self, dt):
         """Get values computed from raw tensors. This includes adding noise."""
@@ -464,7 +452,6 @@ class FactoryEnv(DirectRLEnv):
         noisy_fixed_pos = self.fixed_pos_obs_frame + self.init_fixed_pos_obs_noise
 
         prev_actions = self.actions.clone()
-
         obs_dict = {
             "fingertip_pos": self.fingertip_midpoint_pos,
             "fingertip_pos_rel_fixed": self.fingertip_midpoint_pos - noisy_fixed_pos,
@@ -472,6 +459,7 @@ class FactoryEnv(DirectRLEnv):
             "ee_linvel": self.ee_linvel_fd,
             "ee_angvel": self.ee_angvel_fd,
             "prev_actions": prev_actions,
+            "scales": self.asset_scale_samples.unsqueeze(-1),
         }
 
         state_dict = {
@@ -490,6 +478,7 @@ class FactoryEnv(DirectRLEnv):
             "pos_threshold": self.pos_threshold,
             "rot_threshold": self.rot_threshold,
             "prev_actions": prev_actions,
+            "scales": self.asset_scale_samples.unsqueeze(-1),
         }
         obs_tensors = [obs_dict[obs_name] for obs_name in self.cfg.obs_order + ["prev_actions"]]
         obs_tensors = torch.cat(obs_tensors, dim=-1)
@@ -743,7 +732,6 @@ class FactoryEnv(DirectRLEnv):
         We assume all envs will always be reset at the same time.
         """
         super()._reset_idx(env_ids)
-        # print(f"Resetting env {env_ids}")
 
         self._set_assets_to_default_pose(env_ids)
         self._set_franka_to_default_pose(joints=self.cfg.ctrl.reset_joints, env_ids=env_ids)
@@ -926,7 +914,7 @@ class FactoryEnv(DirectRLEnv):
         fixed_asset_pos_noise = torch.randn((len(env_ids), 3), dtype=torch.float32, device=self.device)
         fixed_asset_pos_rand = torch.tensor(self.cfg.obs_rand.fixed_asset_pos, dtype=torch.float32, device=self.device)
         fixed_asset_pos_noise = fixed_asset_pos_noise @ torch.diag(fixed_asset_pos_rand)
-        self.init_fixed_pos_obs_noise[env_ids,:] = fixed_asset_pos_noise
+        self.init_fixed_pos_obs_noise[:] = fixed_asset_pos_noise
 
         self.step_sim_no_action()
 
@@ -1048,13 +1036,22 @@ class FactoryEnv(DirectRLEnv):
         self.held_asset_pos_noise = 2 * (rand_sample - 0.5)  # [-1, 1]
         if self.cfg_task.name == "gear_mesh":
             self.held_asset_pos_noise[:, 2] = -rand_sample[:, 2]  # [-1, 0]
-
         held_asset_pos_noise = torch.tensor(self.cfg_task.held_asset_pos_noise, device=self.device)
         self.held_asset_pos_noise = self.held_asset_pos_noise @ torch.diag(held_asset_pos_noise)
+        # Additionally, randomize orientation
+        # Randomize rotation
+        rand_sample = torch.rand((self.num_envs, 3), dtype=torch.float32, device=self.device)
+        held_asset_rot_sample = 2 * (rand_sample - 0.5)  # [-1, 1]
+        held_asset_rot_noise = torch.tensor(self.cfg_task.held_asset_rot_noise, device=self.device)
+        held_asset_rot_noise = held_asset_rot_sample @ torch.diag(held_asset_rot_noise)
+        self.held_asset_quat_noise = math_utils.quat_from_euler_xyz(
+            held_asset_rot_noise[:, 0], held_asset_rot_noise[:, 1], held_asset_rot_noise[:, 2]
+        )
         translated_held_asset_quat, translated_held_asset_pos = torch_utils.tf_combine(
             q1=translated_held_asset_quat,
             t1=translated_held_asset_pos,
-            q2=self.identity_quat,
+            # q2=self.identity_quat,
+            q2=self.held_asset_quat_noise,
             t2=self.held_asset_pos_noise,
         )
 

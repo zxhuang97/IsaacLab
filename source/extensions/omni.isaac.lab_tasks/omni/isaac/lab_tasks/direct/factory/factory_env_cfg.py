@@ -29,6 +29,7 @@ OBS_DIM_CFG = {
     "fingertip_quat": 4,
     "ee_linvel": 3,
     "ee_angvel": 3,
+    "scales": 1,
 }
 
 STATE_DIM_CFG = {
@@ -47,13 +48,14 @@ STATE_DIM_CFG = {
     "ema_factor": 1,
     "pos_threshold": 3,
     "rot_threshold": 3,
+    "scales": 1,
 }
 
 
 @configclass
 class ObsRandCfg:
-    # fixed_asset_pos = [0.001, 0.001, 0.001]
-    fixed_asset_pos = [0.0, 0.0, 0.0]
+    fixed_asset_pos = [0.001, 0.001, 0.001]
+    # fixed_asset_pos = [0.0, 0.0, 0.0]
 
 
 @configclass
@@ -197,16 +199,6 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         },
     )
 
-    # contact_filter_path = [
-    #     "/World/envs/env_.*/FixedAsset",
-    #     "/World/envs/env_.*/LargeGearAsset",
-    #     "/World/envs/env_.*/SmallGearAsset",
-    # ]
-    # contact_filter_path = [
-    #     "/World/envs/env_.*/FixedAsset/.*",
-    #     "/World/envs/env_.*/LargeGearAsset/.*",
-    #     "/World/envs/env_.*/SmallGearAsset/.*",
-    # ]
     contact_filter_path = [
         "/World/envs/env_.*/FixedAsset/forge_hole_8mm/forge_hole_8mm",
         "/World/envs/env_.*/FixedAsset/factory_bolt_loose",
@@ -217,6 +209,14 @@ class FactoryEnvCfg(DirectRLEnvCfg):
 
     # Wrench config
     wrench_joint_cfg = SceneEntityCfg("robot", body_names=["panda_link7"])
+
+    contact_sensor_cfg = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/HeldAsset/.*",
+        filter_prim_paths_expr=contact_filter_path,
+        # debug_vis=True,
+        history_length=6,
+        update_period=1/60.0,
+    )
 
     cam_offset_cfg = CameraCfg.OffsetCfg(
         pos=(1, 0.0, 0.15),
@@ -243,14 +243,27 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         prim_path='/World/envs/env_.*/Camera',
         spawn=ph_cfg
     )
+    obs_camera_cfg = TiledCameraCfg(
+        prim_path="/World/envs/env_.*/DepthCamera",
+        offset=TiledCameraCfg.OffsetCfg(
+            pos=(1.0, 0.1, 0.12),
+            rot=[0.4402, -0.4498, -0.5456, 0.5534],
+            convention="ros",
+        ),
+        data_types=["distance_to_image_plane"],
+        spawn=sim_utils.PinholeCameraCfg(clipping_range=(0.0001, 0.5)),
+        width=200,
+        height=200,
+    )
+    # -90 78 179
+    # -30 71 121
 
-    # Add in scale randomization of assets. 
+    # Add in scale randomization of assets.
     randomize_scale_method= "none"    # gaussian/uniform/none, implemented in factory_env
     # Scale range for held asset
     # For uniform, [min, max]
     # For gaussian, [mean, std]
     randomize_scale_range = (0.5, 2.0)
-
 
     # To enable experiments with cfg dicts
     params = OmegaConf.create()
@@ -279,68 +292,49 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         # Sim
         params_sim = params.get("sim", OmegaConf.create())
         self.sim.dt = params_sim.get("dt", self.sim.dt)
-        # Physx
-        # params.sim.physx = params.sim.get("physx", OmegaConf.create())
-        # update_terminals(self.sim.physx, params.sim.physx, [    
-        #     "friction_offset_threshold", 
-        #     "enable_ccd"
-        # ])  
 
         # # --- Observation Randomization Config ---
         # # Here we keep the whole config group in params.
-        params_obs_rand = params.get("obs_rand", OmegaConf.create())
-        custom_obs_rand = params_obs_rand.get("fixed_asset_pos", None)
-        if custom_obs_rand is not None:
-            ObsRandCfg.fixed_asset_pos = custom_obs_rand
-            self.obs_rand = ObsRandCfg(fixed_asset_pos=custom_obs_rand)
-            # self.obs_rand.fixed_asset_pos = custom_obs_rand
-        
-        # # --- Control Config ---
-        # params.ctrl = params.get("ctrl", {})
-        # update_terminals(self.ctrl, params.ctrl, [
-        #     "pos_action_bounds",
-        #     "rot_action_bounds",
-        #     "pos_action_threshold",
-        #     "rot_action_threshold",
-        #     "reset_joints",
-        #     "reset_task_prop_gains",
-        #     "reset_rot_deriv_scale",
-        #     "default_task_prop_gains"
-        # ])
+        params_obs = params.get("observations", OmegaConf.create())
+        fixed_asset_pos_noise = params_obs.get("fixed_asset_pos_noise", None)
+        if fixed_asset_pos_noise is not None:
+            ObsRandCfg.fixed_asset_pos = fixed_asset_pos_noise
+            self.obs_rand = ObsRandCfg(fixed_asset_pos=tuple(fixed_asset_pos_noise))
+        include_scale = params_obs.get("include_scale", False)
+        if include_scale:
+            self.obs_order.append("scales")
+            self.state_order.append("scales")
+            self.observation_space += 1
+            self.state_space += 1
+
+        # Update observation camera
+        self.use_tiled_camera = params_obs.get("use_tiled_camera", False)
+        self.use_obs_camera = params_obs.get("use_obs_camera", False)
+        obs_camera_type = params_obs.get("obs_camera_type", ["distance_to_image_plane"])
+        self.obs_camera_cfg.data_types = obs_camera_type
 
         # # NutThread Task related properties
         params_taskcfg = params.get("taskcfg", {})
         asset_scale_randomization = params_taskcfg.get("randomize_scale_method", "none")
         if asset_scale_randomization not in ["gaussian", "uniform", "none"]:
             print(f"Warning: asset_scale_randomization '{asset_scale_randomization}' is not recognized, using 'none'.")
+            asset_scale_randomization = "none"
         self.randomize_scale_method = asset_scale_randomization
+        scale_range = params_taskcfg.get("randomize_scale_range", None)
         # Update scale
-        if self.randomize_scale_method in ["gaussian", "uniform"]:
-            scale_range = params_taskcfg.get("randomize_scale_range", None)
-            if scale_range is not None:
-                if len(scale_range) == 2:
-                    if isinstance(scale_range, ListConfig):
-                        scale_range = OmegaConf.to_container(scale_range, resolve=True)
-                    self.randomize_scale_range = tuple(scale_range)
-                else:
-                    print(f"Warning: 'randomize_scale_range' should be a list/tuple of length 2, using default {self.randomize_scale_range}.")
-        
-        # update_terminals(self.task_class, params.task_class, [
-        #     "hand_init_pos",
-        #     "hand_init_pos_noise",
-        #     "hand_init_orn",
-        #     "hand_init_orn_noise",
-        #     "unidirectional_rot",
-        #     "fixed_asset_init_pos_noise",
-        #     "fixed_asset_init_orn_deg",
-        #     "fixed_asset_init_orn_range_deg",
-        #     "held_asset_pos_noise",
-        #     "held_asset_rot_init",
-        # ])
-
-        # Sensors
-        params_observations = params.get("observations", OmegaConf.create())
-        self.use_tiled_camera = params_observations.get("use_tiled_camera", False)
+        if self.randomize_scale_method in ["gaussian", "uniform"] \
+            and scale_range is not None \
+            and len(scale_range) == 2:
+            if isinstance(scale_range, ListConfig):
+                scale_range = OmegaConf.to_container(scale_range, resolve=True)
+            self.randomize_scale_range = tuple(scale_range)
+            self.scene = InteractiveSceneCfg(
+                num_envs=128,
+                env_spacing=2.0,
+                replicate_physics=False
+            )
+        else:
+            print(f"Warning: 'randomize_scale_range' should be a list/tuple of length 2, using default {self.randomize_scale_range}.")
 
     def __post_init__(self):
         """Post initialization."""
@@ -350,8 +344,10 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         # self.episode_length_s = 24   # 24, 10 for sim quality test
         self.viewer.origin_type = "asset_root"
         self.viewer.asset_name = "fixed_asset"
-        self.viewer.eye = (0.1, 0.1, 0.06)
-        self.viewer.lookat = (0, 0.0, 0.04)
+        # self.viewer.eye = (0.1, 0.1, 0.06)
+        # self.viewer.lookat = (0, 0.0, 0.04)
+        self.viewer.eye = (0.37, 0.1, 0.12)
+        self.viewer.lookat = (0.0, 0.0, 0.03)
         self.viewer.resolution = (720, 720)
 
 

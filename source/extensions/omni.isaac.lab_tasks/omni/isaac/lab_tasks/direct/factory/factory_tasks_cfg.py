@@ -65,6 +65,9 @@ class FactoryTask:
     # Held Asset (applies to all tasks)
     held_asset_pos_noise: list = [0.0, 0.006, 0.003]  # noise level of the held asset in gripper
     held_asset_rot_init: float = -90.0
+    # Additional rotation noise for asset
+    held_asset_rot_noise: list = [0.0, 0.0, 0.0]
+    # held_asset_rot_noise: list = [0.087, 0.087, 0.0]      # +- 5 deg in roll, pitch
 
     # Reward
     ee_success_yaw: float = 0.0  # nut_thread task only.
