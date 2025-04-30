@@ -71,8 +71,8 @@ class FactoryTask:
 
     # Reward
     ee_success_yaw: float = 0.0  # nut_thread task only.
-    action_penalty_scale: float = 0.0
-    action_grad_penalty_scale: float = 0.0
+    action_penalty_scale: float = 0.01
+    action_grad_penalty_scale: float = 1
     # Reward function details can be found in Appendix B of https://arxiv.org/pdf/2408.04587.
     # Multi-scale keypoints are used to capture different phases of the task.
     # Each reward passes the keypoint distance, x, through a squashing function:

@@ -60,7 +60,7 @@ class ObsRandCfg:
 
 @configclass
 class CtrlCfg:
-    ema_factor = 0.2
+    ema_factor = 1
 
     pos_action_bounds = [0.05, 0.05, 0.05]
     rot_action_bounds = [1.0, 1.0, 1.0]
@@ -243,20 +243,46 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         prim_path='/World/envs/env_.*/Camera',
         spawn=ph_cfg
     )
+    # V1
+    # obs_camera_cfg = TiledCameraCfg(
+    #     prim_path="/World/envs/env_.*/DepthCamera",
+    #     offset=TiledCameraCfg.OffsetCfg(
+    #         pos=(1.0, 0.1, 0.12),
+    #         rot=[0.4402, -0.4498, -0.5456, 0.5534],
+    #         convention="ros",
+    #     ),
+    #     data_types=["distance_to_image_plane"],
+    #     spawn=sim_utils.PinholeCameraCfg(clipping_range=(0.0001, 0.5)),
+    #     width=200,
+    #     height=200,
+    # )
+    # V2
+    # obs_camera_cfg = TiledCameraCfg(
+    #     prim_path="/World/envs/env_.*/DepthCamera",
+    #     offset=TiledCameraCfg.OffsetCfg(
+    #         pos=(1, 0.2, 0.15),
+    #         rot=[0.34853, -0.3822, -0.62177, 0.5881],
+    #         convention="ros",
+    #     ),
+    #     data_types=["distance_to_image_plane"],
+    #     spawn=sim_utils.PinholeCameraCfg(clipping_range=(0.0001, 0.5)),
+    #     width=224,
+    #     height=224,
+    # )
+    # V3
     obs_camera_cfg = TiledCameraCfg(
         prim_path="/World/envs/env_.*/DepthCamera",
         offset=TiledCameraCfg.OffsetCfg(
-            pos=(1.0, 0.1, 0.12),
-            rot=[0.4402, -0.4498, -0.5456, 0.5534],
+            pos=(0.8, 0.2, 0.15),
+            rot=[0.18913, -0.25231, -0.70188, 0.6387],
             convention="ros",
         ),
         data_types=["distance_to_image_plane"],
         spawn=sim_utils.PinholeCameraCfg(clipping_range=(0.0001, 0.5)),
-        width=200,
-        height=200,
+        width=224,
+        height=224,
     )
-    # -90 78 179
-    # -30 71 121
+
 
     # Add in scale randomization of assets.
     randomize_scale_method= "none"    # gaussian/uniform/none, implemented in factory_env
