@@ -478,6 +478,7 @@ class BaseScrewEnvCfg(ManagerBasedRLEnvCfg):
     def __post_init__(self):
         """Post initialization."""
         self.get_default_env_params()
+        self.task = self.params.task
         self.screw_type = self.params.scene.screw_type
         self.scene = ScrewSceneCfg(
             num_envs=4096,
