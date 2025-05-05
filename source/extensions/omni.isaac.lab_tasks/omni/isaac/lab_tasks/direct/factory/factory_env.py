@@ -4,7 +4,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from copy import deepcopy
-from time import perf_counter
 import numpy as np
 import torch
 
@@ -34,8 +33,7 @@ class FactoryEnv(DirectRLEnv):
         cfg.state_space = sum([STATE_DIM_CFG[state] for state in cfg.state_order])
         cfg.observation_space += cfg.action_space
         cfg.state_space += cfg.action_space
-        # cfg.task -> cfg.task_class
-        self.cfg_task = cfg.task_class
+        self.cfg_task = cfg.task_class      # originally cfg.task
 
         super().__init__(cfg, render_mode, **kwargs)
 
@@ -57,6 +55,7 @@ class FactoryEnv(DirectRLEnv):
         self.default_gains = torch.tensor(self.cfg.ctrl.default_task_prop_gains, device=self.device).repeat(
             (self.num_envs, 1)
         )
+
         self.pos_threshold = torch.tensor(self.cfg.ctrl.pos_action_threshold, device=self.device).repeat(
             (self.num_envs, 1)
         )
@@ -99,13 +98,8 @@ class FactoryEnv(DirectRLEnv):
             held_base_z_offset = 0.0
         elif self.cfg_task.name == "gear_mesh":
             gear_base_offset = self._get_target_gear_base_offset()
-            # Changed for vectorized
-            if isinstance(gear_base_offset, torch.Tensor) and len(gear_base_offset.shape) == 2:
-                held_base_x_offset = gear_base_offset[:, 0]  # Use the first env's offset for all envs
-                held_base_z_offset = gear_base_offset[:, 2]  # Use the first env's offset for all envs
-            else:
-                held_base_x_offset = gear_base_offset[0]
-                held_base_z_offset = gear_base_offset[2]
+            held_base_x_offset = gear_base_offset[..., 0]
+            held_base_z_offset = gear_base_offset[..., 2]
         elif self.cfg_task.name == "nut_thread":
             held_base_z_offset = self.cfg_task.fixed_asset_cfg.base_height
         else:
@@ -145,12 +139,8 @@ class FactoryEnv(DirectRLEnv):
             self.fixed_success_pos_local[:, 2] = 0.0
         elif self.cfg_task.name == "gear_mesh":
             gear_base_offset = self._get_target_gear_base_offset()
-            if isinstance(gear_base_offset, torch.Tensor) and len(gear_base_offset.shape) == 2:
-                self.fixed_success_pos_local[:, 0] = gear_base_offset[:, 0]
-                self.fixed_success_pos_local[:, 2] = gear_base_offset[:, 2]
-            else:
-                self.fixed_success_pos_local[:, 0] = gear_base_offset[0]
-                self.fixed_success_pos_local[:, 2] = gear_base_offset[2]
+            self.fixed_success_pos_local[:, 0] = gear_base_offset[...,0]
+            self.fixed_success_pos_local[:, 2] = gear_base_offset[...,2]
         elif self.cfg_task.name == "nut_thread":
             head_height = self.cfg_task.fixed_asset_cfg.base_height
             shank_length = self.cfg_task.fixed_asset_cfg.height
@@ -199,36 +189,6 @@ class FactoryEnv(DirectRLEnv):
             self.cfg_task.fixed_asset_cfg.thread_pitch = (
                 asset_scale_samples * self.cfg_task.fixed_asset_cfg.thread_pitch
             ).to(self.device)
-        # self.cfg_task.fixed_asset_cfg.base_height = (
-        #     asset_scale_samples * self.cfg_task.fixed_asset_cfg.height
-        # ).to(self.device)
-        # if self.cfg_task.name == "gear_mesh":
-        #     self.cfg_task.fixed_asset_cfg.small_gear_base_offset = (
-        #         asset_scale_samples.reshape(-1,1) * \
-        #         torch.tensor(
-        #             self.cfg_task.fixed_asset_cfg.small_gear_base_offset
-        #         ).reshape(1,-1).to(self.device)
-        #     ).to(self.device)
-        #     self.cfg_task.fixed_asset_cfg.medium_gear_base_offset = (
-        #         asset_scale_samples.reshape(-1,1) * \
-        #         torch.tensor(
-        #             self.cfg_task.fixed_asset_cfg.medium_gear_base_offset
-        #         ).reshape(1,-1).to(self.device)
-        #     ).to(self.device)
-        #     self.cfg_task.fixed_asset_cfg.large_gear_base_offset = (
-        #         asset_scale_samples.reshape(-1,1) * \
-        #         torch.tensor(
-        #             self.cfg_task.fixed_asset_cfg.large_gear_base_offset
-        #         ).reshape(1,-1).to(self.device)
-        #     ).to(self.device)
-
-        # # Update held asset scale
-        # self.cfg_task.held_asset_cfg.diameter = (
-        #     asset_scale_samples * self.cfg_task.held_asset_cfg.diameter
-        # ).to(self.device)
-        # self.cfg_task.held_asset_cfg.height = (
-        #     asset_scale_samples * self.cfg_task.held_asset_cfg.height
-        # ).to(self.device)
 
         # Set to self
         self.asset_scale_samples = asset_scale_samples
@@ -320,18 +280,14 @@ class FactoryEnv(DirectRLEnv):
             if self.cfg_task.name == "gear_mesh":
                 self.cfg_task.small_gear_cfg = self.multiplicate_assets(self.cfg_task.small_gear_cfg)
                 self.cfg_task.large_gear_cfg = self.multiplicate_assets(self.cfg_task.large_gear_cfg)
-                
-            start_time = perf_counter()
+
             self._robot = Articulation(self.cfg.robot)
             self._fixed_asset = Articulation(self.cfg_task.fixed_asset)
             self._held_asset = Articulation(self.cfg_task.held_asset)
             if self.cfg_task.name == "gear_mesh":
                 self._small_gear_asset = Articulation(self.cfg_task.small_gear_cfg)
                 self._large_gear_asset = Articulation(self.cfg_task.large_gear_cfg)
-            print("Spawned randomly-scaled assets in", perf_counter() - start_time, "seconds")
-
         else:
-            start_time = perf_counter()
             self._robot = Articulation(self.cfg.robot)
             self._fixed_asset = Articulation(self.cfg_task.fixed_asset)
             self._held_asset = Articulation(self.cfg_task.held_asset)
@@ -343,7 +299,6 @@ class FactoryEnv(DirectRLEnv):
             self.scene.clone_environments(copy_from_source=False)
             self.scene.filter_collisions()
 
-        self.scene.articulations["robot"] = self._robot
         self.scene.articulations["robot"] = self._robot
         self.scene.articulations["fixed_asset"] = self._fixed_asset
         self.scene.articulations["held_asset"] = self._held_asset
@@ -377,9 +332,7 @@ class FactoryEnv(DirectRLEnv):
         self.held_pos = self._held_asset.data.root_pos_w - self.scene.env_origins
         self.held_quat = self._held_asset.data.root_quat_w
 
-        self.fingertip_midpoint_pos = (
-            self._robot.data.body_pos_w[:, self.fingertip_body_idx] - self.scene.env_origins
-        )
+        self.fingertip_midpoint_pos = self._robot.data.body_pos_w[:, self.fingertip_body_idx] - self.scene.env_origins
         self.fingertip_midpoint_quat = self._robot.data.body_quat_w[:, self.fingertip_body_idx]
         self.fingertip_midpoint_linvel = self._robot.data.body_lin_vel_w[:, self.fingertip_body_idx]
         self.fingertip_midpoint_angvel = self._robot.data.body_ang_vel_w[:, self.fingertip_body_idx]
@@ -626,8 +579,6 @@ class FactoryEnv(DirectRLEnv):
         """Update intermediate values used for rewards and observations."""
         self._compute_intermediate_values(dt=self.physics_dt)
         time_out = self.episode_length_buf >= self.max_episode_length - 1
-        # print("Time out indices:", (time_out==1).nonzero(as_tuple=True))
-        # print(self.episode_length_buf)
         return time_out, time_out
 
     def _get_curr_successes(self, success_threshold, check_rot=False):
@@ -649,7 +600,6 @@ class FactoryEnv(DirectRLEnv):
         # Consider scale sample
         if self.asset_scale_samples is not None:
             height_threshold /= self.asset_scale_samples  # Scale height threshold by the random scale sample
-        
         is_close_or_below = torch.where(
             z_disp < height_threshold, torch.ones_like(curr_successes), torch.zeros_like(curr_successes)
         )
@@ -756,11 +706,6 @@ class FactoryEnv(DirectRLEnv):
             gear_base_offset = self.cfg_task.fixed_asset_cfg.small_gear_base_offset
         else:
             raise ValueError(f"{target_gear} not valid in this context!")
-        # if self.asset_scale_samples is not None:
-        #     # Scale the offset by the random scale sample for consistency
-        #     gear_base_offset = torch.tensor(
-        #         gear_base_offset, device=self.device
-        #     ).reshape(-1, 3).repeat(self.num_envs, 1) * self.asset_scale_samples.reshape(self.num_envs, 1).to(self.device)
         return gear_base_offset
 
     def _set_assets_to_default_pose(self, env_ids):
@@ -782,8 +727,7 @@ class FactoryEnv(DirectRLEnv):
     def set_pos_inverse_kinematics(self, env_ids):
         """Set robot joint position using DLS IK."""
         ik_time = 0.0
-        # while ik_time < 0.25:
-        while ik_time < 0.08:       # DEFAULT = 0.25
+        while ik_time < 0.12:       # DEFAULT = 0.25
             # Compute error to target.
             pos_error, axis_angle_error = fc.get_pose_error(
                 fingertip_midpoint_pos=self.fingertip_midpoint_pos[env_ids],
@@ -826,13 +770,8 @@ class FactoryEnv(DirectRLEnv):
         elif self.cfg_task.name == "gear_mesh":
             held_asset_relative_pos = torch.zeros_like(self.held_base_pos_local)
             gear_base_offset = self._get_target_gear_base_offset()
-            if isinstance(gear_base_offset, torch.Tensor) and len(gear_base_offset.shape) == 2:
-                held_asset_relative_pos[:, 0] += gear_base_offset[:, 0]
-                held_asset_relative_pos[:, 2] += gear_base_offset[:, 2]
-            else:
-                held_asset_relative_pos[:, 0] += gear_base_offset[0]
-                held_asset_relative_pos[:, 2] += gear_base_offset[2]
-            # This line is okay in both cases
+            held_asset_relative_pos[:, 0] += gear_base_offset[...,0]
+            held_asset_relative_pos[:, 2] += gear_base_offset[...,2]
             held_asset_relative_pos[:, 2] += self.cfg_task.held_asset_cfg.height / 2.0 * 1.1
         elif self.cfg_task.name == "nut_thread":
             held_asset_relative_pos = self.held_base_pos_local
@@ -865,7 +804,6 @@ class FactoryEnv(DirectRLEnv):
         joint_vel = torch.zeros_like(joint_pos)
         joint_effort = torch.zeros_like(joint_pos)
         self.ctrl_target_joint_pos[env_ids, :] = joint_pos
-        print(f"Resetting {len(env_ids)} envs...")
         self._robot.set_joint_position_target(self.ctrl_target_joint_pos[env_ids], env_ids=env_ids)
         self._robot.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
         self._robot.reset()
@@ -882,9 +820,6 @@ class FactoryEnv(DirectRLEnv):
 
     def randomize_initial_state(self, env_ids):
         """Randomize initial state and perform any episode-level randomization."""
-        # Profile
-        # self.profiler.enable()
-
         # Disable gravity.
         physics_sim_view = sim_utils.SimulationContext.instance().physics_sim_view
         physics_sim_view.set_gravity(carb.Float3(0.0, 0.0, 0.0))
@@ -930,11 +865,7 @@ class FactoryEnv(DirectRLEnv):
         fixed_tip_pos_local[:, 2] += self.cfg_task.fixed_asset_cfg.height
         fixed_tip_pos_local[:, 2] += self.cfg_task.fixed_asset_cfg.base_height
         if self.cfg_task.name == "gear_mesh":
-            base_offset = self._get_target_gear_base_offset()
-            if isinstance(base_offset, torch.Tensor) and len(base_offset.shape) == 2:
-                fixed_tip_pos_local[:, 0] = self._get_target_gear_base_offset()[:, 0]
-            else:
-                fixed_tip_pos_local[:, 0] = self._get_target_gear_base_offset()[0]
+            fixed_tip_pos_local[:, 0] = self._get_target_gear_base_offset()[...,0]
 
         _, fixed_tip_pos = torch_utils.tf_combine(
             self.fixed_quat, self.fixed_pos, self.identity_quat, fixed_tip_pos_local
@@ -994,7 +925,6 @@ class FactoryEnv(DirectRLEnv):
             )
 
             ik_attempt += 1
-            print(f"IK Attempt: {ik_attempt}\tBad Envs: {bad_envs.shape[0]}")
 
         self.step_sim_no_action()
 
@@ -1042,6 +972,7 @@ class FactoryEnv(DirectRLEnv):
         self.held_asset_pos_noise = 2 * (rand_sample - 0.5)  # [-1, 1]
         if self.cfg_task.name == "gear_mesh":
             self.held_asset_pos_noise[:, 2] = -rand_sample[:, 2]  # [-1, 0]
+
         held_asset_pos_noise = torch.tensor(self.cfg_task.held_asset_pos_noise, device=self.device)
         self.held_asset_pos_noise = self.held_asset_pos_noise @ torch.diag(held_asset_pos_noise)
         # Additionally, randomize orientation
@@ -1080,7 +1011,7 @@ class FactoryEnv(DirectRLEnv):
         self.step_sim_no_action()
 
         grasp_time = 0.0
-        while grasp_time < 0.08:        # DEFAULT = 0.25
+        while grasp_time < 0.12:        # DEFAULT = 0.25
             self.ctrl_target_joint_pos[env_ids, 7:] = 0.0  # Close gripper.
             self.ctrl_target_gripper_dof_pos = 0.0
             self.close_gripper_in_place()
@@ -1129,5 +1060,3 @@ class FactoryEnv(DirectRLEnv):
         self._set_gains(self.default_gains)
 
         physics_sim_view.set_gravity(carb.Float3(*self.cfg.sim.gravity))
-
-        # self.profiler.disable()

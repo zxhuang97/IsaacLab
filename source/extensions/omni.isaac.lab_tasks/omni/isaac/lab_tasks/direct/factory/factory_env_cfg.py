@@ -164,7 +164,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
                 "panda_joint4": -1.49139,
                 "panda_joint5": -0.00083,
                 "panda_joint6": 1.38774,
-            "panda_joint7": 0.0,
+                "panda_joint7": 0.0,
                 "panda_finger_joint2": 0.04,
             },
             pos=(0.0, 0.0, 0.0),
@@ -301,17 +301,6 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         # Initialize params structure
         params = self.params
 
-        # def update_terminals(container, config, keys):
-        #     """
-        #     Update each attribute in 'container' with the corresponding value
-        #     from 'config'. If a key is missing, leave the current value in 'container'.
-        #     """
-        #     for key in keys:
-        #         var = getattr(container, key)
-        #         var = config.get(key, var)
-
-        # params.scene = params.get("scene", OmegaConf.create())
-
         # Hard Coded
         # params.scene.nut = params.scene.get("nut", OmegaConf.create())
         # params.scene.screw_type = params.scene.get("screw_type", "m16_loose")  # m8_tight m16_tight
@@ -398,8 +387,6 @@ class FactoryTaskGearMeshCfg(FactoryEnvCfg):
     task_class = GearMesh()
     episode_length_s = 20.0
 
-
-from omegaconf import OmegaConf
 
 @configclass
 class FactoryTaskNutThreadCfg(FactoryEnvCfg):
