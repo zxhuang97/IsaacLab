@@ -27,6 +27,7 @@ OBS_DIM_CFG = {
     "fingertip_pos": 3,
     "fingertip_pos_rel_fixed": 3,
     "fingertip_quat": 4,
+    "held_pos": 3,
     "ee_linvel": 3,
     "ee_angvel": 3,
     "scales": 1,
@@ -86,7 +87,8 @@ class FactoryEnvCfg(DirectRLEnvCfg):
     # num_*: will be overwritten to correspond to obs_order, state_order.
     observation_space = 21
     state_space = 72
-    obs_order: list = ["fingertip_pos_rel_fixed", "fingertip_quat", "ee_linvel", "ee_angvel"]
+    obs_order: list = ["fingertip_pos_rel_fixed", "fingertip_quat", 
+    "ee_linvel", "ee_angvel"]
     state_order: list = [
         "fingertip_pos",
         "fingertip_quat",
@@ -324,14 +326,19 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         params_obs = params.get("observations", OmegaConf.create())
         fixed_asset_pos_noise = params_obs.get("fixed_asset_pos_noise", None)
         if fixed_asset_pos_noise is not None:
-            ObsRandCfg.fixed_asset_pos = fixed_asset_pos_noise
-            self.obs_rand = ObsRandCfg(fixed_asset_pos=tuple(fixed_asset_pos_noise))
+            self.obs_rand.fixed_asset_pos = tuple(fixed_asset_pos_noise)
         include_scale = params_obs.get("include_scale", False)
         if include_scale:
             self.obs_order.append("scales")
             self.state_order.append("scales")
             self.observation_space += 1
             self.state_space += 1
+        include_held_pos = params_obs.get("include_held_pos", False)
+        if include_held_pos:
+            self.obs_order.append("held_pos")
+            self.state_order.append("held_pos")
+            self.observation_space += 3
+            self.state_space += 3
 
         # Update observation camera
         self.use_tiled_camera = params_obs.get("use_tiled_camera", False)

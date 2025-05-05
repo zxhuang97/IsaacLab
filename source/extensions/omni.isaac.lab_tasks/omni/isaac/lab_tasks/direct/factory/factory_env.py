@@ -442,10 +442,10 @@ class FactoryEnv(DirectRLEnv):
         wrench_joint_id = self.cfg.wrench_joint_cfg.body_ids[0]
         link_incoming_forces = self._robot.root_physx_view.get_link_incoming_joint_force()
         link_incoming_forces = link_incoming_forces[:, wrench_joint_id]
-        self.finger_wrench = link_incoming_forces.view(self.num_envs, -1)
+        self.finger_wrench = link_incoming_forces.view(self.num_envs, -1).clone()
 
         ## ADD contact sensor reading
-        self.contact_force = self.scene["contact_sensor"].data.net_forces_w.squeeze(1)
+        self.contact_force = self.scene["contact_sensor"].data.net_forces_w.squeeze(1).clone()
 
     def _get_observations(self):
         """Get actor/critic inputs using asymmetric critic."""
@@ -453,12 +453,15 @@ class FactoryEnv(DirectRLEnv):
 
         prev_actions = self.actions.clone()
         obs_dict = {
-            "fingertip_pos": self.fingertip_midpoint_pos,
+            "fingertip_pos": self.fingertip_midpoint_pos, # not in hte obs_order
             "fingertip_pos_rel_fixed": self.fingertip_midpoint_pos - noisy_fixed_pos,
             "fingertip_quat": self.fingertip_midpoint_quat,
             "ee_linvel": self.ee_linvel_fd,
             "ee_angvel": self.ee_angvel_fd,
             "prev_actions": prev_actions,
+            "held_pos": self.held_pos,
+            # "wrench": self.finger_wrench,
+
             "scales": self.asset_scale_samples.unsqueeze(-1),
         }
 
@@ -711,6 +714,8 @@ class FactoryEnv(DirectRLEnv):
             self._get_curr_successes(success_threshold=self.cfg_task.engage_threshold, check_rot=False).clone().float()
         )
         rew_dict["curr_successes"] = curr_successes.clone().float()
+        contact_force_norm = torch.clip(torch.norm(self.contact_force, p=2, dim=-1) - 10, 0, 100)
+        rew_dict["contact_force"] = contact_force_norm
 
         rew_buf = (
             rew_dict["kp_coarse"]
@@ -718,6 +723,7 @@ class FactoryEnv(DirectRLEnv):
             + rew_dict["kp_fine"]
             - rew_dict["action_penalty"] * self.cfg_task.action_penalty_scale
             - rew_dict["action_grad_penalty"] * self.cfg_task.action_grad_penalty_scale
+            - rew_dict["contact_force"] * self.cfg_task.contact_force_penalty_scale
             + rew_dict["curr_engaged"]
             + rew_dict["curr_successes"]
         )

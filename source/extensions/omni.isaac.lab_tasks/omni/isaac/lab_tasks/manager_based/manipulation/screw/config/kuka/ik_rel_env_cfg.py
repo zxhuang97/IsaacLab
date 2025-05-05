@@ -367,6 +367,30 @@ def create_fixed_joint(env: ManagerBasedEnv, env_ids: torch.Tensor):
 class EventCfg:
     """Configuration for events."""
 
+def reset_obs_camera(env, env_ids: torch.Tensor):
+    print("resetting obs camera")
+    fixed_pos = env.scene["bolt"].data.root_pos_w
+    fixed_quat = env.scene["bolt"].data.root_quat_w
+    eyes_pos = fixed_pos + torch.tensor([[0.37, 0.0, 0.11]], device=env.device)
+    eye_rand_low = torch.tensor([-0.1, -0.2, -0.05], device=env.device)
+    eye_rand_high = torch.tensor([0.2, 0.2, 0.4], device=env.device)
+    eye_rand_trans = torch.rand(env.num_envs, 3, device=env.device) * (eye_rand_high - eye_rand_low) + eye_rand_low
+    eyes_pos = eyes_pos + eye_rand_trans
+    print(eyes_pos)
+    print(eye_rand_trans)
+    target_pos = fixed_pos + torch.tensor([[0., 0.0, 0.04]], device=env.device)
+    tgt_rand_low = torch.tensor([-0.05, -0.08, -0.0], device=env.device)
+    tgt_rand_high = torch.tensor([0.05, 0.08, 0.01], device=env.device)
+    tgt_rand_trans = torch.rand(env.num_envs, 3, device=env.device) * (tgt_rand_high - tgt_rand_low) + tgt_rand_low
+    target_pos = target_pos + tgt_rand_trans
+    print(target_pos)
+    print(tgt_rand_trans)
+    if env.scene["obs_camera"] is None:
+        return
+    env.scene["obs_camera"].set_world_poses_from_view(
+        eyes_pos[env_ids],
+        target_pos[env_ids],
+    )
 
 def terminate_if_nut_fallen(env):
     # relative pose between gripper and nut
@@ -406,12 +430,6 @@ def initialize_contact_properties(
         env_ids = torch.arange(env.scene.num_envs, device="cpu")
     else:
         env_ids = env_ids.cpu()
-    # Note: shape of contact_offset and bodies are not matched
-    # since there're several virtual body in kuka.
-    # if asset_cfg.body_ids == slice(None):
-    #     body_ids = torch.arange(asset.num_bodies, dtype=torch.int, device="cpu")
-    # else:
-    #     body_ids = torch.tensor(asset_cfg.body_ids, dtype=torch.int, device="cpu")
     cur_contact_offset = asset.root_physx_view.get_contact_offsets()
     cur_contact_offset[env_ids] = contact_offset
     asset.root_physx_view.set_contact_offsets(cur_contact_offset, env_ids)
@@ -505,6 +523,7 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         events_params.reset_randomize_mode = events_params.get("reset_randomize_mode", "task")
         events_params.reset_use_adr = events_params.get("reset_use_adr", False)
         events_params.reset_close_gripper = events_params.get("reset_close_gripper", None)
+        events_params.reset_obs_camera = events_params.get("reset_obs_camera", False)
 
         curri_params = self.params.curriculum
         curri_params.use_obs_noise_curri = curri_params.get("use_obs_noise_curri", False)
@@ -744,12 +763,10 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
                 offset=TiledCameraCfg.OffsetCfg(
                     pos=(1.0, 0.1, 0.11),
                     rot=[0.4402, -0.4498, -0.5456, 0.5534],
-                    # pos=(1.0, 0., 0.2),
-                    # rot=[0.514943, -0.168307, -0.1039081, 0.8340919], # not working... buggy
                     convention="ros",
                 ),
                 data_types=obs_params.obs_camera_type,
-                spawn=sim_utils.PinholeCameraCfg(clipping_range=(0.0001, 0.5)),
+                spawn=sim_utils.PinholeCameraCfg(clipping_range=(0.0001, 0.7)),
                 # spawn=sim_utils.PinholeCameraCfg.from_intrinsic_matrix(
                 #     zivid_intrinsic, 200, 200, clipping_range=(0.0001, 0.7),
                 #     focal_length=24.0,
@@ -757,10 +774,10 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
                 #     ),
                 width=224,
                 height=224,
+                # width=720,
+                # height=720,
             )
-            # -90 78 179
-            # -30 71 121
-            # 0 75 90
+
 
         # events
         event_params = self.params.events
@@ -807,6 +824,11 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
             robot_base_pos=robot.init_state.pos,
             robot_no_joint_limit=robot_params.no_joint_limit,
         )
+        if event_params.reset_obs_camera:
+            self.events.reset_obs_camera = EventTerm(
+                func=reset_obs_camera,
+                mode="reset",
+            )
 
         # terminations
         termination_params = self.params.terminations
