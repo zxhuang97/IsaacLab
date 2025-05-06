@@ -129,6 +129,7 @@ class TiledCamera(Camera):
         # resolve None
         if env_ids is None:
             env_ids = slice(None)
+        self._update_poses(env_ids)
         # reset the frame count
         self._frame[env_ids] = 0
 

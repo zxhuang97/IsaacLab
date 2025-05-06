@@ -55,6 +55,7 @@ class FactoryEnv(DirectRLEnv):
         self.default_gains = torch.tensor(self.cfg.ctrl.default_task_prop_gains, device=self.device).repeat(
             (self.num_envs, 1)
         )
+
         self.pos_threshold = torch.tensor(self.cfg.ctrl.pos_action_threshold, device=self.device).repeat(
             (self.num_envs, 1)
         )
@@ -985,6 +986,7 @@ class FactoryEnv(DirectRLEnv):
         self.held_asset_pos_noise = 2 * (rand_sample - 0.5)  # [-1, 1]
         if self.cfg_task.name == "gear_mesh":
             self.held_asset_pos_noise[:, 2] = -rand_sample[:, 2]  # [-1, 0]
+
         held_asset_pos_noise = torch.tensor(self.cfg_task.held_asset_pos_noise, device=self.device)
         self.held_asset_pos_noise = self.held_asset_pos_noise @ torch.diag(held_asset_pos_noise)
         # Additionally, randomize orientation

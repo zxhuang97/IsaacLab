@@ -377,20 +377,21 @@ def reset_obs_camera(env, env_ids: torch.Tensor):
     eye_rand_trans = torch.rand(env.num_envs, 3, device=env.device) * (eye_rand_high - eye_rand_low) + eye_rand_low
     eyes_pos = eyes_pos + eye_rand_trans
     print(eyes_pos)
-    print(eye_rand_trans)
+    # print(eye_rand_trans)
     target_pos = fixed_pos + torch.tensor([[0., 0.0, 0.04]], device=env.device)
     tgt_rand_low = torch.tensor([-0.05, -0.08, -0.0], device=env.device)
     tgt_rand_high = torch.tensor([0.05, 0.08, 0.01], device=env.device)
     tgt_rand_trans = torch.rand(env.num_envs, 3, device=env.device) * (tgt_rand_high - tgt_rand_low) + tgt_rand_low
     target_pos = target_pos + tgt_rand_trans
     print(target_pos)
-    print(tgt_rand_trans)
+    # print(tgt_rand_trans)
     if env.scene["obs_camera"] is None:
         return
     env.scene["obs_camera"].set_world_poses_from_view(
         eyes_pos[env_ids],
         target_pos[env_ids],
     )
+    env.scene["obs_camera"].reset(env_ids)
 
 def terminate_if_nut_fallen(env):
     # relative pose between gripper and nut

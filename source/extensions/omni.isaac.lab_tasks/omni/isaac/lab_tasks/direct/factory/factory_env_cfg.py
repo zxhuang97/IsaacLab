@@ -31,7 +31,6 @@ OBS_DIM_CFG = {
     "ee_linvel": 3,
     "ee_angvel": 3,
     "scales": 1,
-    "scales": 1,
 }
 
 STATE_DIM_CFG = {
@@ -50,7 +49,6 @@ STATE_DIM_CFG = {
     "ema_factor": 1,
     "pos_threshold": 3,
     "rot_threshold": 3,
-    "scales": 1,
     "scales": 1,
 }
 
@@ -222,14 +220,6 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         update_period=1/60.0,
     )
 
-    contact_sensor_cfg = ContactSensorCfg(
-        prim_path="/World/envs/env_.*/HeldAsset/.*",
-        filter_prim_paths_expr=contact_filter_path,
-        # debug_vis=True,
-        history_length=6,
-        update_period=1/60.0,
-    )
-
     cam_offset_cfg = CameraCfg.OffsetCfg(
         pos=(1, 0.0, 0.15),
         rot=[0.4497752, 0.4401843, 0.5533875, 0.545621],
@@ -351,24 +341,9 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         if asset_scale_randomization not in ["gaussian", "uniform", "none"]:
             print(f"Warning: asset_scale_randomization '{asset_scale_randomization}' is not recognized, using 'none'.")
             asset_scale_randomization = "none"
-            asset_scale_randomization = "none"
         self.randomize_scale_method = asset_scale_randomization
         scale_range = params_taskcfg.get("randomize_scale_range", None)
-        scale_range = params_taskcfg.get("randomize_scale_range", None)
         # Update scale
-        if self.randomize_scale_method in ["gaussian", "uniform"] \
-            and scale_range is not None \
-            and len(scale_range) == 2:
-            if isinstance(scale_range, ListConfig):
-                scale_range = OmegaConf.to_container(scale_range, resolve=True)
-            self.randomize_scale_range = tuple(scale_range)
-            self.scene = InteractiveSceneCfg(
-                num_envs=128,
-                env_spacing=2.0,
-                replicate_physics=False
-            )
-        else:
-            print(f"Warning: 'randomize_scale_range' should be a list/tuple of length 2, using default {self.randomize_scale_range}.")
         if self.randomize_scale_method in ["gaussian", "uniform"] \
             and scale_range is not None \
             and len(scale_range) == 2:
@@ -391,10 +366,8 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         # self.episode_length_s = 24   # 24, 10 for sim quality test
         self.viewer.origin_type = "asset_root"
         self.viewer.asset_name = "fixed_asset"
-        # # self.viewer.eye = (0.1, 0.1, 0.06)
-        # # self.viewer.lookat = (0, 0.0, 0.04)
-        self.viewer.eye = (0.37, 0.1, 0.12)
-        self.viewer.lookat = (0.0, 0.0, 0.03)
+        # self.viewer.eye = (0.1, 0.1, 0.06)
+        # self.viewer.lookat = (0, 0.0, 0.04)
         self.viewer.eye = (0.37, 0.1, 0.12)
         self.viewer.lookat = (0.0, 0.0, 0.03)
         self.viewer.resolution = (720, 720)
@@ -414,6 +387,8 @@ class FactoryTaskGearMeshCfg(FactoryEnvCfg):
     task_class = GearMesh()
     episode_length_s = 20.0
 
+
+from omegaconf import OmegaConf
 
 @configclass
 class FactoryTaskNutThreadCfg(FactoryEnvCfg):
