@@ -322,7 +322,6 @@ class FactoryEnv(DirectRLEnv):
             self._obs_camera = TiledCamera(self.cfg.obs_camera_cfg)
             self.scene.sensors["obs_camera"] = self._obs_camera
 
-
     def _compute_intermediate_values(self, dt):
         """Get values computed from raw tensors. This includes adding noise."""
         # TODO: A lot of these can probably only be set once?
@@ -412,10 +411,8 @@ class FactoryEnv(DirectRLEnv):
             "ee_linvel": self.ee_linvel_fd,
             "ee_angvel": self.ee_angvel_fd,
             "prev_actions": prev_actions,
-            "held_pos": self.held_pos,
-            # "wrench": self.finger_wrench,
-
             "scales": self.asset_scale_samples.unsqueeze(-1),
+            "held_pos": self.held_pos,
         }
 
         state_dict = {
@@ -688,7 +685,6 @@ class FactoryEnv(DirectRLEnv):
         We assume all envs will always be reset at the same time.
         """
         super()._reset_idx(env_ids)
-
         self._set_assets_to_default_pose(env_ids)
         self._set_franka_to_default_pose(joints=self.cfg.ctrl.reset_joints, env_ids=env_ids)
         self.step_sim_no_action()
