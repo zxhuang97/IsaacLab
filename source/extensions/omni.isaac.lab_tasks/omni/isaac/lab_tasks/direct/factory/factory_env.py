@@ -98,8 +98,13 @@ class FactoryEnv(DirectRLEnv):
             held_base_z_offset = 0.0
         elif self.cfg_task.name == "gear_mesh":
             gear_base_offset = self._get_target_gear_base_offset()
-            held_base_x_offset = gear_base_offset[..., 0]
-            held_base_z_offset = gear_base_offset[..., 2]
+            # Changed for vectorized
+            if isinstance(gear_base_offset, torch.Tensor) and len(gear_base_offset.shape) == 2:
+                held_base_x_offset = gear_base_offset[:, 0]  # Use the first env's offset for all envs
+                held_base_z_offset = gear_base_offset[:, 2]  # Use the first env's offset for all envs
+            else:
+                held_base_x_offset = gear_base_offset[0]
+                held_base_z_offset = gear_base_offset[2]
         elif self.cfg_task.name == "nut_thread":
             held_base_z_offset = self.cfg_task.fixed_asset_cfg.base_height
         else:
@@ -139,8 +144,13 @@ class FactoryEnv(DirectRLEnv):
             self.fixed_success_pos_local[:, 2] = 0.0
         elif self.cfg_task.name == "gear_mesh":
             gear_base_offset = self._get_target_gear_base_offset()
-            self.fixed_success_pos_local[:, 0] = gear_base_offset[...,0]
-            self.fixed_success_pos_local[:, 2] = gear_base_offset[...,2]
+            # Changed for vectorized
+            if isinstance(gear_base_offset, torch.Tensor) and len(gear_base_offset.shape) == 2:
+                self.fixed_success_pos_local[:, 0] = gear_base_offset[:, 0]
+                self.fixed_success_pos_local[:, 2] = gear_base_offset[:, 2]
+            else:
+                self.fixed_success_pos_local[:, 0] = gear_base_offset[0]
+                self.fixed_success_pos_local[:, 2] = gear_base_offset[2]
         elif self.cfg_task.name == "nut_thread":
             head_height = self.cfg_task.fixed_asset_cfg.base_height
             shank_length = self.cfg_task.fixed_asset_cfg.height
@@ -766,8 +776,13 @@ class FactoryEnv(DirectRLEnv):
         elif self.cfg_task.name == "gear_mesh":
             held_asset_relative_pos = torch.zeros_like(self.held_base_pos_local)
             gear_base_offset = self._get_target_gear_base_offset()
-            held_asset_relative_pos[:, 0] += gear_base_offset[...,0]
-            held_asset_relative_pos[:, 2] += gear_base_offset[...,2]
+            if isinstance(gear_base_offset, torch.Tensor) and len(gear_base_offset.shape) == 2:
+                held_asset_relative_pos[:, 0] += gear_base_offset[:, 0]
+                held_asset_relative_pos[:, 2] += gear_base_offset[:, 2]
+            else:
+                held_asset_relative_pos[:, 0] += gear_base_offset[0]
+                held_asset_relative_pos[:, 2] += gear_base_offset[2]
+            # This line is okay in both cases
             held_asset_relative_pos[:, 2] += self.cfg_task.held_asset_cfg.height / 2.0 * 1.1
         elif self.cfg_task.name == "nut_thread":
             held_asset_relative_pos = self.held_base_pos_local
@@ -861,7 +876,11 @@ class FactoryEnv(DirectRLEnv):
         fixed_tip_pos_local[:, 2] += self.cfg_task.fixed_asset_cfg.height
         fixed_tip_pos_local[:, 2] += self.cfg_task.fixed_asset_cfg.base_height
         if self.cfg_task.name == "gear_mesh":
-            fixed_tip_pos_local[:, 0] = self._get_target_gear_base_offset()[...,0]
+            base_offset = self._get_target_gear_base_offset()
+            if isinstance(base_offset, torch.Tensor) and len(base_offset.shape) == 2:
+                fixed_tip_pos_local[:, 0] = self._get_target_gear_base_offset()[:, 0]
+            else:
+                fixed_tip_pos_local[:, 0] = self._get_target_gear_base_offset()[0]
 
         _, fixed_tip_pos = torch_utils.tf_combine(
             self.fixed_quat, self.fixed_pos, self.identity_quat, fixed_tip_pos_local
