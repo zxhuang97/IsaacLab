@@ -133,6 +133,7 @@ class reset_scene_to_grasp_state(ManagerTermBase):
             base_pose=self.robot_base_pose,
             num_ik_seeds=10,
             device=env.device,
+            load_pk=True
         )
         self.curobo_arm.update_world()
 
@@ -371,19 +372,19 @@ def reset_obs_camera(env, env_ids: torch.Tensor):
     print("resetting obs camera")
     fixed_pos = env.scene["bolt"].data.root_pos_w
     fixed_quat = env.scene["bolt"].data.root_quat_w
-    eyes_pos = fixed_pos + torch.tensor([[0.37, 0.0, 0.11]], device=env.device)
-    eye_rand_low = torch.tensor([-0.1, -0.2, -0.05], device=env.device)
-    eye_rand_high = torch.tensor([0.2, 0.2, 0.4], device=env.device)
+    eyes_pos = fixed_pos + torch.tensor([[0.37, 0., 0.11]], device=env.device)
+    eye_rand_low = torch.tensor([-0.1, -0.1, -0.05], device=env.device)
+    eye_rand_high = torch.tensor([0.1, 0.1, 0.2], device=env.device)
     eye_rand_trans = torch.rand(env.num_envs, 3, device=env.device) * (eye_rand_high - eye_rand_low) + eye_rand_low
     eyes_pos = eyes_pos + eye_rand_trans
-    print(eyes_pos)
+    # print(eyes_pos)
     # print(eye_rand_trans)
     target_pos = fixed_pos + torch.tensor([[0., 0.0, 0.04]], device=env.device)
     tgt_rand_low = torch.tensor([-0.05, -0.08, -0.0], device=env.device)
     tgt_rand_high = torch.tensor([0.05, 0.08, 0.01], device=env.device)
     tgt_rand_trans = torch.rand(env.num_envs, 3, device=env.device) * (tgt_rand_high - tgt_rand_low) + tgt_rand_low
     target_pos = target_pos + tgt_rand_trans
-    print(target_pos)
+    # print(target_pos)
     # print(tgt_rand_trans)
     if env.scene["obs_camera"] is None:
         return
@@ -493,6 +494,7 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         obs_params.history_length = obs_params.get("history_length", 1)
         obs_params.flatten_history_dim = obs_params.get("flatten_history_dim", True)
         obs_params.include_action = obs_params.get("include_action", True)
+        obs_params.include_nut = obs_params.get("include_nut", True)
         obs_params.include_wrench = obs_params.get("include_wrench", True)
         obs_params.wrench_target_body = obs_params.get("wrench_target_body", "victor_left_tool0")
         obs_params.include_tool = obs_params.get("include_tool", False)
@@ -719,10 +721,14 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
                 params={"action_name": "arm_action"},
                 scale=1,
             )
-        # observation space for oracle - noise-free
-        if obs_params.critic_privil_obs:
-            self.observations.critic = copy.deepcopy(self.observations.policy)
-        self.observations.policy.nut_pos.modifiers = [
+        if obs_params.include_nut:
+
+            # self.observations.policy.nut_pos = ObsTerm(func=mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("nut")})
+            # self.observations.policy.nut_quat = ObsTerm(func=mdp.root_quat_w, params={"asset_cfg": SceneEntityCfg("nut")})
+            # self.observations.policy.nut_lin_vel = ObsTerm(func=mdp.root_lin_vel_w, params={"asset_cfg": SceneEntityCfg("nut")})
+            # self.observations.policy.nut_ang_vel = ObsTerm(func=mdp.root_ang_vel_w, params={"asset_cfg": SceneEntityCfg("nut")})
+   
+            self.observations.policy.nut_pos.modifiers = [
             NoiseModifierCfg(
                 noise_cfg=GaussianNoiseCfg(
                     mean=0.0, std=obs_params.nut_pos.noise_std, operation="add"
@@ -732,6 +738,11 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
                 ),
             )
         ]
+        # observation space for oracle - noise-free
+        if obs_params.critic_privil_obs:
+            self.observations.critic = copy.deepcopy(self.observations.policy)
+
+
 
         # bolt : (0.63, 0.0, 0.0)
         # for debug only
@@ -870,7 +881,7 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
 
         # curriculum
         curri_params = self.params.curriculum
-        if curri_params.use_obs_noise_curri:
+        if curri_params.use_obs_noise_curri and obs_params.include_nut:
             self.curriculum.modify_nut_pos_noise = CurrTerm(
                 func=modify_noise_scale,
                 params={"begin_steps": 500 * 32, "end_steps": 2000 * 32},
