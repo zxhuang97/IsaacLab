@@ -71,45 +71,6 @@ BLUE_VIZ_MARKER_CFG.markers["height"].visual_material = sim_utils.PreviewSurface
 # PLATE_ARROW_CFG.markers["frame"] = FRAME_MARKER_SMALL_CFG.markers["frame"]
 
 asset_factory = {
-    # "m4_tight": {
-    #     "nut_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_nut_m4_tight/factory_nut_m4_tight.usd",
-    #     "bolt_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_bolt_m4_tight/factory_bolt_m4_tight.usd",
-    #     "nut_init_state_tighten": RigidObjectCfg.InitialStateCfg(
-    #         pos=(6.3000e-01, 2.0661e-06, 3.0895e-03), rot=(-2.1609e-01, 6.6671e-05, -6.6467e-05, 9.7637e-01)
-    #     ),
-    #     "nut_init_state_thread": RigidObjectCfg.InitialStateCfg(
-    #         pos=(6.3000e-01, 4.0586e-06, 0.02), rot=(9.9833e-01, 1.2417e-04, -1.2629e-05, 5.7803e-02)
-    #     ),
-    #     "bolt_init_state": RigidObjectCfg.InitialStateCfg(pos=(0.63, 0.0, 0.0)),
-    #     # "nut_frame_offset": OffsetCfg(pos=(0.0, 0.0, -0.0045)),
-    #     "bolt_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.012)),
-    #     "bolt_tip_offset": OffsetCfg(pos=(0.0, 0.0, 0.02)),
-    #     "nut_geom_name": "factory_nut",
-    #     "bolt_geom_name": "factory_bolt",
-    #     "float_gain": 10.0,
-    #     "float_damp": 0.01,
-    #     "nut_origin_bottom_offset": OffsetCfg(pos=(0.0, 0.0, -0.006)),
-    # },
-    # "m8_loose": {
-    #     "nut_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_nut_m8_loose/factory_nut_m8_loose.usd",
-    #     "bolt_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_bolt_m8_loose/factory_bolt_m8_loose.usd",
-    #     "nut_init_state_tighten": RigidObjectCfg.InitialStateCfg(
-    #         pos=(6.3000e-01, 2.0661e-06, 3.0895e-03), rot=(-2.1609e-01, 6.6671e-05, -6.6467e-05, 9.7637e-01)
-    #     ),
-    #     "nut_init_state_thread": RigidObjectCfg.InitialStateCfg(
-    #         pos=(6.3000e-01, 4.0586e-06, 0.02), rot=(9.9833e-01, 1.2417e-04, -1.2629e-05, 5.7803e-02)
-    #     ),
-    #     "bolt_init_state": RigidObjectCfg.InitialStateCfg(pos=(0.63, 0.0, 0.0)),
-    #     "nut_frame_offset": OffsetCfg(pos=(0.0, 0.0, 0.012)),
-    #     "bolt_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.012)),
-    #     "bolt_tip_offset": OffsetCfg(pos=(0.0, 0.0, 0.0261)),
-    #     "nut_geom_name": "factory_nut",
-    #     "bolt_geom_name": "factory_bolt",
-    #     "float_gain": 10.0,
-    #     "float_damp": 0.01,
-    #     # "nut_origin_bottom_offset": OffsetCfg(pos=(0.0, 0.0, 0.0012)),
-    #     "nut_origin_bottom_offset": OffsetCfg(pos=(0.0, 0.0, -0.002)),
-    # },
     "m8_tight": {
         "nut_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_nut_m8_tight/factory_nut_m8_tight.usd",
         "bolt_path": f"{ISAAC_NUCLEUS_DIR}/Props/Factory/factory_bolt_m8_tight/factory_bolt_m8_tight.usd",
@@ -583,13 +544,25 @@ def nut_thread_xy_l2(env: ManagerBasedRLEnv):
 
 
 def nut_upright_reward_forge(env: ManagerBasedRLEnv, a: float = 300, b: float = 0, tol: float = 0):
-    # penalize if nut is not upright
-    # compute the cosine distance between the nut normal and the global up vector
+    # penalize if nut is not upright relative to the bolt's orientation
+    # compute the cosine distance between the nut normal and the bolt's up vector
     nut_quat = env.scene["nut_frame"].data.target_quat_w[:, 0]
-    up_vec = torch.tensor([[0, 0, 1.0]], device=nut_quat.device)
-    up_vecs = up_vec.expand(nut_quat.shape[0], 3)
-    nut_up_vec = math_utils.quat_apply(nut_quat, up_vecs)
-    cos_sim = torch.sum(nut_up_vec * up_vecs, dim=1, keepdim=True) / torch.norm(nut_up_vec, dim=1, keepdim=True)
+    
+    # Get bolt orientation to determine what "upright" means relative to the bolt
+    bolt_quat = env.scene["bolt"].data.root_quat_w
+    
+    # The bolt's "up" direction (what the nut should align with)
+    global_up = torch.tensor([[0, 0, 1.0]], device=nut_quat.device)
+    global_up_expanded = global_up.expand(bolt_quat.shape[0], 3)
+    bolt_up_vec = math_utils.quat_apply(bolt_quat, global_up_expanded)
+    
+    # The nut's up direction
+    nut_up_vec = math_utils.quat_apply(nut_quat, global_up_expanded)
+    
+    # Compute alignment between nut's up direction and bolt's up direction
+    cos_sim = torch.sum(nut_up_vec * bolt_up_vec, dim=1, keepdim=True) / (
+        torch.norm(nut_up_vec, dim=1, keepdim=True) * torch.norm(bolt_up_vec, dim=1, keepdim=True)
+    )
     rewards = mdp.forge_kernel(1 - cos_sim, a, b, tol)
     return rewards
 

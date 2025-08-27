@@ -13,7 +13,7 @@ from omni.isaac.lab.managers import ObservationTermCfg as ObsTerm
 import omni.isaac.core.utils.stage as stage_utils
 import omni.isaac.lab.utils.math as math_utils
 import omni.physx.scripts.utils as physx_utils
-from typing import Literal
+from typing import Literal, Optional
 from omni.isaac.lab.managers import EventTermCfg
 from omni.isaac.lab.envs import ManagerBasedEnv
 from pxr import Usd, UsdGeom
@@ -30,6 +30,9 @@ from omni.isaac.lab_tasks.manager_based.manipulation.screw.config.kuka.ik_rel_en
     DTWReferenceTrajRewardCfg,
     DTWReferenceTrajReward,
     reset_scene_to_grasp_state,
+    GraspResetEventTermCfg,
+    BoltPoseRandomizationEventTermCfg,
+    reset_bolt_pose_randomization,
 )
 def spawn_nut_with_rigid_grasp_scaled(
         prim_path: str,
@@ -91,11 +94,11 @@ def get_env_scales(env):
     return env.cfg.asset_scale_samples.reshape(-1,1)
         
 # Do a scaled version of Grasp Reset
-class GraspResetEventTermScaledCfg(EventTermCfg):
+class GraspResetEventTermScaledCfg(GraspResetEventTermCfg):
     def __init__(
         self,
         reset_target: Literal["pre_grasp", "grasp", "mate", "rigid_grasp", "rigid_grasp_open_align"] = "grasp",
-        tool_nut_rel_pose: torch.Tensor = None,
+        tool_nut_rel_pose: Optional[torch.Tensor] = None,
         reset_range_scale: float = 1.0,
         reset_joint_std: float = 0.0,
         reset_randomize_mode: Literal["task", "joint", None] = "task",
@@ -149,7 +152,8 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
             default_tool_pose = self.curobo_arm.forward_kinematics(arm_state.clone()).ee_pose
             # default_tool_pose.position = detault_tool_pos
             default_tool_pose = default_tool_pose.repeat(num_envs)
-            delta_z = (env.cfg.bolt_heights - env.cfg.base_bolt_height).reshape(-1)
+            bolt_pos = env.scene["bolt"].data.root_pos_w
+            delta_z = (bolt_pos[:, 2:3] + env.cfg.bolt_heights - env.cfg.base_bolt_height).reshape(-1)
             # delta_z += 0.005
             default_tool_pose.position[:, 2] += delta_z
             
@@ -257,6 +261,21 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
             # To prevent nut reset to within bolt mesh, we also overwrite default reset nut state
             cached_state["nut"]["root_state"] = self.rand_init_nut_state[select, env_ids].clone()
         env.unwrapped.write_state(cached_state, env_ids)
+
+
+class reset_bolt_pose_randomization_scaled(reset_bolt_pose_randomization):
+    """Scaled version of bolt pose randomization reset event."""
+    
+    def __init__(self, cfg: BoltPoseRandomizationEventTermCfg, env: ManagerBasedEnv):
+        super().__init__(cfg, env)
+        
+        # Apply scaling to the randomization ranges if scaling is available
+        if hasattr(env.cfg, "asset_scale_samples"):
+            # Scale the translation range by the asset scale
+            asset_scales = env.cfg.asset_scale_samples.reshape(-1, 1)
+            # We'll scale the translation range by the mean scale for consistency
+            mean_scale = asset_scales.mean().item()
+            self.translation_range = self.translation_range * mean_scale
 
 
 # Do a scaled version of the DTW reward
@@ -701,6 +720,17 @@ class IKRelKukaNutThreadScaledEnvCfg(IKRelKukaNutThreadEnvCfg):
             robot_base_pos=self.scene.robot.init_state.pos,
             robot_no_joint_limit=robot_params.no_joint_limit,
         )
+        
+        # Bolt pose randomization event
+        if events_params.randomize_bolt_pose:
+            self.events.randomize_bolt_pose = BoltPoseRandomizationEventTermCfg(
+                func=reset_bolt_pose_randomization,
+                mode="reset",
+                translation_range=tuple(events_params.bolt_translation_range),
+                rotation_range=tuple(events_params.bolt_rotation_range),
+                randomize_translation=events_params.bolt_randomize_translation,
+                randomize_rotation=events_params.bolt_randomize_rotation,
+            )
 
         # Nut Frame is used in nut_upright_reward_forge(), but only quat data
         # So no update is needed there
