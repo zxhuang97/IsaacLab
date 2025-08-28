@@ -639,6 +639,7 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         events_params.bolt_randomize_translation = events_params.get("bolt_randomize_translation", True)
         events_params.bolt_randomize_rotation = events_params.get("bolt_randomize_rotation", True)
         events_params.use_adr_difficulty = events_params.get("use_adr_difficulty", False)
+        events_params.adr_frequency = events_params.get("adr_frequency", 3000)
 
         curri_params = self.params.curriculum
         curri_params.use_obs_noise_curri = curri_params.get("use_obs_noise_curri", False)
@@ -963,7 +964,7 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
                 window_size=1000, 
                 target_success_rate=0.85, 
                 difficulty_step=0.02, 
-                frequency=1000,
+                frequency=event_params.adr_frequency,
             )
         # Bolt pose randomization event
         if event_params.randomize_bolt_pose:
