@@ -560,9 +560,7 @@ def nut_upright_reward_forge(env: ManagerBasedRLEnv, a: float = 300, b: float = 
     nut_up_vec = math_utils.quat_apply(nut_quat, global_up_expanded)
     
     # Compute alignment between nut's up direction and bolt's up direction
-    cos_sim = torch.sum(nut_up_vec * bolt_up_vec, dim=1, keepdim=True) / (
-        torch.norm(nut_up_vec, dim=1, keepdim=True) * torch.norm(bolt_up_vec, dim=1, keepdim=True)
-    )
+    cos_sim = torch.sum(nut_up_vec * bolt_up_vec, dim=1, keepdim=True)
     rewards = mdp.forge_kernel(1 - cos_sim, a, b, tol)
     return rewards
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import torch
 from collections.abc import Sequence
+from collections import deque
 from prettytable import PrettyTable
 from typing import TYPE_CHECKING
 
@@ -17,6 +18,7 @@ from .manager_term_cfg import CurriculumTermCfg
 
 if TYPE_CHECKING:
     from omni.isaac.lab.envs import ManagerBasedRLEnv
+
 
 
 class CurriculumManager(ManagerBase):
@@ -201,3 +203,4 @@ class CurriculumManager(ManagerBase):
             # check if the term is a class
             if isinstance(term_cfg.func, ManagerTermBase):
                 self._class_term_cfgs.append(term_cfg)
+

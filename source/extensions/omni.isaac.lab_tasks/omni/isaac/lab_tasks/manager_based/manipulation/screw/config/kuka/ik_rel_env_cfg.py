@@ -11,7 +11,6 @@ import torch
 from typing import Literal, Sequence
 import copy
 
-from numba.core import event
 import omni.isaac.core.utils.stage as stage_utils
 from omni.isaac.lab_tasks.manager_based.manipulation.screw.mdp import robot_tool_pose
 import omni.physx.scripts.utils as physx_utils
@@ -343,6 +342,7 @@ class reset_bolt_pose_randomization(ManagerTermBase):
         self.rotation_range = torch.tensor(cfg.rotation_range, device=env.device, dtype=torch.float32)
         self.randomize_translation = cfg.randomize_translation
         self.randomize_rotation = cfg.randomize_rotation
+        self.difficulty_level = 1.
         
     def __call__(self, env: ManagerBasedEnv, env_ids: torch.Tensor):
         """Randomize bolt pose for the specified environment IDs."""
@@ -359,11 +359,11 @@ class reset_bolt_pose_randomization(ManagerTermBase):
             # Generate random translation offsets
             # For x and y: symmetric around 0 (can go positive or negative)
             xy_offsets = torch.rand(num_resets, 2, device=env.device) * 2 - 1  # [-1, 1]
-            xy_offsets = xy_offsets * self.translation_range[:2]
+            xy_offsets = xy_offsets * self.translation_range[:2] * self.difficulty_level
             
             # For z: only positive (bolt should stay above table surface)
             z_offsets = torch.rand(num_resets, 1, device=env.device)  # [0, 1]
-            z_offsets = z_offsets * self.translation_range[2]
+            z_offsets = z_offsets * self.translation_range[2] * self.difficulty_level
             
             # Combine offsets
             translation_offsets = torch.cat([xy_offsets, z_offsets], dim=1)
@@ -372,7 +372,7 @@ class reset_bolt_pose_randomization(ManagerTermBase):
         if self.randomize_rotation:
             # Generate random rotation offsets (Euler angles)
             rotation_offsets = torch.rand(num_resets, 3, device=env.device) * 2 - 1  # [-1, 1]
-            rotation_offsets = rotation_offsets * self.rotation_range
+            rotation_offsets = rotation_offsets * self.rotation_range * self.difficulty_level
             
             # Convert Euler angles to quaternions
             rotation_quats = math_utils.quat_from_euler_xyz(
@@ -638,6 +638,7 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         events_params.bolt_rotation_range = events_params.get("bolt_rotation_range", [0.2, 0.2, 0.2])
         events_params.bolt_randomize_translation = events_params.get("bolt_randomize_translation", True)
         events_params.bolt_randomize_rotation = events_params.get("bolt_randomize_rotation", True)
+        events_params.use_adr_difficulty = events_params.get("use_adr_difficulty", False)
 
         curri_params = self.params.curriculum
         curri_params.use_obs_noise_curri = curri_params.get("use_obs_noise_curri", False)
@@ -966,7 +967,15 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
                 randomize_translation=event_params.bolt_randomize_translation,
                 randomize_rotation=event_params.bolt_randomize_rotation,
             )
-
+        if event_params.use_adr_difficulty:
+            self.events.automatic_domain_randomization = mdp.AutomaticDomainRandomizationCfg(
+                func=mdp.automatic_domain_randomization,
+                mode="reset",
+                window_size=1000, 
+                target_success_rate=0.85, 
+                difficulty_step=0.02, 
+                frequency=1000,
+            )
         # terminations
         termination_params = self.params.terminations
         if termination_params.nut_fallen:

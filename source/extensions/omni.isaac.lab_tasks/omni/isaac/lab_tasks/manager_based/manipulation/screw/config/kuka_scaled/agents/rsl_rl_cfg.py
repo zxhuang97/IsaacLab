@@ -27,8 +27,8 @@ class KukaScrewPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         init_noise_std=1.0,
         actor_hidden_dims=[[128, 256], [256, 128]],
         critic_hidden_dims=[[128, 256], [256, 128]],
-        # actor_hidden_dims=[128, 256, 128],
-        # critic_hidden_dims=[128, 256, 128],
+        # actor_hidden_dims=[[256, 512], [512, 256]],
+        # critic_hidden_dims=[[256, 512], [512, 256]],
         activation="elu",
     )
     algorithm = RslRlPpoAlgorithmCfg(
