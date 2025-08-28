@@ -956,7 +956,15 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
                 func=reset_obs_camera,
                 mode="reset",
             )
-        
+        if event_params.use_adr_difficulty:
+            self.events.automatic_domain_randomization = mdp.AutomaticDomainRandomizationCfg(
+                func=mdp.automatic_domain_randomization,
+                mode="reset",
+                window_size=1000, 
+                target_success_rate=0.85, 
+                difficulty_step=0.02, 
+                frequency=1000,
+            )
         # Bolt pose randomization event
         if event_params.randomize_bolt_pose:
             self.events.randomize_bolt_pose = BoltPoseRandomizationEventTermCfg(
@@ -967,15 +975,7 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
                 randomize_translation=event_params.bolt_randomize_translation,
                 randomize_rotation=event_params.bolt_randomize_rotation,
             )
-        if event_params.use_adr_difficulty:
-            self.events.automatic_domain_randomization = mdp.AutomaticDomainRandomizationCfg(
-                func=mdp.automatic_domain_randomization,
-                mode="reset",
-                window_size=1000, 
-                target_success_rate=0.85, 
-                difficulty_step=0.02, 
-                frequency=1000,
-            )
+
         # terminations
         termination_params = self.params.terminations
         if termination_params.nut_fallen:

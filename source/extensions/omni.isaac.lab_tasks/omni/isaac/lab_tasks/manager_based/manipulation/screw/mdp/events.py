@@ -62,6 +62,7 @@ class automatic_domain_randomization(ManagerTermBase):
         """Update the difficulty level based on the success rate."""
         successes = env.unwrapped.reward_manager._episode_sums["success"][env_ids] > 0
         self.compute_and_update(successes)
+        self.set_difficulty_level(env)
         
     
     def compute_and_update(self, successes) -> dict[str, float]:
