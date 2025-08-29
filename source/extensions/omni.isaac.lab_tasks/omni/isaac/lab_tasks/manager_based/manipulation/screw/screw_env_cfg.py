@@ -569,7 +569,7 @@ class NutThreadRewardsCfg:
     """Reward terms for the MDP."""
 
     # task terms
-    xy_nut = RewTerm(func=nut_thread_xy_l2, weight=10)
+    xy_nut = RewTerm(func=nut_thread_xy_l2, weight=0.1)
     coarse_nut = RewTerm(func=nut_thread_reward_forge, params={"a": 50, "b": 1}, weight=0.5)
     fine_nut = RewTerm(
         func=nut_thread_reward_forge,
