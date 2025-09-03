@@ -12,12 +12,14 @@ class AutomaticDomainRandomizationCfg(EventTerm):
                  target_success_rate: float = 0.9,
                  difficulty_step: float = 0.02,
                  frequency: int = 1000,
+                 update_threshold: float = 0.05,
                  **kwargs):
         super().__init__(**kwargs)
         self.window_size = window_size
         self.target_success_rate = target_success_rate
         self.difficulty_step = difficulty_step
         self.frequency = frequency
+        self.update_threshold = update_threshold
 
 class automatic_domain_randomization(ManagerTermBase):
     """Unified controller that tracks success rate and adjusts difficulty automatically.
@@ -57,6 +59,7 @@ class automatic_domain_randomization(ManagerTermBase):
         
         # Store latest successes for processing during compute
         self._pending_successes = []
+        self.update_threshold = cfg.update_threshold
     
     def __call__(self, env: ManagerBasedEnv, env_ids: torch.Tensor):
         """Update the difficulty level based on the success rate."""
@@ -124,19 +127,19 @@ class automatic_domain_randomization(ManagerTermBase):
             return 0.0
         return sum(self.success_history) / len(self.success_history)
     
-    def _should_increase_difficulty(self, threshold: float = 0.05) -> bool:
+    def _should_increase_difficulty(self) -> bool:
         """Check if difficulty should be increased."""
         if len(self.success_history) < self.window_size // 2:  # Need enough data
             return False
         success_rate = self.get_success_rate()
-        return success_rate > (self.target_success_rate + threshold)
+        return success_rate > (self.target_success_rate + self.update_threshold)
     
     def _should_decrease_difficulty(self, threshold: float = 0.05) -> bool:
         """Check if difficulty should be decreased."""
         if len(self.success_history) < self.window_size // 2:  # Need enough data
             return False
         success_rate = self.get_success_rate()
-        return success_rate < (self.target_success_rate - threshold)
+        return success_rate < (self.target_success_rate - self.update_threshold)
     
     def set_difficulty_level(self, env: ManagerBasedEnv):
         for term_name in ["randomize_bolt_pose"]:

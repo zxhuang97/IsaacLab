@@ -540,6 +540,7 @@ def nut_thread_reward_forge(env: ManagerBasedRLEnv, a: float = 100, b: float = 0
 def nut_thread_xy_l2(env: ManagerBasedRLEnv):
     diff = mdp.rel_nut_bolt_tip_distance(env)[..., :2]
     rewards = mdp.l2_norm(diff)
+    rewards = torch.clamp(rewards, min=0, max=0.05)
     return 0.01 - rewards
 
 
@@ -569,7 +570,7 @@ class NutThreadRewardsCfg:
     """Reward terms for the MDP."""
 
     # task terms
-    xy_nut = RewTerm(func=nut_thread_xy_l2, weight=0.1)
+    xy_nut = RewTerm(func=nut_thread_xy_l2, weight=0.01)
     coarse_nut = RewTerm(func=nut_thread_reward_forge, params={"a": 50, "b": 1}, weight=0.5)
     fine_nut = RewTerm(
         func=nut_thread_reward_forge,

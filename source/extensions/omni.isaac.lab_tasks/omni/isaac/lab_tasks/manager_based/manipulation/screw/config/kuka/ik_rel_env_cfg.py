@@ -640,6 +640,8 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         events_params.bolt_randomize_rotation = events_params.get("bolt_randomize_rotation", True)
         events_params.use_adr_difficulty = events_params.get("use_adr_difficulty", False)
         events_params.adr_frequency = events_params.get("adr_frequency", 3000)
+        events_params.adr_update_threshold = events_params.get("adr_update_threshold", 0.05)
+        events_params.adr_target_success_rate = events_params.get("adr_target_success_rate", 0.85)
 
         curri_params = self.params.curriculum
         curri_params.use_obs_noise_curri = curri_params.get("use_obs_noise_curri", False)
@@ -962,8 +964,9 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
                 func=mdp.automatic_domain_randomization,
                 mode="reset",
                 window_size=1000, 
-                target_success_rate=0.85, 
-                difficulty_step=0.02, 
+                target_success_rate=event_params.adr_target_success_rate, 
+                update_threshold=event_params.adr_update_threshold,
+                difficulty_step=event_params.adr_difficulty_step, 
                 frequency=event_params.adr_frequency,
             )
         # Bolt pose randomization event
