@@ -187,6 +187,7 @@ class RslRlOnPolicyRunnerCfg:
         self.algorithm.num_learning_epochs = algorithm_params.get(
             "num_learning_epochs", self.algorithm.num_learning_epochs
         )
+        self.algorithm.schedule = algorithm_params.get("schedule", self.algorithm.schedule)
 
         policy_params = agent_params.get("policy", OmegaConf.create())
         self.policy.class_name = policy_params.get("class_name", self.policy.class_name)
