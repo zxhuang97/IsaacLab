@@ -425,6 +425,7 @@ class BaseScrewEnvCfg(ManagerBasedRLEnvCfg):
         params.sim.physx.friction_offset_threshold = params.sim.physx.get("friction_offset_threshold", 0.04)
         params.sim.physx.enable_ccd = params.sim.physx.get("enable_ccd", False)
         params.decimation = params.get("decimation", 2)
+        params.debug_vis = params.get("debug_vis", False)
 
         # By default use the default params in USD
         nut_params = params.scene.nut
@@ -609,7 +610,7 @@ class BaseNutThreadEnvCfg(BaseScrewEnvCfg):
 
         self.scene.nut_frame = FrameTransformerCfg(
             prim_path="{ENV_REGEX_NS}/Origin",
-            debug_vis=True,
+            debug_vis=self.params.debug_vis,
             visualizer_cfg=FRAME_MARKER_SMALL_CFG.replace(prim_path="/Visuals/Nut_frame"),
             target_frames=[
                 FrameTransformerCfg.FrameCfg(
@@ -621,7 +622,7 @@ class BaseNutThreadEnvCfg(BaseScrewEnvCfg):
         )
         self.scene.nut_frame_plate= FrameTransformerCfg(
             prim_path="{ENV_REGEX_NS}/Origin",
-            debug_vis=True,
+            debug_vis=self.params.debug_vis,
             visualizer_cfg=BLUE_PLATE_MARKER_CFG.replace(prim_path="/Visuals/Nut_plate"),
             target_frames=[
                 FrameTransformerCfg.FrameCfg(
@@ -634,7 +635,7 @@ class BaseNutThreadEnvCfg(BaseScrewEnvCfg):
 
         self.scene.bolt_frame = FrameTransformerCfg(
             prim_path="{ENV_REGEX_NS}/Origin",
-            debug_vis=True,
+            debug_vis=self.params.debug_vis,
             visualizer_cfg=RED_PLATE_MARKER_CFG.replace(prim_path="/Visuals/Bolt"),
             target_frames=[
                 FrameTransformerCfg.FrameCfg(

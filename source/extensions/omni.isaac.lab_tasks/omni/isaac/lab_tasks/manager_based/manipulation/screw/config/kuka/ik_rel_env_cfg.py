@@ -132,7 +132,7 @@ class reset_scene_to_grasp_state(ManagerTermBase):
             base_pose=self.robot_base_pose,
             num_ik_seeds=10,
             device=env.device,
-            load_pk=True
+            # load_pk=True
         )
         self.curobo_arm.update_world()
 
@@ -608,6 +608,7 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         obs_params.critic_privil_obs = obs_params.get("critic_privil_obs", False)
         obs_params.use_obs_camera = obs_params.get("use_obs_camera", False)
         obs_params.obs_camera_type = obs_params.get("obs_camera_type", ["distance_to_image_plane"])
+        obs_params.obs_camera_view = obs_params.get("obs_camera_view", ["v1"])
 
         rewards_params = self.params.rewards
         rewards_params.dtw_ref_traj_w = rewards_params.get("dtw_ref_traj_w", 0.0)
@@ -888,25 +889,32 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
             0.0, 891.65, -215.05,
             0.0, 0.0, 1.0
             ]
-            self.scene.obs_camera = TiledCameraCfg(
-                prim_path="{ENV_REGEX_NS}/DepthCamera",
-                offset=TiledCameraCfg.OffsetCfg(
-                    pos=(1.0, 0.1, 0.11),
-                    rot=[0.4402, -0.4498, -0.5456, 0.5534],
-                    convention="ros",
-                ),
-                data_types=obs_params.obs_camera_type,
-                spawn=sim_utils.PinholeCameraCfg(clipping_range=(0.0001, 0.7)),
-                # spawn=sim_utils.PinholeCameraCfg.from_intrinsic_matrix(
-                #     zivid_intrinsic, 200, 200, clipping_range=(0.0001, 0.7),
-                #     focal_length=24.0,
-                #     focus_distance=400.0,
-                #     ),
-                width=224,
-                height=224,
-                # width=720,
-                # height=720,
-            )
+            if obs_params.obs_camera_view == "v1":
+                self.scene.obs_camera = TiledCameraCfg(
+                    prim_path="{ENV_REGEX_NS}/DepthCamera",
+                    offset=TiledCameraCfg.OffsetCfg(
+                        pos=(1.0, 0.1, 0.11),
+                        rot=[0.4402, -0.4498, -0.5456, 0.5534],
+                        convention="ros",
+                    ),
+                    data_types=obs_params.obs_camera_type,
+                    spawn=sim_utils.PinholeCameraCfg(clipping_range=(0.0001, 0.5)),
+                    width=224,
+                    height=224,
+                )
+            elif obs_params.obs_camera_view == "v2":
+                self.scene.obs_camera = TiledCameraCfg(
+                    prim_path="{ENV_REGEX_NS}/DepthCamera",
+                    offset=TiledCameraCfg.OffsetCfg(
+                        pos=(1., 0.1, 0.2),
+                        rot=[0.4104, -0.4785, -0.57725, 0.519],
+                        convention="ros",
+                    ),
+                    data_types=obs_params.obs_camera_type,
+                    spawn=sim_utils.PinholeCameraCfg(clipping_range=(0.0001, 0.7)),
+                    width=224,
+                    height=224,
+                )
 
 
         # events
