@@ -915,6 +915,19 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
                     width=224,
                     height=224,
                 )
+            elif obs_params.obs_camera_view == "v3":
+                self.scene.obs_camera = TiledCameraCfg(
+                    prim_path="{ENV_REGEX_NS}/DepthCamera",
+                    offset=TiledCameraCfg.OffsetCfg(
+                        pos=(1., 0.1, 0.2),
+                        rot=[0.4104, -0.4785, -0.57725, 0.519],
+                        convention="ros",
+                    ),
+                    data_types=obs_params.obs_camera_type,
+                    spawn=sim_utils.PinholeCameraCfg(clipping_range=(0.0001, 0.5)),
+                    width=224,
+                    height=224,
+                )
 
 
         # events
