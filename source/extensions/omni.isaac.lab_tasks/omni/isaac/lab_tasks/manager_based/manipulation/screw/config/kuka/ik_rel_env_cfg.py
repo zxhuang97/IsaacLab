@@ -514,9 +514,7 @@ def randomize_obs_camera_translation(env):
         true_pos = env.cfg._obs_cam_true_pos
 
     # Eye randomization
-    eye_rand_low = torch.tensor([-0.02, -0.02, -0.02], device=env.device)
-    eye_rand_high = torch.tensor([0.02, 0.02, 0.02], device=env.device)
-    eye_rand_trans = torch.rand(env.num_envs, 3, device=env.device) * (eye_rand_high - eye_rand_low) + eye_rand_low
+    eye_rand_trans = torch.randn(env.num_envs, 3, device=env.device) * 0.02
 
     biased_pos = true_pos + eye_rand_trans
     env.scene["obs_camera"].set_world_poses(positions=biased_pos)        # DOES NOT WORK??

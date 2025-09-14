@@ -338,14 +338,6 @@ class FactoryEnv(DirectRLEnv):
             self.cfg._obs_cam_randomize_trans_fn = self.randomize_obs_camera_translation
             self.cfg._obs_cam_randomize_rot_fn = self.randomize_obs_camera_rotation
 
-            # Randomize camera position
-            # self._obs_cam_true_pos = self._obs_camera.data.pos_w.clone()
-            # if self.cfg.obs_cam_randomize_translation is not None:
-            #     self.randomize_obs_camera_translation()
-            # self._obs_cam_true_rot = self._obs_camera.data.quat_w_world.clone()
-            # if self.cfg.obs_cam_randomize_rotation is not None:
-            #     self.randomize_obs_camera_rotation()
-
     def randomize_obs_camera_translation(self, *args, **kwargs):
         if self.scene.sensors["obs_camera"] is None:
             return
@@ -358,9 +350,8 @@ class FactoryEnv(DirectRLEnv):
             true_pos = self._obs_cam_true_pos
 
         # Eye randomization
-        eye_rand_low = torch.tensor([-0.02, -0.02, -0.02], device=self.device)
-        eye_rand_high = torch.tensor([0.02, 0.02, 0.02], device=self.device)
-        eye_rand_trans = torch.rand(self.num_envs, 3, device=self.device) * (eye_rand_high - eye_rand_low) + eye_rand_low
+        eye_rand_trans = torch.randn(self.num_envs, 3, device=self.device) * 0.02
+        # eye_rand_trans = torch.rand(self.num_envs, 3, device=self.device) * (eye_rand_high - eye_rand_low) + eye_rand_low
 
         biased_pos = true_pos + eye_rand_trans
         self.scene.sensors["obs_camera"].set_world_poses(positions=biased_pos)        # DOES NOT WORK??
