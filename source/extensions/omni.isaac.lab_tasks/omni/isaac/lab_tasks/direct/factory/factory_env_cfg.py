@@ -281,8 +281,10 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         ),
         data_types=["distance_to_image_plane"],
         spawn=sim_utils.PinholeCameraCfg(clipping_range=(0.0001, 0.5)),
-        width=224,
-        height=224,
+        # width=224,
+        # height=224,
+        width=1200,
+        height=1200,
     )
 
 

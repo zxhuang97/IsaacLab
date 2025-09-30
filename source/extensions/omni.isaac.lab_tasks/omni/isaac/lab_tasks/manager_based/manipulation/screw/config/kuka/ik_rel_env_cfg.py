@@ -514,7 +514,7 @@ def randomize_obs_camera_translation(env):
         true_pos = env.cfg._obs_cam_true_pos
 
     # Eye randomization
-    eye_rand_trans = torch.randn(env.num_envs, 3, device=env.device) * 0.02
+    eye_rand_trans = torch.randn(env.num_envs, 3, device=env.device) * 0.005
 
     biased_pos = true_pos + eye_rand_trans
     env.scene["obs_camera"].set_world_poses(positions=biased_pos)        # DOES NOT WORK??
@@ -976,8 +976,10 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
                     ),
                     data_types=obs_params.obs_camera_type,
                     spawn=sim_utils.PinholeCameraCfg(clipping_range=(0.0001, 0.5)),
-                    width=224,
-                    height=224,
+                    # width=224,
+                    # height=224,
+                    width=1200,
+                    height=1200,
                 )
 
 
