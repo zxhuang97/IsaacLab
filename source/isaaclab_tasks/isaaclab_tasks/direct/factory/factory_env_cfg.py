@@ -6,10 +6,12 @@
 import isaaclab.sim as sim_utils
 from isaaclab.actuators.actuator_cfg import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg
-from isaaclab.envs import DirectRLEnvCfg
+from isaaclab.envs import DirectRLEnvCfg, ViewerCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim import PhysxCfg, SimulationCfg
 from isaaclab.sim.spawners.materials.physics_materials_cfg import RigidBodyMaterialCfg
+from isaaclab.sensors import TiledCameraCfg, VisuoTactileSensorCfg
+from isaaclab.markers import VisualizationMarkersCfg
 from isaaclab.utils import configclass
 
 from .factory_tasks_cfg import ASSET_DIR, FactoryTask, GearMesh, NutThread, PegInsert
@@ -116,12 +118,19 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         ),
     )
 
-    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=128, env_spacing=2.0, clone_in_fabric=True)
+    # Viewer settings
+    viewer: ViewerCfg = ViewerCfg(
+        eye=(0.3, 0., 0.2), lookat=(0.0, 0.0, 0.04),
+        origin_type="asset_root", asset_name="fixed_asset"
+        )
+
+    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=128, env_spacing=2.0, clone_in_fabric=False)
 
     robot = ArticulationCfg(
         prim_path="/World/envs/env_.*/Robot",
         spawn=sim_utils.UsdFileCfg(
-            usd_path=f"{ASSET_DIR}/franka_mimic.usd",
+            # usd_path=f"{ASSET_DIR}/franka_mimic.usd",
+            usd_path=f"{ASSET_DIR}/franka_mimic_ori.usd",
             activate_contact_sensors=True,
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 disable_gravity=True,
@@ -140,7 +149,8 @@ class FactoryEnvCfg(DirectRLEnvCfg):
                 solver_position_iteration_count=192,
                 solver_velocity_iteration_count=1,
             ),
-            collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.005, rest_offset=0.0),
+            # collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.005, rest_offset=0.0),
+            collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.001, rest_offset=-0.001),
         ),
         init_state=ArticulationCfg.InitialStateCfg(
             joint_pos={
@@ -185,6 +195,71 @@ class FactoryEnvCfg(DirectRLEnvCfg):
                 armature=0.0,
             ),
         },
+    )
+
+    obs_cam = TiledCameraCfg(
+        prim_path="/World/envs/env_.*/Camera",
+        offset=TiledCameraCfg.OffsetCfg(
+            pos=(0.8, 0.2, 0.15),
+            rot=[0.18913, -0.25231, -0.70188, 0.6387],
+            convention="ros",
+        ),
+        data_types=["distance_to_image_plane"],
+        spawn=sim_utils.PinholeCameraCfg(clipping_range=(0.0001, 0.5)),
+        width=224,
+        height=224,
+        # width=1200,
+        # height=1200,
+    )
+
+        # TacSL Tactile Sensor
+    tactile_cam = VisuoTactileSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/panda_leftfinger/tactile_sensor",
+        history_length=0,
+        debug_vis=False,
+        # Sensor configuration
+        sensor_type="gelsight_r15",
+        enable_camera_tactile=True,
+        enable_force_field=True,
+        # Elastomer configuration
+        elastomer_rigid_body="elastomer",
+        elastomer_tactile_mesh="elastomer/visuals",
+        elastomer_tip_link_name="elastomer_tip",
+        # Force field configuration
+        num_tactile_rows=20,
+        num_tactile_cols=25,
+        tactile_margin=0.003,
+        # Indenter configuration (will be set based on indenter type)
+        indenter_rigid_body=None,  # Will be updated based on indenter type
+        indenter_sdf_mesh=None,  # Will be updated based on indenter type
+        # Force field physics parameters
+        tactile_kn=1.0,
+        tactile_mu=2.0,
+        tactile_kt=0.1,
+        # Compliant dynamics
+        compliance_stiffness=350.0,
+        compliant_damping=1.0,
+        # Camera configuration
+        camera_cfg=TiledCameraCfg(
+            prim_path="/World/envs/env_.*/Robot/panda_leftfinger/elastomer_tip/cam",
+            update_period=1 / 200,  # 60 Hz
+            height=320,
+            width=240,
+            data_types=["distance_to_image_plane"],
+            spawn=None,  # the camera is already spawned in the scene, properties are set in the gelsight_r15_finger.usd file
+        ),
+        # Debug Visualization
+        trimesh_vis_tactile_points=False,
+        visualize_sdf_closest_pts=False,
+        visualizer_cfg=VisualizationMarkersCfg(
+            prim_path="/Visuals/TactileSensorDebugPts",
+            markers={
+                "debug_pts": sim_utils.SphereCfg(
+                    radius=0.0002,
+                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 1.0)),
+                ),
+            },
+        ),
     )
 
 

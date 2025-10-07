@@ -207,6 +207,11 @@ class SensorBase(ABC):
         self._sim_physics_dt = sim.get_physics_dt()
         # Count number of environments
         env_prim_path_expr = self.cfg.prim_path.rsplit("/", 1)[0]
+        # NOTE(zixuan): while this can get the correct num_envs, XFormPrim has the wrong count
+        # if sim.is_fabric_enabled():
+        #     stage = usdrt.Usd.Stage.Attach(sim_utils.get_current_stage_id())
+        #     self._parent_prims = sim_utils.find_matching_prims(env_prim_path_expr, stage=stage)
+        # else:
         self._parent_prims = sim_utils.find_matching_prims(env_prim_path_expr)
         self._num_envs = len(self._parent_prims)
         # Boolean tensor indicating whether the sensor data has to be refreshed

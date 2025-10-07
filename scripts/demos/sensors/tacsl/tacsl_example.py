@@ -26,6 +26,7 @@ import cv2
 
 from isaaclab.app import AppLauncher
 from isaaclab.utils.timer import Timer
+from force_tool.visualization.plot_utils import save_numpy_video, get_img_from_fig
 
 # Add argparse arguments
 parser = argparse.ArgumentParser(description="TacSL tactile sensor example.")
@@ -86,6 +87,7 @@ class TactileSensorsSceneCfg(InteractiveSceneCfg):
         prim_path="{ENV_REGEX_NS}/Robot",
         spawn=sim_utils.UsdFileCfg(
             usd_path=f"{ISAACLAB_NUCLEUS_DIR}/TacSL/gelsight_r15_finger/gelsight_r15_finger.usd",
+            # usd_path=f"{ISAACLAB_NUCLEUS_DIR}/TacSL/gelsight_mini_finger/gelsight_mini_finger.usd",
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 disable_gravity=True,
                 max_depenetration_velocity=5.0,
@@ -138,7 +140,7 @@ class TactileSensorsSceneCfg(InteractiveSceneCfg):
         # Camera configuration
         camera_cfg=TiledCameraCfg(
             prim_path="{ENV_REGEX_NS}/Robot/elastomer_tip/cam",
-            update_period=1 / 60,  # 60 Hz
+            update_period=1 / 200,  # 60 Hz
             height=320,
             width=240,
             data_types=["distance_to_image_plane"],
@@ -155,6 +157,28 @@ class TactileSensorsSceneCfg(InteractiveSceneCfg):
                     visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 1.0)),
                 ),
             },
+        ),
+    )
+
+    # Tiled camera to look at the nut
+    nut_camera = TiledCameraCfg(
+        prim_path="{ENV_REGEX_NS}/nut_camera",
+        update_period=1 / 200,  # 60 Hz
+        height=480,
+        width=640,
+        data_types=["rgb"],
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=24.0, 
+            focus_distance=400.0, 
+            horizontal_aperture=20.955, 
+            clipping_range=(0.1, 1.0e5)
+        ),
+        offset=TiledCameraCfg.OffsetCfg(
+            pos=(0.0, 0.05, 0.65),  # Position above the nut
+            # rot=(0.065, 0.141, 0.987, 0.0355),  # Looking down
+            # rot=(-0.0015, -0.0086, 0.1736, 0.9848),  # Looking down
+            rot=(0.706, -0.037, 0.0246, 0.7067),
+            convention="opengl"
         ),
     )
 
@@ -204,21 +228,17 @@ class NutTactileSceneCfg(TactileSensorsSceneCfg):
     )
 
 
+
 def mkdir_helper(dir_path):
     tactile_img_folder = dir_path
     os.makedirs(tactile_img_folder, exist_ok=True)
-    tactile_force_field_dir = os.path.join(tactile_img_folder, "tactile_force_field")
-    os.makedirs(tactile_force_field_dir, exist_ok=True)
-    tactile_taxim_dir = os.path.join(tactile_img_folder, "tactile_taxim")
-    os.makedirs(tactile_taxim_dir, exist_ok=True)
-    return tactile_force_field_dir, tactile_taxim_dir
+    return tactile_img_folder
 
 
-def save_viz_helper(dir_path_list, count, tactile_data, num_envs, nrows, ncols):
-    # Only save the first 2 environments
-
-    tactile_force_field_dir, tactile_taxim_dir = dir_path_list
-
+def collect_frame_data(tactile_data, camera_data, num_envs, nrows, ncols):
+    """Collect frame data for video creation."""
+    frame_data = {}
+    
     if tactile_data.tactile_shear_force is not None and tactile_data.tactile_normal_force is not None:
         # visualize tactile forces
         tactile_normal_force = tactile_data.tactile_normal_force.view((num_envs, nrows, ncols))
@@ -233,17 +253,98 @@ def save_viz_helper(dir_path_list, count, tactile_data, num_envs, nrows, ncols):
                 tactile_normal_force[1, :, :].detach().cpu().numpy(),
                 tactile_shear_force[1, :, :].detach().cpu().numpy(),
             )
-            combined_image = np.vstack([tactile_image, tactile_image_1])
-            cv2.imwrite(os.path.join(tactile_force_field_dir, f"{count}.png"), combined_image * 255)
+            combined_tactile_image = np.vstack([tactile_image, tactile_image_1])
         else:
-            cv2.imwrite(os.path.join(tactile_force_field_dir, f"{count}.png"), tactile_image * 255)
+            combined_tactile_image = tactile_image
+            
+        frame_data['tactile_force_field'] = (combined_tactile_image * 255).astype(np.uint8)
 
     if tactile_data.taxim_tactile is not None:
         taxim_data = tactile_data.taxim_tactile.cpu().numpy()
         taxim_data = np.transpose(taxim_data, axes=(0, 2, 1, 3))
         taxim_data_first_2 = taxim_data[:2] if len(taxim_data) >= 2 else taxim_data
         taxim_tiled = np.concatenate(taxim_data_first_2, axis=0)
-        cv2.imwrite(os.path.join(tactile_taxim_dir, f"{count}.png"), taxim_tiled)
+        frame_data['tactile_taxim'] = taxim_tiled
+    
+    # Add RGB camera data
+    if camera_data is not None and 'rgb' in camera_data.output:
+        rgb_data = camera_data.output['rgb'].cpu().numpy()
+        # Take the first environment's RGB data
+        rgb_frame = rgb_data[0]  # Shape: (H, W, C)
+        frame_data['rgb_camera'] = rgb_frame
+        
+    return frame_data
+
+
+def create_episode_video(episode_frames, output_dir, episode_num):
+    """Create video from episode frames using save_numpy_video."""
+    if not episode_frames:
+        return
+        
+    # Get frame dimensions from first frame
+    first_frame = episode_frames[0]
+    has_force_field = 'tactile_force_field' in first_frame
+    has_taxim = 'tactile_taxim' in first_frame
+    has_rgb = 'rgb_camera' in first_frame
+    
+    if not (has_force_field or has_taxim or has_rgb):
+        return
+    
+    # Prepare frames for save_numpy_video
+    video_frames = []
+    
+    for frame_data in episode_frames:
+        frame_components = []
+        
+        # Add RGB camera if available
+        if has_rgb:
+            rgb_img = frame_data['rgb_camera']
+            # Convert from RGB to BGR for OpenCV compatibility
+            rgb_img = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2BGR)
+            frame_components.append(rgb_img)
+        
+        # Add tactile force field if available
+        if has_force_field:
+            force_field_img = frame_data['tactile_force_field']
+            frame_components.append(force_field_img)
+        
+        # Add tactile taxim if available
+        if has_taxim:
+            taxim_img = frame_data['tactile_taxim']
+            frame_components.append(taxim_img)
+        
+        if len(frame_components) == 1:
+            combined_frame = frame_components[0]
+        elif len(frame_components) == 2:
+            # Resize images to have the same height
+            target_height = max(frame_components[0].shape[0], frame_components[1].shape[0])
+            img1_resized = cv2.resize(frame_components[0], 
+                                    (int(frame_components[0].shape[1] * target_height / frame_components[0].shape[0]), 
+                                     target_height))
+            img2_resized = cv2.resize(frame_components[1], 
+                                    (int(frame_components[1].shape[1] * target_height / frame_components[1].shape[0]), 
+                                     target_height))
+            combined_frame = np.hstack([img1_resized, img2_resized])
+        else:  # 3 components
+            # Resize all images to have the same height
+            target_height = max(comp.shape[0] for comp in frame_components)
+            resized_components = []
+            for comp in frame_components:
+                resized = cv2.resize(comp, 
+                                   (int(comp.shape[1] * target_height / comp.shape[0]), 
+                                    target_height))
+                resized_components.append(resized)
+            combined_frame = np.hstack(resized_components)
+        
+        video_frames.append(combined_frame)
+    
+    # Convert to numpy array with shape (T, H, W, C) for save_numpy_video
+    video_array = np.array(video_frames)
+    
+    # Create video using save_numpy_video
+    video_path = os.path.join(output_dir, f"episode_{episode_num:03d}")
+    save_numpy_video(video_array, video_path, fps=20, format='mp4', draw_idx=True)
+    print(f"[INFO]: Saved episode video: {video_path}.mp4")
 
 
 def run_simulator(sim, scene: InteractiveScene):
@@ -257,8 +358,10 @@ def run_simulator(sim, scene: InteractiveScene):
     num_envs = scene.num_envs
 
     if args_cli.save_viz:
-        # Create output directories for tactile data
-        dir_path_list = mkdir_helper(args_cli.save_viz_dir)
+        # Create output directory for tactile videos
+        output_dir = mkdir_helper(args_cli.save_viz_dir)
+        episode_frames = []  # Store frames for current episode
+        episode_num = 0
 
     # Create constant downward force
     force_tensor = torch.zeros(scene.num_envs, 1, 3, device=sim.device)
@@ -280,8 +383,15 @@ def run_simulator(sim, scene: InteractiveScene):
 
     while simulation_app.is_running():
 
-        if count == 122:
+        if count == 200:
             print(scene["tactile_sensor"].get_timing_summary())
+            
+            # Save current episode video if we have frames
+            if args_cli.save_viz and episode_frames:
+                create_episode_video(episode_frames, output_dir, episode_num)
+                episode_frames = []  # Clear frames for next episode
+                episode_num += 1
+            
             # Reset robot and indenter positions
             count = 0
             for entity in entity_list:
@@ -294,12 +404,14 @@ def run_simulator(sim, scene: InteractiveScene):
 
         if "indenter" in scene.keys():
             # rotation
-            if count > 20:
+            if count > 30:
                 env_indices = torch.arange(scene.num_envs, device=sim.device)
                 odd_mask = env_indices % 2 == 1
                 even_mask = env_indices % 2 == 0
-                torque_tensor[odd_mask, 0, 2] = 10  # rotation for odd environments
-                torque_tensor[even_mask, 0, 2] = -10  # rotation for even environments
+                # torque_tensor[odd_mask, 0, 2] = 0.005 # rotation for odd environments
+                # torque_tensor[even_mask, 0, 2] = -0.005  # rotation for even environments
+                force_tensor[odd_mask, 0, 0] = 0.4
+                force_tensor[even_mask, 0, 0] = -0.4
                 scene["indenter"].set_external_force_and_torque(force_tensor, torque_tensor)
 
         # Step simulation
@@ -315,9 +427,20 @@ def run_simulator(sim, scene: InteractiveScene):
 
         # Access tactile sensor data
         tactile_data = scene["tactile_sensor"].data
+        
+        # Access camera data
+        camera_data = scene["nut_camera"].data if "nut_camera" in scene.keys() else None
 
         if args_cli.save_viz:
-            save_viz_helper(dir_path_list, count, tactile_data, num_envs, nrows, ncols)
+            # Collect frame data for video creation
+            frame_data = collect_frame_data(tactile_data, camera_data, num_envs, nrows, ncols)
+            if frame_data:  # Only add if we have data
+                episode_frames.append(frame_data)
+
+    # Save final episode video if we have frames
+    if args_cli.save_viz and episode_frames:
+        create_episode_video(episode_frames, output_dir, episode_num)
+        print(f"[INFO]: Saved final episode video (episode {episode_num})")
 
     # Get timing summary from sensor and add physics timing
     timing_summary = scene["tactile_sensor"].get_timing_summary()

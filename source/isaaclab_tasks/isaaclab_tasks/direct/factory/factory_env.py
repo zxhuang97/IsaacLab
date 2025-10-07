@@ -15,10 +15,11 @@ from isaaclab.envs import DirectRLEnv
 from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.utils.math import axis_angle_from_quat
-
+from isaaclab.sensors import VisuoTactileSensor, TiledCamera
 from . import factory_control, factory_utils
 from .factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG, FactoryEnvCfg
 
+import matplotlib.pyplot as plt
 
 class FactoryEnv(DirectRLEnv):
     cfg: FactoryEnvCfg
@@ -67,8 +68,10 @@ class FactoryEnv(DirectRLEnv):
         self.init_fixed_pos_obs_noise = torch.zeros((self.num_envs, 3), device=self.device)
 
         # Computer body indices.
-        self.left_finger_body_idx = self._robot.body_names.index("panda_leftfinger")
-        self.right_finger_body_idx = self._robot.body_names.index("panda_rightfinger")
+        # self.left_finger_body_idx = self._robot.body_names.index("panda_leftfinger")
+        # self.right_finger_body_idx = self._robot.body_names.index("panda_rightfinger")
+        self.left_finger_body_idx = self._robot.body_names.index("gelsight_finger")
+        self.right_finger_body_idx = self._robot.body_names.index("gelsight_finger_0")
         self.fingertip_body_idx = self._robot.body_names.index("panda_fingertip_centered")
 
         # Tensors for finite-differencing.
@@ -114,6 +117,17 @@ class FactoryEnv(DirectRLEnv):
         # add lights
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
+
+        # self._obs_cam = TiledCamera(self.cfg.obs_cam)
+        # self.scene.sensors["obs_cam"] = self._obs_cam
+
+        self._tactile_cam: VisuoTactileSensor = VisuoTactileSensor(self.cfg.tactile_cam)
+        self.scene.sensors["tactile_cam"] = self._tactile_cam
+
+        # Debug: Print environment info
+        print(f"[INFO] Scene created with {self.scene.num_envs} environments")
+        print(f"[INFO] Environment prim paths: {self.scene.env_prim_paths[0]} ... {self.scene.env_prim_paths[-1]}")
+        print(f"[INFO] Environment origins shape: {self.scene.env_origins.shape}")
 
     def _compute_intermediate_values(self, dt):
         """Get values computed from raw tensors. This includes adding noise."""
@@ -194,7 +208,9 @@ class FactoryEnv(DirectRLEnv):
     def _get_observations(self):
         """Get actor/critic inputs using asymmetric critic."""
         obs_dict, state_dict = self._get_factory_obs_state_dict()
-
+        tactile_data = self._tactile_cam.data
+        taxim_data = tactile_data.taxim_tactile.cpu().numpy()
+        obs_dict['tactile_taxim'] = taxim_data
         obs_tensors = factory_utils.collapse_obs_dict(obs_dict, self.cfg.obs_order + ["prev_actions"])
         state_tensors = factory_utils.collapse_obs_dict(state_dict, self.cfg.state_order + ["prev_actions"])
         return {"policy": obs_tensors, "critic": state_tensors}
@@ -492,7 +508,9 @@ class FactoryEnv(DirectRLEnv):
         self._set_assets_to_default_pose(env_ids)
         self._set_franka_to_default_pose(joints=self.cfg.ctrl.reset_joints, env_ids=env_ids)
         self.step_sim_no_action()
-
+        if self._tactile_cam._nominal_tactile is None:
+            self.sim.render()
+            self._tactile_cam.get_initial_render()
         self.randomize_initial_state(env_ids)
 
     def _set_assets_to_default_pose(self, env_ids):
@@ -587,6 +605,7 @@ class FactoryEnv(DirectRLEnv):
     def _set_franka_to_default_pose(self, joints, env_ids):
         """Return Franka to its default joint position."""
         gripper_width = self.cfg_task.held_asset_cfg.diameter / 2 * 1.25
+        # gripper_width = 0.02
         joint_pos = self._robot.data.default_joint_pos[env_ids]
         joint_pos[:, 7:] = gripper_width  # MIMIC
         joint_pos[:, :7] = torch.tensor(joints, device=self.device)[None, :]

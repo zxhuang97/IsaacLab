@@ -7,8 +7,10 @@ import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR
+from pathlib import Path
 
-ASSET_DIR = f"{ISAACLAB_NUCLEUS_DIR}/Factory"
+# ASSET_DIR = f"{ISAACLAB_NUCLEUS_DIR}/Factory"
+ASSET_DIR = str(Path(__file__).resolve().parents[6] / "assets" / "Factory_new")
 
 
 @configclass
