@@ -2,6 +2,13 @@
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
+"""
+Example command to run with tactile sensor enabled:
+python scripts/reinforcement_learning/rl_games/train.py --task Isaac-Factory-NutThread-Direct-v0 --enable_cameras env.enable_tactile_sensor=true
+
+python -m torch.distributed.run --nnodes=1 --nproc_per_node=2 scripts/reinforcement_learning/rl_games/train.py --task Isaac-Factory-NutThread-Direct-v0 --enable_cameras env.enable_tactile_sensor=true --num_envs 256 --distributed --headless
+
+"""
 
 import isaaclab.sim as sim_utils
 from isaaclab.actuators.actuator_cfg import ImplicitActuatorCfg
@@ -94,7 +101,10 @@ class FactoryEnvCfg(DirectRLEnvCfg):
     task: FactoryTask = FactoryTask()
     obs_rand: ObsRandCfg = ObsRandCfg()
     ctrl: CtrlCfg = CtrlCfg()
-
+    
+    # Sensor configuration
+    enable_tactile_sensor: bool = False
+    read_tactile_sensor: bool = False
     episode_length_s = 10.0  # Probably need to override.
     sim: SimulationCfg = SimulationCfg(
         device="cuda:0",
@@ -120,7 +130,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
 
     # Viewer settings
     viewer: ViewerCfg = ViewerCfg(
-        eye=(0.3, 0., 0.2), lookat=(0.0, 0.0, 0.04),
+        eye=(0.25, 0.1, 0.2), lookat=(0.0, 0.0, 0.04),
         origin_type="asset_root", asset_name="fixed_asset"
         )
 
@@ -212,7 +222,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         # height=1200,
     )
 
-        # TacSL Tactile Sensor
+    # TacSL Tactile Sensor
     tactile_cam = VisuoTactileSensorCfg(
         prim_path="/World/envs/env_.*/Robot/panda_leftfinger/tactile_sensor",
         history_length=0,
@@ -242,9 +252,11 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         # Camera configuration
         camera_cfg=TiledCameraCfg(
             prim_path="/World/envs/env_.*/Robot/panda_leftfinger/elastomer_tip/cam",
-            update_period=1 / 200,  # 60 Hz
+            update_period=1 / 60,  # 60 Hz
             height=320,
             width=240,
+            # height=80,
+            # width=60,
             data_types=["distance_to_image_plane"],
             spawn=None,  # the camera is already spawned in the scene, properties are set in the gelsight_r15_finger.usd file
         ),

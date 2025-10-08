@@ -121,8 +121,15 @@ class FactoryEnv(DirectRLEnv):
         # self._obs_cam = TiledCamera(self.cfg.obs_cam)
         # self.scene.sensors["obs_cam"] = self._obs_cam
 
-        self._tactile_cam: VisuoTactileSensor = VisuoTactileSensor(self.cfg.tactile_cam)
-        self.scene.sensors["tactile_cam"] = self._tactile_cam
+        if self.cfg.enable_tactile_sensor:
+            print(f"[INFO] Enabling tactile sensor")
+            self._tactile_cam: VisuoTactileSensor = VisuoTactileSensor(self.cfg.tactile_cam)
+            self.scene.sensors["tactile_cam"] = self._tactile_cam
+            VisuoTactileSensor.setup_compliant_materials(self.cfg.tactile_cam)
+        else:
+            print(f"[INFO] Disabling tactile sensor")
+            self._tactile_cam = None
+            VisuoTactileSensor.setup_compliant_materials(self.cfg.tactile_cam)
 
         # Debug: Print environment info
         print(f"[INFO] Scene created with {self.scene.num_envs} environments")
@@ -208,9 +215,10 @@ class FactoryEnv(DirectRLEnv):
     def _get_observations(self):
         """Get actor/critic inputs using asymmetric critic."""
         obs_dict, state_dict = self._get_factory_obs_state_dict()
-        tactile_data = self._tactile_cam.data
-        taxim_data = tactile_data.taxim_tactile.cpu().numpy()
-        obs_dict['tactile_taxim'] = taxim_data
+        if self.cfg.enable_tactile_sensor and self.cfg.read_tactile_sensor:
+            tactile_data = self._tactile_cam.data
+            taxim_data = tactile_data.taxim_tactile.cpu().numpy()
+            obs_dict['tactile_taxim'] = taxim_data
         obs_tensors = factory_utils.collapse_obs_dict(obs_dict, self.cfg.obs_order + ["prev_actions"])
         state_tensors = factory_utils.collapse_obs_dict(state_dict, self.cfg.state_order + ["prev_actions"])
         return {"policy": obs_tensors, "critic": state_tensors}
@@ -508,9 +516,10 @@ class FactoryEnv(DirectRLEnv):
         self._set_assets_to_default_pose(env_ids)
         self._set_franka_to_default_pose(joints=self.cfg.ctrl.reset_joints, env_ids=env_ids)
         self.step_sim_no_action()
-        if self._tactile_cam._nominal_tactile is None:
-            self.sim.render()
-            self._tactile_cam.get_initial_render()
+        if self.cfg.enable_tactile_sensor and self.cfg.read_tactile_sensor:
+            if self._tactile_cam._nominal_tactile is None:
+                self.sim.render()
+                self._tactile_cam.get_initial_render()
         self.randomize_initial_state(env_ids)
 
     def _set_assets_to_default_pose(self, env_ids):
@@ -574,12 +583,14 @@ class FactoryEnv(DirectRLEnv):
             held_asset_relative_pos = torch.zeros((self.num_envs, 3), device=self.device)
             held_asset_relative_pos[:, 2] = self.cfg_task.held_asset_cfg.height
             held_asset_relative_pos[:, 2] -= self.cfg_task.robot_cfg.franka_fingerpad_length
+            held_asset_relative_pos[:, 2] += 0.01
         elif self.cfg_task.name == "gear_mesh":
             held_asset_relative_pos = torch.zeros((self.num_envs, 3), device=self.device)
             gear_base_offset = self.cfg_task.fixed_asset_cfg.medium_gear_base_offset
             held_asset_relative_pos[:, 0] += gear_base_offset[0]
             held_asset_relative_pos[:, 2] += gear_base_offset[2]
             held_asset_relative_pos[:, 2] += self.cfg_task.held_asset_cfg.height / 2.0 * 1.1
+            held_asset_relative_pos[:, 2] += 0.01
         elif self.cfg_task.name == "nut_thread":
             held_asset_relative_pos = factory_utils.get_held_base_pos_local(
                 self.cfg_task.name, self.cfg_task.fixed_asset_cfg, self.num_envs, self.device
