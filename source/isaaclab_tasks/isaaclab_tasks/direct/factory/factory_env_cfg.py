@@ -58,7 +58,7 @@ class ObsRandCfg:
 @configclass
 class ObsHistoryCfg:
     """Configuration for observation history."""
-    history_length: int = 5
+    history_length: int = 0
     flatten_history_dim: bool = True
 
 
@@ -113,6 +113,9 @@ class FactoryEnvCfg(DirectRLEnvCfg):
     # Sensor configuration
     enable_tactile_sensor: bool = False
     read_tactile_sensor: bool = False
+    use_compliant_gripper: bool = True
+    use_gelsight_finger: bool = True
+    
     episode_length_s = 10.0  # Probably need to override.
     sim: SimulationCfg = SimulationCfg(
         device="cuda:0",
@@ -144,11 +147,16 @@ class FactoryEnvCfg(DirectRLEnvCfg):
 
     scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=128, env_spacing=2.0, clone_in_fabric=False)
 
+    def __post_init__(self):
+        """Post-initialization to set conditional parameters."""
+        # Set robot USD path based on use_gelsight_finger flag
+        robot_usd_file = "franka_mimic_ori.usd" if self.use_gelsight_finger else "franka_mimic.usd"
+        self.robot.spawn.usd_path = f"{ASSET_DIR}/{robot_usd_file}"
+
     robot = ArticulationCfg(
         prim_path="/World/envs/env_.*/Robot",
         spawn=sim_utils.UsdFileCfg(
-            # usd_path=f"{ASSET_DIR}/franka_mimic.usd",
-            usd_path=f"{ASSET_DIR}/franka_mimic_ori.usd",
+            usd_path=f"{ASSET_DIR}/franka_mimic.usd",  # Will be overridden in __post_init__
             activate_contact_sensors=True,
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 disable_gravity=True,

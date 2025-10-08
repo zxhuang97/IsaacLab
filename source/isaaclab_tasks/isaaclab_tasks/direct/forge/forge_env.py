@@ -136,8 +136,14 @@ class ForgeEnv(FactoryEnv):
             "force_threshold": self.contact_penalty_thresholds[:, None],
             "prev_actions": prev_actions,
         })
-
-        obs_tensors = factory_utils.collapse_obs_dict(obs_dict, self.cfg.obs_order + ["prev_actions"])
+        self._update_obs_history(obs_dict)
+        if self.obs_history_length > 0:
+            history_tensors = [self.obs_history_buffers[obs_name].reshape(self.num_envs, -1) for obs_name in self.cfg.obs_order + ["prev_actions"]]
+            obs_tensors = torch.cat(history_tensors, dim=1)
+        else:
+            # No history: use current observations only
+            obs_tensors = factory_utils.collapse_obs_dict(obs_dict, self.cfg.obs_order + ["prev_actions"])
+        
         state_tensors = factory_utils.collapse_obs_dict(state_dict, self.cfg.state_order + ["prev_actions"])
         return {"policy": obs_tensors, "critic": state_tensors}
 

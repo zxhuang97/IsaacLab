@@ -96,10 +96,12 @@ class FactoryEnv(DirectRLEnv):
             )
 
         # Computer body indices.
-        # self.left_finger_body_idx = self._robot.body_names.index("panda_leftfinger")
-        # self.right_finger_body_idx = self._robot.body_names.index("panda_rightfinger")
-        self.left_finger_body_idx = self._robot.body_names.index("gelsight_finger")
-        self.right_finger_body_idx = self._robot.body_names.index("gelsight_finger_0")
+        if not self.cfg.use_gelsight_finger:
+            self.left_finger_body_idx = self._robot.body_names.index("panda_leftfinger")
+            self.right_finger_body_idx = self._robot.body_names.index("panda_rightfinger")
+        else:
+            self.left_finger_body_idx = self._robot.body_names.index("gelsight_finger")
+            self.right_finger_body_idx = self._robot.body_names.index("gelsight_finger_0")
         self.fingertip_body_idx = self._robot.body_names.index("panda_fingertip_centered")
 
         # Tensors for finite-differencing.
@@ -153,10 +155,10 @@ class FactoryEnv(DirectRLEnv):
             print(f"[INFO] Enabling tactile sensor")
             self._tactile_cam: VisuoTactileSensor = VisuoTactileSensor(self.cfg.tactile_cam)
             self.scene.sensors["tactile_cam"] = self._tactile_cam
-            VisuoTactileSensor.setup_compliant_materials(self.cfg.tactile_cam)
         else:
             print(f"[INFO] Disabling tactile sensor")
             self._tactile_cam = None
+        if self.cfg.use_compliant_gripper:
             VisuoTactileSensor.setup_compliant_materials(self.cfg.tactile_cam)
 
         # Debug: Print environment info
@@ -266,15 +268,8 @@ class FactoryEnv(DirectRLEnv):
         # Update observation history (includes both observations and actions)
         self._update_obs_history(obs_dict)
         
-        # Get observations (either current only or history)
         if self.obs_history_length > 0:
-            # Use history only (current observation is already the last timestep in history)
-            history_tensors = []
-            # Add observation history
-            for obs_name in self.cfg.obs_order + ["prev_actions"]:
-                history_buffer = self.obs_history_buffers[obs_name]
-                history_buffer = history_buffer.reshape(self.num_envs, -1)
-                history_tensors.append(history_buffer)
+            history_tensors = [self.obs_history_buffers[obs_name].reshape(self.num_envs, -1) for obs_name in self.cfg.obs_order + ["prev_actions"]]
             obs_tensors = torch.cat(history_tensors, dim=1)
         else:
             # No history: use current observations only
