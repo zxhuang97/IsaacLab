@@ -26,10 +26,18 @@ class FactoryEnv(DirectRLEnv):
 
     def __init__(self, cfg: FactoryEnvCfg, render_mode: str | None = None, **kwargs):
         # Update number of obs/states
-        cfg.observation_space = sum([OBS_DIM_CFG[obs] for obs in cfg.obs_order])
-        cfg.state_space = sum([STATE_DIM_CFG[state] for state in cfg.state_order])
+        base_obs_space = sum([OBS_DIM_CFG[obs] for obs in cfg.obs_order])
+        cfg.observation_space = base_obs_space
         cfg.observation_space += cfg.action_space
+        cfg.state_space = sum([STATE_DIM_CFG[state] for state in cfg.state_order])
+        
+        # Add action space to both
         cfg.state_space += cfg.action_space
+        
+        # Add history space if enabled (includes both observations and actions)
+        if cfg.obs_history.history_length > 0:
+            cfg.observation_space = cfg.observation_space * cfg.obs_history.history_length
+        
         self.cfg_task = cfg.task
 
         super().__init__(cfg, render_mode, **kwargs)
@@ -66,6 +74,26 @@ class FactoryEnv(DirectRLEnv):
         # Fixed asset.
         self.fixed_pos_obs_frame = torch.zeros((self.num_envs, 3), device=self.device)
         self.init_fixed_pos_obs_noise = torch.zeros((self.num_envs, 3), device=self.device)
+
+        # Observation history buffers.
+        # Always store buffers in non-flattened format: (num_envs, history_length, obs_dim)
+        # Flatten only when returning observations if needed
+        self.obs_history_length = self.cfg.obs_history.history_length
+        if self.obs_history_length > 0:
+            self.obs_history_buffers = {}
+            # Add history buffers for observations
+            for obs_name in self.cfg.obs_order:
+                obs_dim = OBS_DIM_CFG[obs_name]
+                # Always store as (num_envs, history_length, obs_dim)
+                self.obs_history_buffers[obs_name] = torch.zeros(
+                    (self.num_envs, self.obs_history_length, obs_dim), device=self.device
+                )
+            # Add history buffer for actions
+            action_dim = self.cfg.action_space
+            # Always store as (num_envs, history_length, action_dim)
+            self.obs_history_buffers["prev_actions"] = torch.zeros(
+                (self.num_envs, self.obs_history_length, action_dim), device=self.device
+            )
 
         # Computer body indices.
         # self.left_finger_body_idx = self._robot.body_names.index("panda_leftfinger")
@@ -178,6 +206,21 @@ class FactoryEnv(DirectRLEnv):
 
         self.last_update_timestamp = self._robot._data._sim_timestamp
 
+    def _update_obs_history(self, obs_dict):
+        """Update observation history buffers with current observations.
+        
+        Buffers are stored in non-flattened format: (num_envs, history_length, obs_dim)
+        """
+        if self.obs_history_length == 0:
+            return
+            
+        for obs_name, obs_tensor in obs_dict.items():
+            if obs_name in self.obs_history_buffers:
+                # Shift existing history (move oldest out, shift all left)
+                self.obs_history_buffers[obs_name][:, :-1] = self.obs_history_buffers[obs_name][:, 1:].clone()
+                # Add new observation at the end (most recent)
+                self.obs_history_buffers[obs_name][:, -1] = obs_tensor
+
     def _get_factory_obs_state_dict(self):
         """Populate dictionaries for the policy and critic."""
         noisy_fixed_pos = self.fixed_pos_obs_frame + self.init_fixed_pos_obs_noise
@@ -219,7 +262,24 @@ class FactoryEnv(DirectRLEnv):
             tactile_data = self._tactile_cam.data
             taxim_data = tactile_data.taxim_tactile.cpu().numpy()
             obs_dict['tactile_taxim'] = taxim_data
-        obs_tensors = factory_utils.collapse_obs_dict(obs_dict, self.cfg.obs_order + ["prev_actions"])
+        
+        # Update observation history (includes both observations and actions)
+        self._update_obs_history(obs_dict)
+        
+        # Get observations (either current only or history)
+        if self.obs_history_length > 0:
+            # Use history only (current observation is already the last timestep in history)
+            history_tensors = []
+            # Add observation history
+            for obs_name in self.cfg.obs_order + ["prev_actions"]:
+                history_buffer = self.obs_history_buffers[obs_name]
+                history_buffer = history_buffer.reshape(self.num_envs, -1)
+                history_tensors.append(history_buffer)
+            obs_tensors = torch.cat(history_tensors, dim=1)
+        else:
+            # No history: use current observations only
+            obs_tensors = factory_utils.collapse_obs_dict(obs_dict, self.cfg.obs_order + ["prev_actions"])
+        
         state_tensors = factory_utils.collapse_obs_dict(state_dict, self.cfg.state_order + ["prev_actions"])
         return {"policy": obs_tensors, "critic": state_tensors}
 
@@ -227,6 +287,11 @@ class FactoryEnv(DirectRLEnv):
         """Reset buffers."""
         self.ep_succeeded[env_ids] = 0
         self.ep_success_times[env_ids] = 0
+        
+        # Reset observation history for reset environments
+        if self.obs_history_length > 0:
+            for obs_name in self.obs_history_buffers:
+                self.obs_history_buffers[obs_name][env_ids] = 0.0
 
     def _pre_physics_step(self, action):
         """Apply policy actions with smoothing."""
@@ -389,6 +454,7 @@ class FactoryEnv(DirectRLEnv):
         if self.cfg_task.name == "peg_insert" or self.cfg_task.name == "gear_mesh":
             height_threshold = fixed_cfg.height * success_threshold
         elif self.cfg_task.name == "nut_thread":
+            # 0.002 * 0.375 = 0.00075
             height_threshold = fixed_cfg.thread_pitch * success_threshold
         else:
             raise NotImplementedError("Task not implemented")
@@ -846,5 +912,10 @@ class FactoryEnv(DirectRLEnv):
         # Set initial gains for the episode.
         self.task_prop_gains = self.default_gains
         self.task_deriv_gains = factory_utils.get_deriv_gains(self.default_gains)
+
+        # Initialize observation history with first observation
+        if self.obs_history_length > 0:
+            obs_dict, _ = self._get_factory_obs_state_dict()
+            self._update_obs_history(obs_dict)
 
         physics_sim_view.set_gravity(carb.Float3(*self.cfg.sim.gravity))
