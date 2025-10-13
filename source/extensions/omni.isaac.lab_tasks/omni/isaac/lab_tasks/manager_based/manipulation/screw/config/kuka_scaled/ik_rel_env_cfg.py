@@ -214,8 +214,8 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
                 target_gripper_joint = torch.zeros(num_envs*B, 11, device=env.device, dtype=torch.float32)
                 cur_finger_open = mdp.inverse_compute_finger_angles_jit(cur_gripper_joint)[:, 0]
                 cur_finger_scissor = mdp.inverse_compute_scissor_angle_jit(cur_gripper_joint[:, -2:])[:, 0]
-                # close_finger_open = torch.tensor(0.31, device=env.device) # 0.33 is fully closed for m16
-                close_finger_open = torch.tensor(0.33, device=env.device) # 0.33 is fully closed for m16
+                close_finger_open = torch.tensor(0.31, device=env.device) # 0.33 is fully closed for m16
+                # close_finger_open = torch.tensor(0.33, device=env.device) # 0.33 is fully closed for m16
                 close_finger_scissor = torch.tensor(0.275, device=env.device)
                 if self.reset_close_gripper == "close":
                     tgt_finger_open = close_finger_open
@@ -277,38 +277,6 @@ class reset_bolt_pose_randomization_scaled(reset_bolt_pose_randomization):
             # We'll scale the translation range by the mean scale for consistency
             mean_scale = asset_scales.mean().item()
             self.translation_range = self.translation_range * mean_scale
-
-
-# Do a scaled version of the DTW reward
-class DTWReferenceTrajRewardScaled(DTWReferenceTrajReward):
-    def __init__(self, cfg: DTWReferenceTrajRewardCfg, env: ManagerBasedEnv):
-        super().__init__(cfg, env)
-
-    def reset(self, env_ids: torch.Tensor):
-        scene = self._env.unwrapped.scene
-
-        # Get this in a different way, and compare results
-        OLD_nut_frame = scene["nut_frame"]
-        OLD_nut_cur_pos = OLD_nut_frame.data.target_pos_w - scene.env_origins[:, None]
-        
-        nut = scene["nut"]
-        nut_cur_pos = nut.data.root_state_w[...,:3] - scene.env_origins[:,None]
-        # Asset
-        offset_tensor = torch.tensor(scene["nut_frame"].offset.pos).reshape(1,3).to(self._env.device)
-        assert ((nut_cur_pos-OLD_nut_cur_pos-offset_tensor) == 0).all(), "Nut cur pos is not equal to the old nut cur pos"
-
-        self.nut_traj_his[env_ids] = nut_cur_pos[env_ids]
-
-    def __call__(self, env: ManagerBasedEnv):
-        scene = self._env.unwrapped.scene
-        nut = scene["nut"]
-        cur_nut_pos = nut.data.root_state_w[...,:3] - scene.env_origins[:,None]
-
-        imitation_rwd, new_nut_traj_his = mdp.get_imitation_reward_from_dtw(
-            self.nut_ref_pos_traj, cur_nut_pos, self.nut_traj_his, self.soft_dtw_criterion, env.device
-        )
-        self.nut_traj_his = new_nut_traj_his
-        return imitation_rwd
 
 
 @configclass
@@ -736,14 +704,6 @@ class IKRelKukaNutThreadScaledEnvCfg(IKRelKukaNutThreadEnvCfg):
         # Nut Frame is used in nut_upright_reward_forge(), but only quat data
         # So no update is needed there
 
-        # Update the DTWReferenceTrajReward
-        rewards_params = self.params.rewards
-        if rewards_params.dtw_ref_traj_w > 0:
-            self.rewards.dtw_ref_traj = DTWReferenceTrajRewardCfg(
-                his_traj_len=10,
-                func=DTWReferenceTrajRewardScaled,
-                weight=rewards_params.dtw_ref_traj_w,
-            )
 
         # Additional observations
         # Pass scale as observation

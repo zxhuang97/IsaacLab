@@ -1097,7 +1097,8 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
 
         self.rewards.incoming_wrench_mag = RewTerm(
             func=mdp.incoming_wrench_mag,
-            params={"asset_cfg": self.observations.policy.wrist_wrench.params["asset_cfg"]},
+            # params={"asset_cfg": self.observations.policy.wrist_wrench.params["asset_cfg"]},
+            params={"asset_cfg": SceneEntityCfg("robot", body_names=[obs_params.wrench_target_body])},
             weight=rewards_params.incoming_wrench_mag_w,
         )
         if rewards_params.dtw_ref_traj_w > 0:
