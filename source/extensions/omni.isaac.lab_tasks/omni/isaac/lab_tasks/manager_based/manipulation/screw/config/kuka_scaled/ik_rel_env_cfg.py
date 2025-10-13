@@ -13,7 +13,7 @@ from omni.isaac.lab.managers import ObservationTermCfg as ObsTerm
 import omni.isaac.core.utils.stage as stage_utils
 import omni.isaac.lab.utils.math as math_utils
 import omni.physx.scripts.utils as physx_utils
-from typing import Literal
+from typing import Literal, Optional
 from omni.isaac.lab.managers import EventTermCfg
 from omni.isaac.lab.envs import ManagerBasedEnv
 from pxr import Usd, UsdGeom
@@ -30,6 +30,9 @@ from omni.isaac.lab_tasks.manager_based.manipulation.screw.config.kuka.ik_rel_en
     DTWReferenceTrajRewardCfg,
     DTWReferenceTrajReward,
     reset_scene_to_grasp_state,
+    GraspResetEventTermCfg,
+    BoltPoseRandomizationEventTermCfg,
+    reset_bolt_pose_randomization,
 )
 def spawn_nut_with_rigid_grasp_scaled(
         prim_path: str,
@@ -91,11 +94,11 @@ def get_env_scales(env):
     return env.cfg.asset_scale_samples.reshape(-1,1)
         
 # Do a scaled version of Grasp Reset
-class GraspResetEventTermScaledCfg(EventTermCfg):
+class GraspResetEventTermScaledCfg(GraspResetEventTermCfg):
     def __init__(
         self,
         reset_target: Literal["pre_grasp", "grasp", "mate", "rigid_grasp", "rigid_grasp_open_align"] = "grasp",
-        tool_nut_rel_pose: torch.Tensor = None,
+        tool_nut_rel_pose: Optional[torch.Tensor] = None,
         reset_range_scale: float = 1.0,
         reset_joint_std: float = 0.0,
         reset_randomize_mode: Literal["task", "joint", None] = "task",
@@ -149,7 +152,8 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
             default_tool_pose = self.curobo_arm.forward_kinematics(arm_state.clone()).ee_pose
             # default_tool_pose.position = detault_tool_pos
             default_tool_pose = default_tool_pose.repeat(num_envs)
-            delta_z = (env.cfg.bolt_heights - env.cfg.base_bolt_height).reshape(-1)
+            bolt_pos = env.scene["bolt"].data.root_pos_w
+            delta_z = (bolt_pos[:, 2:3] + env.cfg.bolt_heights - env.cfg.base_bolt_height).reshape(-1)
             # delta_z += 0.005
             default_tool_pose.position[:, 2] += delta_z
             
@@ -211,6 +215,7 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
                 cur_finger_open = mdp.inverse_compute_finger_angles_jit(cur_gripper_joint)[:, 0]
                 cur_finger_scissor = mdp.inverse_compute_scissor_angle_jit(cur_gripper_joint[:, -2:])[:, 0]
                 close_finger_open = torch.tensor(0.31, device=env.device) # 0.33 is fully closed for m16
+                # close_finger_open = torch.tensor(0.33, device=env.device) # 0.33 is fully closed for m16
                 close_finger_scissor = torch.tensor(0.275, device=env.device)
                 if self.reset_close_gripper == "close":
                     tgt_finger_open = close_finger_open
@@ -259,36 +264,19 @@ class reset_scene_to_grasp_state_scaled(reset_scene_to_grasp_state):
         env.unwrapped.write_state(cached_state, env_ids)
 
 
-# Do a scaled version of the DTW reward
-class DTWReferenceTrajRewardScaled(DTWReferenceTrajReward):
-    def __init__(self, cfg: DTWReferenceTrajRewardCfg, env: ManagerBasedEnv):
+class reset_bolt_pose_randomization_scaled(reset_bolt_pose_randomization):
+    """Scaled version of bolt pose randomization reset event."""
+    
+    def __init__(self, cfg: BoltPoseRandomizationEventTermCfg, env: ManagerBasedEnv):
         super().__init__(cfg, env)
-
-    def reset(self, env_ids: torch.Tensor):
-        scene = self._env.unwrapped.scene
-
-        # Get this in a different way, and compare results
-        OLD_nut_frame = scene["nut_frame"]
-        OLD_nut_cur_pos = OLD_nut_frame.data.target_pos_w - scene.env_origins[:, None]
         
-        nut = scene["nut"]
-        nut_cur_pos = nut.data.root_state_w[...,:3] - scene.env_origins[:,None]
-        # Asset
-        offset_tensor = torch.tensor(scene["nut_frame"].offset.pos).reshape(1,3).to(self._env.device)
-        assert ((nut_cur_pos-OLD_nut_cur_pos-offset_tensor) == 0).all(), "Nut cur pos is not equal to the old nut cur pos"
-
-        self.nut_traj_his[env_ids] = nut_cur_pos[env_ids]
-
-    def __call__(self, env: ManagerBasedEnv):
-        scene = self._env.unwrapped.scene
-        nut = scene["nut"]
-        cur_nut_pos = nut.data.root_state_w[...,:3] - scene.env_origins[:,None]
-
-        imitation_rwd, new_nut_traj_his = mdp.get_imitation_reward_from_dtw(
-            self.nut_ref_pos_traj, cur_nut_pos, self.nut_traj_his, self.soft_dtw_criterion, env.device
-        )
-        self.nut_traj_his = new_nut_traj_his
-        return imitation_rwd
+        # Apply scaling to the randomization ranges if scaling is available
+        if hasattr(env.cfg, "asset_scale_samples"):
+            # Scale the translation range by the asset scale
+            asset_scales = env.cfg.asset_scale_samples.reshape(-1, 1)
+            # We'll scale the translation range by the mean scale for consistency
+            mean_scale = asset_scales.mean().item()
+            self.translation_range = self.translation_range * mean_scale
 
 
 @configclass
@@ -701,18 +689,21 @@ class IKRelKukaNutThreadScaledEnvCfg(IKRelKukaNutThreadEnvCfg):
             robot_base_pos=self.scene.robot.init_state.pos,
             robot_no_joint_limit=robot_params.no_joint_limit,
         )
+        
+        # Bolt pose randomization event
+        if events_params.randomize_bolt_pose:
+            self.events.randomize_bolt_pose = BoltPoseRandomizationEventTermCfg(
+                func=reset_bolt_pose_randomization,
+                mode="reset",
+                translation_range=tuple(events_params.bolt_translation_range),
+                rotation_range=tuple(events_params.bolt_rotation_range),
+                randomize_translation=events_params.bolt_randomize_translation,
+                randomize_rotation=events_params.bolt_randomize_rotation,
+            )
 
         # Nut Frame is used in nut_upright_reward_forge(), but only quat data
         # So no update is needed there
 
-        # Update the DTWReferenceTrajReward
-        rewards_params = self.params.rewards
-        if rewards_params.dtw_ref_traj_w > 0:
-            self.rewards.dtw_ref_traj = DTWReferenceTrajRewardCfg(
-                his_traj_len=10,
-                func=DTWReferenceTrajRewardScaled,
-                weight=rewards_params.dtw_ref_traj_w,
-            )
 
         # Additional observations
         # Pass scale as observation

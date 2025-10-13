@@ -11,7 +11,6 @@ import torch
 from typing import Literal, Sequence
 import copy
 
-from numba.core import event
 import omni.isaac.core.utils.stage as stage_utils
 from omni.isaac.lab_tasks.manager_based.manipulation.screw.mdp import robot_tool_pose
 import omni.physx.scripts.utils as physx_utils
@@ -133,7 +132,7 @@ class reset_scene_to_grasp_state(ManagerTermBase):
             base_pose=self.robot_base_pose,
             num_ik_seeds=10,
             device=env.device,
-            load_pk=True
+            # load_pk=True
         )
         self.curobo_arm.update_world()
 
@@ -196,6 +195,7 @@ class reset_scene_to_grasp_state(ManagerTermBase):
             default_tool_pose = self.curobo_arm.forward_kinematics(arm_state.clone()).ee_pose
             if torch.norm(canonical_tool_pos - self.robot_base_pose.position) > 0.01:
                 default_tool_pose.position = detault_tool_pos
+                
             # default_tool_pose.position = detault_tool_pos
             # default_tool_pose.position[0, 0] = 0.7797
             # default_tool_pose.position[0, 1] = 0.5
@@ -286,6 +286,109 @@ class reset_scene_to_grasp_state(ManagerTermBase):
         env.unwrapped.write_state(cached_state, env_ids)
 
 
+class BoltPoseRandomizationEventTermCfg(EventTerm):
+    """Configuration for bolt pose randomization reset event."""
+    def __init__(
+        self,
+        translation_range: tuple[float, float, float] = (0.05, 0.05, 0.03),
+        rotation_range: tuple[float, float, float] = (0.2, 0.2, 0.2),
+        randomize_translation: bool = True,
+        randomize_rotation: bool = True,
+        **kwargs,
+    ):
+        """
+        Args:
+            translation_range: Maximum deviation from default position. 
+                - X, Y: symmetric range (can be ± value from default)
+                - Z: positive only range (default + [0, value]) to keep bolt above table
+            rotation_range: Maximum rotation deviation in (roll, pitch, yaw) radians.
+            randomize_translation: Whether to randomize bolt translation.
+            randomize_rotation: Whether to randomize bolt orientation.
+        """
+        super().__init__(**kwargs)
+        self.translation_range = translation_range
+        self.rotation_range = rotation_range
+        self.randomize_translation = randomize_translation
+        self.randomize_rotation = randomize_rotation
+
+
+class reset_bolt_pose_randomization(ManagerTermBase):
+    """Reset event that randomizes the bolt pose relative to its default position."""
+    
+    def __init__(self, cfg: BoltPoseRandomizationEventTermCfg, env: ManagerBasedEnv):
+        super().__init__(cfg, env)
+        
+        # Get the default bolt pose from the scene configuration
+        screw_dict = env.cfg.scene.screw_dict
+        self.default_bolt_pos = torch.tensor(
+            [screw_dict["bolt_init_state"].pos], 
+            device=env.device, 
+            dtype=torch.float32
+        )
+        
+        # If default rotation is specified, use it, otherwise use identity quaternion
+        if hasattr(screw_dict["bolt_init_state"], 'rot') and screw_dict["bolt_init_state"].rot is not None:
+            self.default_bolt_quat = torch.tensor(
+                [screw_dict["bolt_init_state"].rot],
+                device=env.device,
+                dtype=torch.float32
+            )
+        else:
+            # Default to identity quaternion (w, x, y, z)
+            self.default_bolt_quat = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=env.device, dtype=torch.float32)
+        
+        # Store randomization parameters
+        self.translation_range = torch.tensor(cfg.translation_range, device=env.device, dtype=torch.float32)
+        self.rotation_range = torch.tensor(cfg.rotation_range, device=env.device, dtype=torch.float32)
+        self.randomize_translation = cfg.randomize_translation
+        self.randomize_rotation = cfg.randomize_rotation
+        self.difficulty_level = 1.
+        
+    def __call__(self, env: ManagerBasedEnv, env_ids: torch.Tensor):
+        """Randomize bolt pose for the specified environment IDs."""
+        num_resets = len(env_ids)
+        
+        # Get the bolt rigid object
+        bolt : RigidObject = env.scene["bolt"]
+        
+        # Start with default pose
+        new_positions = self.default_bolt_pos.repeat(num_resets, 1) +  env.unwrapped.scene.env_origins[env_ids]
+        new_orientations = self.default_bolt_quat.repeat(num_resets, 1)
+        
+        if self.randomize_translation:
+            # Generate random translation offsets
+            # For x and y: symmetric around 0 (can go positive or negative)
+            xy_offsets = torch.rand(num_resets, 2, device=env.device) * 2 - 1  # [-1, 1]
+            xy_offsets = xy_offsets * self.translation_range[:2] * self.difficulty_level
+            
+            # For z: only positive (bolt should stay above table surface)
+            z_offsets = torch.rand(num_resets, 1, device=env.device)  # [0, 1]
+            z_offsets = z_offsets * self.translation_range[2] * self.difficulty_level
+            
+            # Combine offsets
+            translation_offsets = torch.cat([xy_offsets, z_offsets], dim=1)
+            new_positions += translation_offsets
+        
+        if self.randomize_rotation:
+            # Generate random rotation offsets (Euler angles)
+            rotation_offsets = torch.rand(num_resets, 3, device=env.device) * 2 - 1  # [-1, 1]
+            rotation_offsets = rotation_offsets * self.rotation_range * self.difficulty_level
+            
+            # Convert Euler angles to quaternions
+            rotation_quats = math_utils.quat_from_euler_xyz(
+                rotation_offsets[:, 0],  # roll
+                rotation_offsets[:, 1],  # pitch
+                rotation_offsets[:, 2]   # yaw
+            )
+            
+            # Combine default orientation with random rotation
+            default_bolt_quat = self.default_bolt_quat.repeat(num_resets, 1)
+            new_orientations = math_utils.quat_mul(default_bolt_quat, rotation_quats)
+        
+        new_poses = torch.cat([new_positions, new_orientations], dim=1)
+        bolt.write_root_pose_to_sim(new_poses, env_ids)
+
+
 class DTWReferenceTrajRewardCfg(RewTerm):
     def __init__(self, his_traj_len: int = 10, soft_dtw_gamma: float = 0.01, **kwargs):
         super().__init__(**kwargs)
@@ -363,15 +466,17 @@ def create_fixed_joint(env: ManagerBasedEnv, env_ids: torch.Tensor):
         physx_utils.createJoint(stage, "Fixed", child_prim, parent_prim)
         # physx_utils.createJoint(stage, "Fixed", parent_prim, child_prim)
 
-
 @configclass
 class EventCfg:
     """Configuration for events."""
 
 def reset_obs_camera(env, env_ids: torch.Tensor):
     print("resetting obs camera")
+
     fixed_pos = env.scene["bolt"].data.root_pos_w
     fixed_quat = env.scene["bolt"].data.root_quat_w
+
+    # Eye randomization
     eyes_pos = fixed_pos + torch.tensor([[0.37, 0., 0.11]], device=env.device)
     eye_rand_low = torch.tensor([-0.1, -0.1, -0.05], device=env.device)
     eye_rand_high = torch.tensor([0.1, 0.1, 0.2], device=env.device)
@@ -379,6 +484,7 @@ def reset_obs_camera(env, env_ids: torch.Tensor):
     eyes_pos = eyes_pos + eye_rand_trans
     # print(eyes_pos)
     # print(eye_rand_trans)
+
     target_pos = fixed_pos + torch.tensor([[0., 0.0, 0.04]], device=env.device)
     tgt_rand_low = torch.tensor([-0.05, -0.08, -0.0], device=env.device)
     tgt_rand_high = torch.tensor([0.05, 0.08, 0.01], device=env.device)
@@ -386,13 +492,57 @@ def reset_obs_camera(env, env_ids: torch.Tensor):
     target_pos = target_pos + tgt_rand_trans
     # print(target_pos)
     # print(tgt_rand_trans)
+
     if env.scene["obs_camera"] is None:
         return
+
     env.scene["obs_camera"].set_world_poses_from_view(
         eyes_pos[env_ids],
         target_pos[env_ids],
     )
     env.scene["obs_camera"].reset(env_ids)
+
+def randomize_obs_camera_translation(env):
+    if env.scene["obs_camera"] is None:
+        return
+    
+    # Get true pose
+    if not hasattr(env.cfg, "_obs_cam_true_pos") or env.cfg._obs_cam_true_pos is None:
+        true_pos = env.scene["obs_camera"].data.pos_w
+        env.cfg._obs_cam_true_pos = true_pos.clone()
+    else:
+        true_pos = env.cfg._obs_cam_true_pos
+
+    # Eye randomization
+    eye_rand_trans = torch.randn(env.num_envs, 3, device=env.device) * 0.005
+
+    biased_pos = true_pos + eye_rand_trans
+    env.scene["obs_camera"].set_world_poses(positions=biased_pos)        # DOES NOT WORK??
+    # env.scene["obs_camera"].data.pos_w = biased_pos
+    return
+
+def randomize_obs_camera_rotation(env):
+    raise NotImplementedError
+
+    if env.scene["obs_camera"] is None:
+        return
+
+    # Get true pose
+    if not hasattr(env, "_obs_cam_true_rot") or env._obs_cam_true_rot is None:
+        true_rot = env.scene["obs_camera"].data.quat_w_world
+        env._obs_cam_true_rot = true_rot.clone()
+    else:
+        true_rot = env.cfg._obs_cam_true_rot
+
+    # Rotation randomization
+    rot_rand_low = torch.tensor([-0.1, -0.1, -0.1, -0.1], device=env.device)
+    rot_rand_high = torch.tensor([0.1, 0.1, 0.1, 0.1], device=env.device)
+    rot_rand_trans = torch.rand(env.num_envs, 4, device=env.device) * (rot_rand_high - rot_rand_low) + rot_rand_low
+    rot_rand_trans = rot_rand_trans / rot_rand_trans.norm(dim=-1, keepdim=True)
+
+    biased_rot = true_rot + rot_rand_trans
+    env.scene['obs_camera'].set_world_poses(orientations=biased_rot)        # DOES NOT WORK??
+    # env.scene["obs_camera"].data.quat_w_world = biased_rot / biased_rot.norm(dim=-1, keepdim=True)
 
 def terminate_if_nut_fallen(env):
     # relative pose between gripper and nut
@@ -495,6 +645,7 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         obs_params.flatten_history_dim = obs_params.get("flatten_history_dim", True)
         obs_params.include_action = obs_params.get("include_action", True)
         obs_params.include_nut = obs_params.get("include_nut", True)
+        obs_params.include_bolt = obs_params.get("include_bolt", False)
         obs_params.include_wrench = obs_params.get("include_wrench", True)
         obs_params.wrench_target_body = obs_params.get("wrench_target_body", "victor_left_tool0")
         obs_params.include_tool = obs_params.get("include_tool", False)
@@ -504,6 +655,7 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         obs_params.critic_privil_obs = obs_params.get("critic_privil_obs", False)
         obs_params.use_obs_camera = obs_params.get("use_obs_camera", False)
         obs_params.obs_camera_type = obs_params.get("obs_camera_type", ["distance_to_image_plane"])
+        obs_params.obs_camera_view = obs_params.get("obs_camera_view", ["v1"])
 
         rewards_params = self.params.rewards
         rewards_params.dtw_ref_traj_w = rewards_params.get("dtw_ref_traj_w", 0.0)
@@ -527,6 +679,21 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
         events_params.reset_use_adr = events_params.get("reset_use_adr", False)
         events_params.reset_close_gripper = events_params.get("reset_close_gripper", None)
         events_params.reset_obs_camera = events_params.get("reset_obs_camera", False)
+
+        # Add camera bias/noise parameters
+        events_params.obs_cam_randomize_translation = events_params.get("obs_cam_randomize_translation", None)
+        events_params.obs_cam_randomize_rotation = events_params.get("obs_cam_randomize_rotation", None)
+
+        # Bolt pose randomization parameters
+        events_params.randomize_bolt_pose = events_params.get("randomize_bolt_pose", False)
+        events_params.bolt_translation_range = events_params.get("bolt_translation_range", [0.05, 0.05, 0.03])
+        events_params.bolt_rotation_range = events_params.get("bolt_rotation_range", [0.2, 0.2, 0.2])
+        events_params.bolt_randomize_translation = events_params.get("bolt_randomize_translation", True)
+        events_params.bolt_randomize_rotation = events_params.get("bolt_randomize_rotation", True)
+        events_params.use_adr_difficulty = events_params.get("use_adr_difficulty", False)
+        events_params.adr_frequency = events_params.get("adr_frequency", 3000)
+        events_params.adr_update_threshold = events_params.get("adr_update_threshold", 0.05)
+        events_params.adr_target_success_rate = events_params.get("adr_target_success_rate", 0.85)
 
         curri_params = self.params.curriculum
         curri_params.use_obs_noise_curri = curri_params.get("use_obs_noise_curri", False)
@@ -715,6 +882,9 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
             )
         if obs_params.include_tool:
             self.observations.policy.tool_pose = ObsTerm(func=robot_tool_pose)
+        if obs_params.include_bolt:
+            self.observations.policy.bolt_pos = ObsTerm(func=mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("bolt")})
+            self.observations.policy.bolt_quat = ObsTerm(func=mdp.root_quat_w, params={"asset_cfg": SceneEntityCfg("bolt")})
         if obs_params.include_action:
             self.observations.policy.last_action = ObsTerm(
                 func=mdp.last_action,
@@ -770,25 +940,47 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
             0.0, 891.65, -215.05,
             0.0, 0.0, 1.0
             ]
-            self.scene.obs_camera = TiledCameraCfg(
-                prim_path="{ENV_REGEX_NS}/DepthCamera",
-                offset=TiledCameraCfg.OffsetCfg(
-                    pos=(1.0, 0.1, 0.11),
-                    rot=[0.4402, -0.4498, -0.5456, 0.5534],
-                    convention="ros",
-                ),
-                data_types=obs_params.obs_camera_type,
-                spawn=sim_utils.PinholeCameraCfg(clipping_range=(0.0001, 0.7)),
-                # spawn=sim_utils.PinholeCameraCfg.from_intrinsic_matrix(
-                #     zivid_intrinsic, 200, 200, clipping_range=(0.0001, 0.7),
-                #     focal_length=24.0,
-                #     focus_distance=400.0,
-                #     ),
-                width=224,
-                height=224,
-                # width=720,
-                # height=720,
-            )
+            if obs_params.obs_camera_view == "v1":
+                self.scene.obs_camera = TiledCameraCfg(
+                    prim_path="{ENV_REGEX_NS}/DepthCamera",
+                    offset=TiledCameraCfg.OffsetCfg(
+                        pos=(1.0, 0.1, 0.11),
+                        rot=[0.4402, -0.4498, -0.5456, 0.5534],
+                        convention="ros",
+                    ),
+                    data_types=obs_params.obs_camera_type,
+                    spawn=sim_utils.PinholeCameraCfg(clipping_range=(0.0001, 0.5)),
+                    width=224,
+                    height=224,
+                )
+            elif obs_params.obs_camera_view == "v2":
+                self.scene.obs_camera = TiledCameraCfg(
+                    prim_path="{ENV_REGEX_NS}/DepthCamera",
+                    offset=TiledCameraCfg.OffsetCfg(
+                        pos=(1., 0.1, 0.2),
+                        rot=[0.4104, -0.4785, -0.57725, 0.519],
+                        convention="ros",
+                    ),
+                    data_types=obs_params.obs_camera_type,
+                    spawn=sim_utils.PinholeCameraCfg(clipping_range=(0.0001, 0.7)),
+                    width=224,
+                    height=224,
+                )
+            elif obs_params.obs_camera_view == "v3":
+                self.scene.obs_camera = TiledCameraCfg(
+                    prim_path="{ENV_REGEX_NS}/DepthCamera",
+                    offset=TiledCameraCfg.OffsetCfg(
+                        pos=(1., 0.1, 0.2),
+                        rot=[0.4104, -0.4785, -0.57725, 0.519],
+                        convention="ros",
+                    ),
+                    data_types=obs_params.obs_camera_type,
+                    spawn=sim_utils.PinholeCameraCfg(clipping_range=(0.0001, 0.5)),
+                    # width=224,
+                    # height=224,
+                    width=1200,
+                    height=1200,
+                )
 
 
         # events
@@ -836,10 +1028,52 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
             robot_base_pos=robot.init_state.pos,
             robot_no_joint_limit=robot_params.no_joint_limit,
         )
+
+        # Add camera observation randomization params
         if event_params.reset_obs_camera:
             self.events.reset_obs_camera = EventTerm(
                 func=reset_obs_camera,
                 mode="reset",
+            )
+
+        self._obs_cam_randomize_translation = event_params.obs_cam_randomize_translation
+        self._obs_cam_randomize_rotation = event_params.obs_cam_randomize_rotation
+
+        if self._obs_cam_randomize_translation is not None:
+            self._obs_cam_randomize_trans_fn = randomize_obs_camera_translation
+        if self._obs_cam_randomize_rotation is not None:
+            self._obs_cam_randomize_rot_fn = randomize_obs_camera_rotation
+
+        # if event_params.obs_cam_randomize_translation:
+        #     self.events.obs_cam_randomize_translation = EventTerm(
+        #         func=randomize_obs_camera_translation,
+        #         mode="reset",
+        #     )
+        # if event_params.obs_cam_randomize_rotation:
+        #     self.events.obs_cam_randomize_rotation = EventTerm(
+        #         func=randomize_obs_camera_rotation,
+        #         mode="reset",
+        #     )
+
+        if event_params.use_adr_difficulty:
+            self.events.automatic_domain_randomization = mdp.AutomaticDomainRandomizationCfg(
+                func=mdp.automatic_domain_randomization,
+                mode="reset",
+                window_size=1000, 
+                target_success_rate=event_params.adr_target_success_rate, 
+                update_threshold=event_params.adr_update_threshold,
+                difficulty_step=event_params.adr_difficulty_step, 
+                frequency=event_params.adr_frequency,
+            )
+        # Bolt pose randomization event
+        if event_params.randomize_bolt_pose:
+            self.events.randomize_bolt_pose = BoltPoseRandomizationEventTermCfg(
+                func=reset_bolt_pose_randomization,
+                mode="reset",
+                translation_range=tuple(event_params.bolt_translation_range),
+                rotation_range=tuple(event_params.bolt_rotation_range),
+                randomize_translation=event_params.bolt_randomize_translation,
+                randomize_rotation=event_params.bolt_randomize_rotation,
             )
 
         # terminations
@@ -863,7 +1097,8 @@ class IKRelKukaNutThreadEnvCfg(BaseNutThreadEnvCfg):
 
         self.rewards.incoming_wrench_mag = RewTerm(
             func=mdp.incoming_wrench_mag,
-            params={"asset_cfg": self.observations.policy.wrist_wrench.params["asset_cfg"]},
+            # params={"asset_cfg": self.observations.policy.wrist_wrench.params["asset_cfg"]},
+            params={"asset_cfg": SceneEntityCfg("robot", body_names=[obs_params.wrench_target_body])},
             weight=rewards_params.incoming_wrench_mag_w,
         )
         if rewards_params.dtw_ref_traj_w > 0:

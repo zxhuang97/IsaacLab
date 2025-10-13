@@ -65,13 +65,25 @@ def orientation_command_error(env: ManagerBasedRLEnv, command_name: str, asset_c
 
 
 def nut_upright_reward_forge(env: ManagerBasedRLEnv, a: float = 300, b: float = 0, tol: float = 0):
-    # penalize if nut is not upright
-    # compute the cosine distance between the nut normal and the global up vector
+    # penalize if nut is not upright relative to the bolt's orientation
+    # compute the cosine distance between the nut normal and the bolt's up vector
     nut_quat = env.scene["nut_frame"].data.target_quat_w[:, 0]
-    up_vec = torch.tensor([[0, 0, 1.0]], device=nut_quat.device)
-    up_vecs = up_vec.expand(nut_quat.shape[0], 3)
-    nut_up_vec = math_utils.quat_apply(nut_quat, up_vecs)
-    cos_sim = torch.sum(nut_up_vec * up_vecs, dim=1, keepdim=True) / torch.norm(nut_up_vec, dim=1, keepdim=True)
+    
+    # Get bolt orientation to determine what "upright" means relative to the bolt
+    bolt_quat = env.scene["bolt"].data.root_quat_w
+    
+    # The bolt's "up" direction (what the nut should align with)
+    global_up = torch.tensor([[0, 0, 1.0]], device=nut_quat.device)
+    global_up_expanded = global_up.expand(bolt_quat.shape[0], 3)
+    bolt_up_vec = math_utils.quat_apply(bolt_quat, global_up_expanded)
+    
+    # The nut's up direction
+    nut_up_vec = math_utils.quat_apply(nut_quat, global_up_expanded)
+    
+    # Compute alignment between nut's up direction and bolt's up direction
+    cos_sim = torch.sum(nut_up_vec * bolt_up_vec, dim=1, keepdim=True) / (
+        torch.norm(nut_up_vec, dim=1, keepdim=True) * torch.norm(bolt_up_vec, dim=1, keepdim=True)
+    )
     rewards = mdp.forge_kernel(1 - cos_sim, a, b, tol)
     return rewards
 

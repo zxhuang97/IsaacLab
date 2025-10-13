@@ -327,10 +327,60 @@ class FactoryEnv(DirectRLEnv):
         # Add a camera
         if self.cfg.use_tiled_camera:
             self._tiled_camera = TiledCamera(self.cfg.tiled_camera_cfg)
+            # self.scene['tiled_camera'] = self._tiled_camera
             self.scene.sensors["tiled_camera"] = self._tiled_camera
         if self.cfg.use_obs_camera:
             self._obs_camera = TiledCamera(self.cfg.obs_camera_cfg)
+            # self.scene['obs_camera'] = self._obs_camera
             self.scene.sensors["obs_camera"] = self._obs_camera
+
+            # Set randomization functions
+            self.cfg._obs_cam_randomize_trans_fn = self.randomize_obs_camera_translation
+            self.cfg._obs_cam_randomize_rot_fn = self.randomize_obs_camera_rotation
+
+    def randomize_obs_camera_translation(self, *args, **kwargs):
+        if self.scene.sensors["obs_camera"] is None:
+            return
+
+        # Get true pose
+        if not hasattr(self, '_obs_cam_true_pos'):
+            self._obs_cam_true_pos = self._obs_camera.data.pos_w.clone()
+            true_pos = self._obs_cam_true_pos
+        else:
+            true_pos = self._obs_cam_true_pos
+
+        # Eye randomization
+        eye_rand_trans = torch.randn(self.num_envs, 3, device=self.device) * 0.02
+        # eye_rand_trans = torch.rand(self.num_envs, 3, device=self.device) * (eye_rand_high - eye_rand_low) + eye_rand_low
+
+        biased_pos = true_pos + eye_rand_trans
+        self.scene.sensors["obs_camera"].set_world_poses(positions=biased_pos)        # DOES NOT WORK??
+        # self.scene["obs_camera"].data.pos_w = biased_pos
+        return
+
+    def randomize_obs_camera_rotation(self, *args, **kwargs):
+        raise NotImplementedError
+
+        if self.scene.sensors["obs_camera"] is None:
+            return
+
+        # Get true pose
+        if not hasattr(self, '_obs_cam_true_rot'):
+            self._obs_cam_true_rot = self._obs_camera.data.quat_w_world.clone()
+            true_rot = self._obs_cam_true_rot
+        else:
+            true_rot = self._obs_cam_true_rot
+
+        # Rotation randomization
+        rot_rand_low = torch.tensor([-0.1, -0.1, -0.1, -0.1], device=self.device)
+        rot_rand_high = torch.tensor([0.1, 0.1, 0.1, 0.1], device=self.device)
+        rot_rand_trans = torch.rand(self.num_envs, 4, device=self.device) * (rot_rand_high - rot_rand_low) + rot_rand_low
+        rot_rand_trans = rot_rand_trans / rot_rand_trans.norm(dim=-1, keepdim=True)
+
+        biased_rot = true_rot + rot_rand_trans
+        self.scene.sensors['obs_camera'].set_world_poses(orientations=biased_rot)        # DOES NOT WORK??
+        # self.scene["obs_camera"].data.quat_w_world = biased_rot / biased_rot.norm(dim=-1, keepdim=True)
+
 
     def _compute_intermediate_values(self, dt):
         """Get values computed from raw tensors. This includes adding noise."""

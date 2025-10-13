@@ -281,8 +281,10 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         ),
         data_types=["distance_to_image_plane", 'rgb'],
         spawn=sim_utils.PinholeCameraCfg(clipping_range=(0.0001, 0.5)),
-        width=224,
-        height=224,
+        # width=224,
+        # height=224,
+        width=1200,
+        height=1200,
     )
 
 
@@ -335,8 +337,17 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         obs_camera_type = params_obs.get("obs_camera_type", ["distance_to_image_plane"])
         self.obs_camera_cfg.data_types = obs_camera_type
 
-        # # NutThread Task related properties
+        # Update camera randomization
         params_taskcfg = params.get("taskcfg", {})
+        self.obs_cam_randomize_translation = params_taskcfg.get("obs_cam_randomize_translation", None)
+        self.obs_cam_randomize_rotation = params_taskcfg.get("obs_cam_randomize_rotation", None)
+        if self.obs_cam_randomize_translation == 'None':
+            self.obs_cam_randomize_translation = None
+        if self.obs_cam_randomize_rotation == 'None':
+            self.obs_cam_randomize_rotation = None
+
+        # # NutThread Task related properties
+        # params_taskcfg = params.get("taskcfg", {})
         asset_scale_randomization = params_taskcfg.get("randomize_scale_method", "none")
         if asset_scale_randomization not in ["gaussian", "uniform", "none"]:
             print(f"Warning: asset_scale_randomization '{asset_scale_randomization}' is not recognized, using 'none'.")
