@@ -101,11 +101,11 @@ def load_cfg_from_registry(task_name: str, entry_point_key: str, params: dict = 
             # resolve path to the module location
             mod_path = inspect.getfile(cfg_entry_point)
             # load the configuration
-            # if params is not None:
-            #     cfg_cls = cfg_entry_point(params=params)
-            # else:
-            #     cfg_cls = cfg_entry_point()
-            cfg_cls = cfg_entry_point()
+            if params is not None:
+                cfg_cls = cfg_entry_point(params=params)
+            else:
+                cfg_cls = cfg_entry_point()
+            # cfg_cls = cfg_entry_point()
         elif isinstance(cfg_entry_point, str):
             # resolve path to the module location
             mod_name, attr_name = cfg_entry_point.split(":")
@@ -116,8 +116,8 @@ def load_cfg_from_registry(task_name: str, entry_point_key: str, params: dict = 
         # load the configuration
         print(f"[INFO]: Parsing configuration from: {cfg_entry_point}")
         if callable(cfg_cls):
-            # cfg = cfg_cls(params=params)
-            cfg = cfg_cls()
+            cfg = cfg_cls(params=params)
+            # cfg = cfg_cls()
         else:
             cfg = cfg_cls
     return cfg

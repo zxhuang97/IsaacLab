@@ -125,11 +125,6 @@ class FactoryEnv(DirectRLEnv):
             "/World/envs/env_.*/Table", cfg, translation=(0.55, 0.0, 0.0), orientation=(0.70711, 0.0, 0.0, 0.70711)
         )
 
-        # Set robot USD path based on use_gelsight_finger flag (after Hydra overrides have been applied)
-        from .factory_tasks_cfg import ASSET_DIR
-        robot_usd_file = "franka_mimic_ori.usd" if self.cfg.use_gelsight_finger else "franka_mimic.usd"
-        self.cfg.robot.spawn.usd_path = f"{ASSET_DIR}/{robot_usd_file}"
-        
         self._robot = Articulation(self.cfg.robot)
         self._fixed_asset = Articulation(self.cfg_task.fixed_asset)
         self._held_asset = Articulation(self.cfg_task.held_asset)
@@ -185,6 +180,10 @@ class FactoryEnv(DirectRLEnv):
 
         self.held_pos = self._held_asset.data.root_pos_w - self.scene.env_origins
         self.held_quat = self._held_asset.data.root_quat_w
+
+        # Expose held asset full root state with position in env frame
+        self.held_state = self._held_asset.data.root_state_w.clone()
+        self.held_state[:, 0:3] = self.held_state[:, 0:3] - self.scene.env_origins
 
         self.fingertip_midpoint_pos = self._robot.data.body_pos_w[:, self.fingertip_body_idx] - self.scene.env_origins
         self.fingertip_midpoint_quat = self._robot.data.body_quat_w[:, self.fingertip_body_idx]

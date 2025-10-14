@@ -166,13 +166,13 @@ class ForgeEnv(FactoryEnv):
         # (1.b) Enforce rotation action constraints.
         rot_actions[:, 0:2] = 0.0
 
-        # Assumes joint limit is in (+x, -y)-quadrant of world frame.
+        # Assumes joint limit is in (+x, -y)-quadrant of world frame. [-1, 1] -> [-180, 90]
         rot_actions[:, 2] = np.deg2rad(-180.0) + np.deg2rad(270.0) * (rot_actions[:, 2] + 1.0) / 2.0  # Joint limit.
         # (1.c) Get desired orientation target.
         bolt_frame_quat = torch_utils.quat_from_euler_xyz(
             roll=rot_actions[:, 0], pitch=rot_actions[:, 1], yaw=rot_actions[:, 2]
         )
-
+        # Assume bolt is point upright, so flip to get ee pose (topdown)
         rot_180_euler = torch.tensor([np.pi, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1)
         quat_bolt_to_ee = torch_utils.quat_from_euler_xyz(
             roll=rot_180_euler[:, 0], pitch=rot_180_euler[:, 1], yaw=rot_180_euler[:, 2]
@@ -243,9 +243,9 @@ class ForgeEnv(FactoryEnv):
         contact_force = torch.norm(self.force_sensor_smooth[:, 0:3], p=2, dim=-1, keepdim=False)
         contact_penalty = torch.nn.functional.relu(contact_force - self.contact_penalty_thresholds)
         # Add success prediction rewards.
-        check_rot = self.cfg_task.name == "nut_thread"
+        
         true_successes = self._get_curr_successes(
-            success_threshold=self.cfg_task.success_threshold, check_rot=check_rot
+            success_threshold=self.cfg_task.success_threshold, 
         )
         policy_success_pred = (self.actions[:, 6] + 1) / 2  # rescale from [-1, 1] to [0, 1]
         success_pred_error = (true_successes.float() - policy_success_pred).abs()

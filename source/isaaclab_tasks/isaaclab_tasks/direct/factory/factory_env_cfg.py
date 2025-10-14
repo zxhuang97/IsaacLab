@@ -292,90 +292,44 @@ class FactoryEnvCfg(DirectRLEnvCfg):
     params = None
 
     def update_env_params(self):
+        # return
         """Set default environment parameters."""
         # Initialize params structure
-        params = self.params
-
-        # Hard Coded
-        # params.scene.nut = params.scene.get("nut", OmegaConf.create())
-        # params.scene.screw_type = params.scene.get("screw_type", "m16_loose")  # m8_tight m16_tight
-        # update_terminals(self, params, ["decimation"])
-
-        # Sim
-        params_sim = params.get("sim", OmegaConf.create())
-        self.sim.dt = params_sim.get("dt", self.sim.dt)
-
-        # # --- Observation Randomization Config ---
-        # # Here we keep the whole config group in params.
-        params_obs = params.get("observations", OmegaConf.create())
-        fixed_asset_pos_noise = params_obs.get("fixed_asset_pos_noise", None)
-        if fixed_asset_pos_noise is not None:
-            self.obs_rand.fixed_asset_pos = tuple(fixed_asset_pos_noise)
-        include_scale = params_obs.get("include_scale", False)
-        if include_scale:
-            self.obs_order.append("scales")
-            self.state_order.append("scales")
-            self.observation_space += 1
-            self.state_space += 1
-        include_held_pos = params_obs.get("include_held_pos", False)
-        if include_held_pos:
-            self.obs_order.append("held_pos")
-            self.state_order.append("held_pos")
-            self.observation_space += 3
-            self.state_space += 3
-
-        # Update observation camera
-        self.use_tiled_camera = params_obs.get("use_tiled_camera", False)
-        self.use_obs_camera = params_obs.get("use_obs_camera", False)
-        obs_camera_type = params_obs.get("obs_camera_type", ["distance_to_image_plane"])
-        self.obs_camera_cfg.data_types = obs_camera_type
-
-        # Update camera randomization
-        params_taskcfg = params.get("taskcfg", {})
-        self.obs_cam_randomize_translation = params_taskcfg.get("obs_cam_randomize_translation", None)
-        self.obs_cam_randomize_rotation = params_taskcfg.get("obs_cam_randomize_rotation", None)
-        if self.obs_cam_randomize_translation == 'None':
-            self.obs_cam_randomize_translation = None
-        if self.obs_cam_randomize_rotation == 'None':
-            self.obs_cam_randomize_rotation = None
-
-        # # NutThread Task related properties
-        # params_taskcfg = params.get("taskcfg", {})
-        asset_scale_randomization = params_taskcfg.get("randomize_scale_method", "none")
-        if asset_scale_randomization not in ["gaussian", "uniform", "none"]:
-            print(f"Warning: asset_scale_randomization '{asset_scale_randomization}' is not recognized, using 'none'.")
-            asset_scale_randomization = "none"
-        self.randomize_scale_method = asset_scale_randomization
-        scale_range = params_taskcfg.get("randomize_scale_range", None)
-        # Update scale
-        if self.randomize_scale_method in ["gaussian", "uniform"] \
-                and scale_range is not None \
-                and len(scale_range) == 2:
-            if isinstance(scale_range, ListConfig):
-                scale_range = OmegaConf.to_container(scale_range, resolve=True)
-            self.randomize_scale_range = tuple(scale_range)
-            self.scene = InteractiveSceneCfg(
-                num_envs=128,
-                env_spacing=2.0,
-                replicate_physics=False
-            )
+        if self.params is None:
+            params = OmegaConf.create({})
         else:
-            print(
-                f"Warning: 'randomize_scale_range' should be a list/tuple of length 2, using default {self.randomize_scale_range}.")
+            params = self.params
+        
+        env = params.get("env", OmegaConf.create({}))
+        if env.get("enable_tactile_sensor", None) is not None:
+            self.enable_tactile_sensor = env.enable_tactile_sensor
+        if env.get("read_tactile_sensor", None) is not None:
+            self.read_tactile_sensor = env.read_tactile_sensor
+        if env.get("enable_obs_camera", None) is not None:
+            self.enable_obs_camera = env.enable_obs_camera
+        if env.get("use_compliant_gripper", None) is not None:
+            self.use_compliant_gripper = env.use_compliant_gripper
+        if env.get("use_gelsight_finger", None) is not None:
+            self.use_gelsight_finger = env.use_gelsight_finger
+        robot_usd_file = "franka_mimic_tactile.usd" if self.use_gelsight_finger else "franka_mimic.usd"
+        self.robot.spawn.usd_path = f"{ASSET_DIR}/{robot_usd_file}"
+        
+        if env.get("obs_history", None) is not None and env["obs_history"].get("history_length", None) is not None:
+            self.obs_history.history_length = env["obs_history"]["history_length"]
 
-        def __post_init__(self):
-            """Post initialization."""
-            self.update_env_params()
-            self.sim.render_interval = self.decimation
+    def __post_init__(self):
+        """Post initialization."""
+        self.update_env_params()
+        self.sim.render_interval = self.decimation
 
-            # self.episode_length_s = 24   # 24, 10 for sim quality test
-            self.viewer.origin_type = "asset_root"
-            self.viewer.asset_name = "fixed_asset"
-            # self.viewer.eye = (0.1, 0.1, 0.06)
-            # self.viewer.lookat = (0, 0.0, 0.04)
-            self.viewer.eye = (0.37, 0.1, 0.12)
-            self.viewer.lookat = (0.0, 0.0, 0.03)
-            self.viewer.resolution = (720, 720)
+        # self.episode_length_s = 24   # 24, 10 for sim quality test
+        self.viewer.origin_type = "asset_root"
+        self.viewer.asset_name = "fixed_asset"
+        # self.viewer.eye = (0.1, 0.1, 0.06)
+        # self.viewer.lookat = (0, 0.0, 0.04)
+        self.viewer.eye = (0.37, 0.1, 0.12)
+        self.viewer.lookat = (0.0, 0.0, 0.03)
+        self.viewer.resolution = (720, 720)
 
 
 @configclass

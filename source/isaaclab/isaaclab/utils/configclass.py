@@ -12,6 +12,7 @@ from copy import deepcopy
 from dataclasses import MISSING, Field, dataclass, field, replace
 from typing import Any, ClassVar
 
+from omegaconf import DictConfig, OmegaConf
 from .dict import class_to_dict, update_class_from_dict
 
 _CONFIGCLASS_METHODS = ["to_dict", "from_dict", "replace", "copy", "validate"]
@@ -276,6 +277,8 @@ def _validate(obj: object, prefix: str = "") -> list[str]:
             obj_dict = {str(key): value for key, value in obj.items()}
         else:
             obj_dict = obj
+    elif isinstance(obj, DictConfig):
+        obj_dict = OmegaConf.to_container(obj)
     elif hasattr(obj, "__dict__"):
         obj_dict = obj.__dict__
     else:
