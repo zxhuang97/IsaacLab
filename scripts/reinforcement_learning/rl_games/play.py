@@ -37,6 +37,7 @@ parser.add_argument(
     help="When no checkpoint provided, use the last saved model. Otherwise use the best saved model.",
 )
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
+parser.add_argument("--num_episodes", type=int, default=1, help="Number of episodes to run for evaluation.")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -198,6 +199,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # initialize RNN states if used
     if agent.is_rnn:
         agent.init_rnn()
+    
+    # Episode tracking for evaluation
+    if args_cli.num_episodes is not None:
+        num_envs = env.unwrapped.num_envs
+        episode_count = torch.zeros(num_envs, dtype=torch.int32, device=env.unwrapped.device)
+        success_count = torch.zeros(num_envs, dtype=torch.int32, device=env.unwrapped.device)
+        total_episodes_completed = 0
+        print(f"[INFO] Running evaluation for {args_cli.num_episodes} episodes per environment ({num_envs} parallel environments)")
+    
     # simulate environment
     # note: We simplified the logic in rl-games player.py (:func:`BasePlayer.run()`) function in an
     #   attempt to have complete control over environment stepping. However, this removes other
@@ -211,10 +221,23 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             # agent stepping
             actions = agent.get_action(obs, is_deterministic=agent.is_deterministic)
             # env stepping
-            obs, _, dones, _ = env.step(actions)
+            obs, _, dones, infos = env.step(actions)
 
             # perform operations for terminated episodes
-            if len(dones) > 0:
+            if torch.sum(dones) > 0:
+                curr_successes = infos["curr_successes"]
+                done_indices = dones.nonzero(as_tuple=False)
+                success_count[done_indices] += curr_successes[done_indices].int()
+                episode_count[done_indices] += 1
+                total_episodes_completed = episode_count.sum().item()
+                
+                # Print progress
+                print(f"[INFO] Episodes completed: {total_episodes_completed}/{args_cli.num_episodes * num_envs}")
+        
+                # Check if all environments have completed the required number of episodes
+                if torch.all(episode_count >= args_cli.num_episodes):
+                    break
+    
                 # reset rnn state for terminated episodes
                 if agent.is_rnn and agent.states is not None:
                     for s in agent.states:
@@ -229,6 +252,18 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         sleep_time = dt - (time.time() - start_time)
         if args_cli.real_time and sleep_time > 0:
             time.sleep(sleep_time)
+    
+    # Report success rate if running evaluation
+    if args_cli.num_episodes is not None:
+        total_successes = success_count.sum().item()
+        total_episodes = episode_count.sum().item()
+        success_rate = (total_successes / total_episodes) * 100 if total_episodes > 0 else 0.0
+        print("\n" + "="*60)
+        print(f"[EVALUATION RESULTS]")
+        print(f"Total episodes: {total_episodes}")
+        print(f"Successful episodes: {total_successes}")
+        print(f"Success rate: {success_rate:.2f}%")
+        print("="*60 + "\n")
 
     # close the simulator
     env.close()

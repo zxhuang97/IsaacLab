@@ -479,6 +479,7 @@ class FactoryEnv(DirectRLEnv):
     def _log_factory_metrics(self, rew_dict, curr_successes):
         """Keep track of episode statistics and log rewards."""
         # Only log episode success rates at the end of an episode.
+        self.extras["curr_successes"] = curr_successes
         if torch.any(self.reset_buf):
             self.extras["successes"] = torch.count_nonzero(curr_successes) / self.num_envs
 
@@ -587,7 +588,7 @@ class FactoryEnv(DirectRLEnv):
         self._set_assets_to_default_pose(env_ids)
         self._set_franka_to_default_pose(joints=self.cfg.ctrl.reset_joints, env_ids=env_ids)
         self.step_sim_no_action()
-        if self.cfg.enable_tactile_sensor and self.cfg.read_tactile_sensor:
+        if self.cfg.enable_tactile_sensor:
             if self._tactile_cam._nominal_tactile is None:
                 self.sim.render()
                 self._tactile_cam.get_initial_render()
