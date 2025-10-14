@@ -5,17 +5,17 @@
 
 import math
 
-from omni.isaac.lab.sensors.frame_transformer import FrameTransformerCfg, OffsetCfg
-from omni.isaac.lab.utils import configclass
+from isaaclab.sensors.frame_transformer import FrameTransformerCfg, OffsetCfg
+from isaaclab.utils import configclass
 
-import omni.isaac.lab_tasks.manager_based.manipulation.screw.mdp as mdp
-from omni.isaac.lab_tasks.manager_based.manipulation.screw.screw_env_cfg import BaseScrewEnvCfg
+import isaaclab_tasks.manager_based.manipulation.screw.mdp as mdp
+from isaaclab_tasks.manager_based.manipulation.screw.screw_env_cfg import BaseScrewEnvCfg
 
 ##
 # Pre-defined configs
 ##
-from omni.isaac.lab.markers.config import FRAME_MARKER_CFG  # isort: skip
-from omni.isaac.lab_assets import FRANKA_PANDA_CFG  # isort: skip
+from isaaclab.markers.config import FRAME_MARKER_CFG  # isort: skip
+from isaaclab_assets import FRANKA_PANDA_CFG  # isort: skip
 
 
 ##

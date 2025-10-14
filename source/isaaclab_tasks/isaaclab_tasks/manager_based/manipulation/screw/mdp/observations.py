@@ -8,12 +8,12 @@ from __future__ import annotations
 import torch
 from typing import TYPE_CHECKING
 
-from omni.isaac.lab.envs import ManagerBasedEnv
-import omni.isaac.lab.utils.math as math_utils
-from omni.isaac.lab.sensors import FrameTransformerData
+from isaaclab.envs import ManagerBasedEnv
+import isaaclab.utils.math as math_utils
+from isaaclab.sensors import FrameTransformerData
 
 if TYPE_CHECKING:
-    from omni.isaac.lab.envs import ManagerBasedRLEnv
+    from isaaclab.envs import ManagerBasedRLEnv
 
 def rel_nut_bolt_distance(env: ManagerBasedRLEnv, bolt_part_name: str) -> torch.Tensor:
     # If scaled, we need to compute scaled version of everything

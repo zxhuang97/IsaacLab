@@ -18,7 +18,7 @@ from . import agents
 
 gym.register(
     id="Isaac-IK-Rel-Kuka-Nut-Thread-Scaled-v0",
-    entry_point="omni.isaac.lab.envs:ManagerBasedRLEnv",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.ik_rel_env_cfg:IKRelKukaNutThreadScaledEnvCfg",

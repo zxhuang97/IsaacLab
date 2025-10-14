@@ -7,25 +7,25 @@ from copy import deepcopy
 import torch
 import numpy as np
 
-import omni.isaac.lab.sim as sim_utils
-from omni.isaac.lab.utils import configclass
-from omni.isaac.lab.managers import ObservationTermCfg as ObsTerm
-import omni.isaac.core.utils.stage as stage_utils
-import omni.isaac.lab.utils.math as math_utils
+import isaaclab.sim as sim_utils
+from isaaclab.utils import configclass
+from isaaclab.managers import ObservationTermCfg as ObsTerm
+import isaacsim.core.utils.stage as stage_utils
+import isaaclab.utils.math as math_utils
 import omni.physx.scripts.utils as physx_utils
 from typing import Literal, Optional
-from omni.isaac.lab.managers import EventTermCfg
-from omni.isaac.lab.envs import ManagerBasedEnv
+from isaaclab.managers import EventTermCfg
+from isaaclab.envs import ManagerBasedEnv
 from pxr import Usd, UsdGeom
 from curobo.types.math import Pose
-from omni.isaac.lab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
+from isaaclab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
 from curobo.types.base import TensorDeviceType
 
-import omni.isaac.lab_tasks.manager_based.manipulation.screw.mdp as mdp
-from omni.isaac.lab_tasks.manager_based.manipulation.screw.screw_env_cfg import (
+import isaaclab_tasks.manager_based.manipulation.screw.mdp as mdp
+from isaaclab_tasks.manager_based.manipulation.screw.screw_env_cfg import (
     asset_factory
 )
-from omni.isaac.lab_tasks.manager_based.manipulation.screw.config.kuka.ik_rel_env_cfg import (
+from isaaclab_tasks.manager_based.manipulation.screw.config.kuka.ik_rel_env_cfg import (
     IKRelKukaNutThreadEnvCfg,
     DTWReferenceTrajRewardCfg,
     DTWReferenceTrajReward,

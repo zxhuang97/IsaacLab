@@ -5,14 +5,14 @@
 
 import math
 
-from omni.isaac.lab.assets import AssetBaseCfg, RigidObject, RigidObjectCfg
-from omni.isaac.lab.envs import ManagerBasedEnv
-from omni.isaac.lab.managers import ActionTerm, ActionTermCfg
-from omni.isaac.lab.sensors.frame_transformer import FrameTransformerCfg, OffsetCfg
-from omni.isaac.lab.utils import configclass
+from isaaclab.assets import AssetBaseCfg, RigidObject, RigidObjectCfg
+from isaaclab.envs import ManagerBasedEnv
+from isaaclab.managers import ActionTerm, ActionTermCfg
+from isaaclab.sensors.frame_transformer import FrameTransformerCfg, OffsetCfg
+from isaaclab.utils import configclass
 
-import omni.isaac.lab_tasks.manager_based.manipulation.screw.mdp as mdp
-from omni.isaac.lab_tasks.manager_based.manipulation.screw.screw_env_cfg import BaseNutTightenEnvCfg
+import isaaclab_tasks.manager_based.manipulation.screw.mdp as mdp
+from isaaclab_tasks.manager_based.manipulation.screw.screw_env_cfg import BaseNutTightenEnvCfg
 
 ##
 # Pre-defined configs

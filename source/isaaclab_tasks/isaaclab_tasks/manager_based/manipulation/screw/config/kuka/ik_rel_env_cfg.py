@@ -11,8 +11,8 @@ import torch
 from typing import Literal, Sequence
 import copy
 
-import omni.isaac.core.utils.stage as stage_utils
-from omni.isaac.lab_tasks.manager_based.manipulation.screw.mdp import robot_tool_pose
+import isaacsim.core.utils.stage as stage_utils
+from isaaclab_tasks.manager_based.manipulation.screw.mdp import robot_tool_pose
 import omni.physx.scripts.utils as physx_utils
 from einops import repeat
 from force_tool.utils.data_utils import SmartDict, read_h5_dict
@@ -21,37 +21,37 @@ from omegaconf import OmegaConf
 from pxr import Usd, UsdGeom
 from regex import F
 
-import omni.isaac.lab.sim as sim_utils
-from omni.isaac.lab.sim.simulation_cfg import PhysxCfg, SimulationCfg
-from omni.isaac.lab.sim.spawners.materials.physics_materials_cfg import RigidBodyMaterialCfg
-import omni.isaac.lab.utils.math as math_utils
-from omni.isaac.lab.assets import Articulation, RigidObject
+import isaaclab.sim as sim_utils
+from isaaclab.sim.simulation_cfg import PhysxCfg, SimulationCfg
+from isaaclab.sim.spawners.materials.physics_materials_cfg import RigidBodyMaterialCfg
+import isaaclab.utils.math as math_utils
+from isaaclab.assets import Articulation, RigidObject
 
-from omni.isaac.lab.controllers.operational_space_cfg import OperationalSpaceControllerCfg
-from omni.isaac.lab.controllers.differential_ik_cfg import DifferentialIKControllerCfg
-from omni.isaac.lab.envs import ManagerBasedEnv
-from omni.isaac.lab.envs.mdp.actions.actions_cfg import (
+from isaaclab.controllers.operational_space_cfg import OperationalSpaceControllerCfg
+from isaaclab.controllers.differential_ik_cfg import DifferentialIKControllerCfg
+from isaaclab.envs import ManagerBasedEnv
+from isaaclab.envs.mdp.actions.actions_cfg import (
     DifferentialInverseKinematicsActionCfg,
     OperationalSpaceControllerActionCfg,
 )
-from omni.isaac.lab.managers import CurriculumTermCfg as CurrTerm
-from omni.isaac.lab.managers import EventTermCfg as EventTerm
-from omni.isaac.lab.managers import ManagerTermBase
-from omni.isaac.lab.managers import ObservationTermCfg as ObsTerm
-from omni.isaac.lab.managers import RewardTermCfg as RewTerm
-from omni.isaac.lab.managers import SceneEntityCfg
-from omni.isaac.lab.managers import TerminationTermCfg as DoneTerm
-from omni.isaac.lab.sensors import ContactSensorCfg
-from omni.isaac.lab.utils import configclass
-from omni.isaac.lab.sensors import TiledCameraCfg
+from isaaclab.managers import CurriculumTermCfg as CurrTerm
+from isaaclab.managers import EventTermCfg as EventTerm
+from isaaclab.managers import ManagerTermBase
+from isaaclab.managers import ObservationTermCfg as ObsTerm
+from isaaclab.managers import RewardTermCfg as RewTerm
+from isaaclab.managers import SceneEntityCfg
+from isaaclab.managers import TerminationTermCfg as DoneTerm
+from isaaclab.sensors import ContactSensorCfg
+from isaaclab.utils import configclass
+from isaaclab.sensors import TiledCameraCfg
 
-import omni.isaac.lab_tasks.manager_based.manipulation.screw.mdp as mdp
-from omni.isaac.lab_tasks.manager_based.manipulation.screw.screw_env_cfg import (
+import isaaclab_tasks.manager_based.manipulation.screw.mdp as mdp
+from isaaclab_tasks.manager_based.manipulation.screw.screw_env_cfg import (
     BaseNutThreadEnvCfg,
     BaseNutTightenEnvCfg,
 )
-from omni.isaac.lab.utils.noise import GaussianNoiseCfg
-from omni.isaac.lab.utils.modifiers import NoiseModifierCfg
+from isaaclab.utils.noise import GaussianNoiseCfg
+from isaaclab.utils.modifiers import NoiseModifierCfg
 from curobo.types.math import Pose
 from curobo.types.base import TensorDeviceType
 import time
@@ -59,7 +59,7 @@ import numpy as np
 
 ##
 # Pre-defined configs
-from omni.isaac.lab_assets.kuka import KUKA_VICTOR_LEFT_HIGH_PD_CFG
+from isaaclab_assets.kuka import KUKA_VICTOR_LEFT_HIGH_PD_CFG
 
 
 @configclass

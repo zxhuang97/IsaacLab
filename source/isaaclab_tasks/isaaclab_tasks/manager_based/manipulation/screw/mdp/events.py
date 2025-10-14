@@ -1,10 +1,10 @@
 import torch
 from collections import deque
 
-from omni.isaac.lab.managers import CurriculumTermCfg as CurrTerm
-from omni.isaac.lab.managers import EventTermCfg as EventTerm
-from omni.isaac.lab.envs import ManagerBasedEnv
-from omni.isaac.lab.managers import ManagerTermBase
+from isaaclab.managers import CurriculumTermCfg as CurrTerm
+from isaaclab.managers import EventTermCfg as EventTerm
+from isaaclab.envs import ManagerBasedEnv
+from isaaclab.managers import ManagerTermBase
 
 class AutomaticDomainRandomizationCfg(EventTerm):
     def __init__(self,

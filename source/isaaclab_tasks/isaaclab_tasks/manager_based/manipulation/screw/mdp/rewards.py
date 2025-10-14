@@ -14,19 +14,19 @@ from typing import TYPE_CHECKING
 
 from numba import cuda, jit, prange
 
-import omni.isaac.lab.utils.math as math_utils
-from omni.isaac.lab.assets import RigidObject
-from omni.isaac.lab.envs import ManagerBasedRLEnv
-from omni.isaac.lab.managers import SceneEntityCfg
-from omni.isaac.lab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
-from omni.isaac.lab.utils.math import combine_frame_transforms, quat_error_magnitude, quat_mul
+import isaaclab.utils.math as math_utils
+from isaaclab.assets import RigidObject
+from isaaclab.envs import ManagerBasedRLEnv
+from isaaclab.managers import SceneEntityCfg
+from isaaclab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
+from isaaclab.utils.math import combine_frame_transforms, quat_error_magnitude, quat_mul
 
-import omni.isaac.lab_tasks.manager_based.manipulation.screw.mdp as mdp
+import isaaclab_tasks.manager_based.manipulation.screw.mdp as mdp
 
 from .dtw_loss import *
 
 if TYPE_CHECKING:
-    from omni.isaac.lab.envs import ManagerBasedRLEnv
+    from isaaclab.envs import ManagerBasedRLEnv
 
 
 def l2_norm(diff: torch.Tensor) -> torch.Tensor:

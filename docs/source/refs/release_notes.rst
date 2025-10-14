@@ -823,9 +823,9 @@ The ``source/apps`` and ``source/standalone`` folders have been moved to the roo
 
 Isaac Lab extensions have been renamed to:
 
-* ``omni.isaac.lab`` --> :mod:`isaaclab`
-* ``omni.isaac.lab_assets`` --> :mod:`isaaclab_assets`
-* ``omni.isaac.lab_tasks`` --> :mod:`isaaclab_tasks`
+* ``isaaclab`` --> :mod:`isaaclab`
+* ``isaaclab_assets`` --> :mod:`isaaclab_assets`
+* ``isaaclab_tasks`` --> :mod:`isaaclab_tasks`
 
 In addition, we have split up the previous ``source/standalone/workflows`` directory into ``scripts/imitation_learning``
 and ``scripts/reinforcement_learning`` directories. The RSL RL, Stable-Baselines, RL_Games, SKRL, and Ray directories
@@ -856,7 +856,7 @@ As an example, the following import:
 
 .. code-block:: python
 
-    from omni.isaac.lab_assets.anymal import ANYMAL_C_CFG
+    from isaaclab_assets.anymal import ANYMAL_C_CFG
 
 should be replaced with:
 
@@ -1008,7 +1008,7 @@ Improvements
 * Inverts SE-2 keyboard device actions (Z, X)  for yaw command by @riccardorancan
 * Disables backward pass compilation of warp kernels by @Mayankm96
 * Replaces TensorDict with native dictionary by @Toni-SM
-* Improves omni.isaac.lab_tasks loading time by @Toni-SM
+* Improves isaaclab_tasks loading time by @Toni-SM
 * Caches PhysX view's joint paths when processing fixed articulation tendons by @Toni-SM
 * Replaces hardcoded module paths with ``__name__`` dunder by @Mayankm96
 * Expands observation term scaling to support list of floats by @pascal-roth
@@ -1022,7 +1022,7 @@ Improvements
 * Adds versioning to the docs by @sheikh-nv
 * Adds better error message for invalid actuator parameters by @lgulich
 * Updates tested docker and apptainer versions for cluster deployment by @pascal-roth
-* Removes ``ml_archive`` as a dependency of ``omni.isaac.lab`` extension by @fan-ziqi
+* Removes ``ml_archive`` as a dependency of ``isaaclab`` extension by @fan-ziqi
 * Adds a validity check for configclasses by @Dhoeller19
 * Ensures mesh name is compatible with USD convention in mesh converter by @fan-ziqi
 * Adds sanity check for the term type inside the command manager by @command-z-z
@@ -1314,8 +1314,8 @@ Migration Guide
 Renaming of ``SimulationCfg.substeps``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Previously, the users set both ``omni.isaac.lab.sim.SimulationCfg.dt`` and
-``omni.isaac.lab.sim.SimulationCfg.substeps``, which marked the physics insulation time-step and sub-steps,
+Previously, the users set both ``isaaclab.sim.SimulationCfg.dt`` and
+``isaaclab.sim.SimulationCfg.substeps``, which marked the physics insulation time-step and sub-steps,
 respectively. It was unclear whether sub-steps meant the number of integration steps inside the physics time-step
 ``dt`` or the number of physics steps inside a rendering step.
 
@@ -1329,13 +1329,13 @@ As notified in previous releases, we removed the classes and attributes marked a
 * The ``mdp.add_body_mass`` method in the events. Please use the ``mdp.randomize_rigid_body_mass`` instead.
 * The classes ``managers.RandomizationManager`` and ``managers.RandomizationTermCfg``. Please use the
   ``managers.EventManager`` and ``managers.EventTermCfg`` classes instead.
-* The following properties in ``omni.isaac.lab.sensors.FrameTransformerData``:
+* The following properties in ``isaaclab.sensors.FrameTransformerData``:
   * ``target_rot_source`` --> ``target_quat_w``
   * ``target_rot_w`` --> ``target_quat_source``
   * ``source_rot_w`` --> ``source_quat_w``
 
-* The attribute ``body_physx_view`` from the ``omni.isaac.lab.assets.Articulation`` and
-  ``omni.isaac.lab.assets.RigidObject`` classes. These caused confusion when used with the articulation view
+* The attribute ``body_physx_view`` from the ``isaaclab.assets.Articulation`` and
+  ``isaaclab.assets.RigidObject`` classes. These caused confusion when used with the articulation view
   since the body names did not follow the same ordering.
 
 v1.0.0
