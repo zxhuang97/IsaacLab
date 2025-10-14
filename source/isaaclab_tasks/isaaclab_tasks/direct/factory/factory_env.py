@@ -125,6 +125,11 @@ class FactoryEnv(DirectRLEnv):
             "/World/envs/env_.*/Table", cfg, translation=(0.55, 0.0, 0.0), orientation=(0.70711, 0.0, 0.0, 0.70711)
         )
 
+        # Set robot USD path based on use_gelsight_finger flag (after Hydra overrides have been applied)
+        from .factory_tasks_cfg import ASSET_DIR
+        robot_usd_file = "franka_mimic_ori.usd" if self.cfg.use_gelsight_finger else "franka_mimic.usd"
+        self.cfg.robot.spawn.usd_path = f"{ASSET_DIR}/{robot_usd_file}"
+        
         self._robot = Articulation(self.cfg.robot)
         self._fixed_asset = Articulation(self.cfg_task.fixed_asset)
         self._held_asset = Articulation(self.cfg_task.held_asset)
@@ -150,7 +155,13 @@ class FactoryEnv(DirectRLEnv):
 
         # self._obs_cam = TiledCamera(self.cfg.obs_cam)
         # self.scene.sensors["obs_cam"] = self._obs_cam
-
+        if self.cfg.enable_obs_camera:
+            print(f"[INFO] Enabling obs camera")
+            self._obs_cam = TiledCamera(self.cfg.obs_cam)
+            self.scene.sensors["obs_cam"] = self._obs_cam
+        else:
+            print(f"[INFO] Disabling obs camera")
+            self._obs_cam = None
         if self.cfg.enable_tactile_sensor:
             print(f"[INFO] Enabling tactile sensor")
             self._tactile_cam: VisuoTactileSensor = VisuoTactileSensor(self.cfg.tactile_cam)

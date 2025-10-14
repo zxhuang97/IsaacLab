@@ -281,7 +281,7 @@ setup_conda_env() {
             echo "[INFO] Isaac Sim 5.0, installing python=3.11"
         fi
 
-        conda env create -y --file ${ISAACLAB_PATH}/environment.yml -n ${env_name}
+        mamba env create --file ${ISAACLAB_PATH}/environment.yml -n ${env_name}
         # (optional) restore original environment.yml:
         if [[ -f "${ISAACLAB_PATH}/environment.yml.bak" ]]; then
             mv "${ISAACLAB_PATH}/environment.yml.bak" "${ISAACLAB_PATH}/environment.yml"

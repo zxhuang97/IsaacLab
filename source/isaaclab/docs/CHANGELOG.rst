@@ -758,7 +758,7 @@ Fixed
 Added
 ^^^^^
 
-* Added method :meth:`omni.isaac.lab.assets.AssetBase.set_visibility` to set the visibility of the asset
+* Added method :meth:`isaaclab.assets.AssetBase.set_visibility` to set the visibility of the asset
   in the simulation.
 
 
@@ -808,11 +808,11 @@ Added
 Fixed
 ^^^^^
 
-* Fixed :meth:`omni.isaac.lab.sensors.camera.camera.Camera.set_intrinsic_matrices` preventing setting of unused USD
+* Fixed :meth:`isaaclab.sensors.camera.camera.Camera.set_intrinsic_matrices` preventing setting of unused USD
   camera parameters.
-* Fixed :meth:`omni.isaac.lab.sensors.camera.camera.Camera._update_intrinsic_matrices` preventing unused USD camera
-  parameters from being used to calculate :attr:`omni.isaac.lab.sensors.camera.CameraData.intrinsic_matrices`
-* Fixed :meth:`omni.isaac.lab.spawners.sensors.sensors_cfg.PinholeCameraCfg.from_intrinsic_matrix` preventing setting of
+* Fixed :meth:`isaaclab.sensors.camera.camera.Camera._update_intrinsic_matrices` preventing unused USD camera
+  parameters from being used to calculate :attr:`isaaclab.sensors.camera.CameraData.intrinsic_matrices`
+* Fixed :meth:`isaaclab.spawners.sensors.sensors_cfg.PinholeCameraCfg.from_intrinsic_matrix` preventing setting of
   unused USD camera parameters.
 
 
@@ -1304,9 +1304,9 @@ Fixed
 Added
 ^^^^^
 
-* Added methods inside the :class:`omni.isaac.lab.assets.Articulation` class to set the joint
+* Added methods inside the :class:`isaaclab.assets.Articulation` class to set the joint
   position and velocity for the articulation. Previously, the joint position and velocity could
-  only be set using the :meth:`omni.isaac.lab.assets.Articulation.write_joint_state_to_sim` method,
+  only be set using the :meth:`isaaclab.assets.Articulation.write_joint_state_to_sim` method,
   which didn't allow setting the joint position and velocity separately.
 
 

@@ -103,9 +103,9 @@ The ``source/apps`` and ``source/standalone`` folders have been moved to the roo
 
 Isaac Lab extensions have been renamed to:
 
-* ``omni.isaac.lab`` --> ``isaaclab``
-* ``omni.isaac.lab_assets`` --> ``isaaclab_assets``
-* ``omni.isaac.lab_tasks`` --> ``isaaclab_tasks``
+* ``isaaclab`` --> ``isaaclab``
+* ``isaaclab_assets`` --> ``isaaclab_assets``
+* ``isaaclab_tasks`` --> ``isaaclab_tasks``
 
 In addition, we have split up the previous ``source/standalone/workflows`` directory into ``scripts/imitation_learning``
 and ``scripts/reinforcement_learning`` directories. The RSL RL, Stable-Baselines, RL_Games, SKRL, and Ray directories
@@ -130,7 +130,7 @@ who prefer to use the previous scripts, they will be available in previous relea
 
 Additionally, we have also restructured the ``isaaclab_assets`` extension to be split into ``robots`` and ``sensors``
 subdirectories. This allows for clearer separation between the pre-defined configurations provided in the extension.
-For any existing imports such as ``from omni.isaac.lab_assets.anymal import ANYMAL_C_CFG``, please replace it with
+For any existing imports such as ``from isaaclab_assets.anymal import ANYMAL_C_CFG``, please replace it with
 ``from isaaclab.robots.anymal import ANYMAL_C_CFG``.
 
 
