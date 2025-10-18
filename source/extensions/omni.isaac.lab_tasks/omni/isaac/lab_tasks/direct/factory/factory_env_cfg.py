@@ -352,6 +352,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
             asset_scale_randomization = "none"
         self.randomize_scale_method = asset_scale_randomization
         scale_range = params_taskcfg.get("randomize_scale_range", None)
+        
         # Update scale
         if self.randomize_scale_method in ["gaussian", "uniform"] \
             and scale_range is not None \
@@ -364,8 +365,13 @@ class FactoryEnvCfg(DirectRLEnvCfg):
                 env_spacing=2.0,
                 replicate_physics=False
             )
+
+        scale_fixed_asset = params_taskcfg.get("scale_fixed_asset", None)
+        if scale_fixed_asset is not None:
+            assert len(scale_fixed_asset) == 3, "scale_fixed_asset must be a list of 3!"
+            self.scale_fixed_asset = scale_fixed_asset
         else:
-            print(f"Warning: 'randomize_scale_range' should be a list/tuple of length 2, using default {self.randomize_scale_range}.")
+            print(f"Warning: 'scale_fixed_asset' should be a list/tuple of length 3")
 
     def __post_init__(self):
         """Post initialization."""

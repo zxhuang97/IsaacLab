@@ -172,29 +172,37 @@ class FactoryEnv(DirectRLEnv):
     def randomize_scales(self, cfg):
         asset_scale_samples = None
 
+        method = cfg.randomize_scale_method.lower()
+        mod_xy = False
+        mod_z = False
         # Sample and randomize
-        if cfg.randomize_scale_method.lower() == "uniform":
+        if method == "uniform":
             upper, lower = cfg.randomize_scale_range
             scale = torch.rand((self.num_envs,))
             asset_scale_samples = scale * (upper - lower) + lower
             asset_scale_samples = asset_scale_samples.to(self.device)
-        elif cfg.randomize_scale_method.lower() == "gaussian":
+            mod_xy, mod_z = True, True
+        elif method == "gaussian":
             mean, std = cfg.randomize_scale_range
             asset_scale_samples = torch.normal(
                 mean=mean, std=std, size=(self.num_envs,)
             ).to(self.device)
+            mod_xy, mod_z = True, True
         else:
             self.asset_scale_samples = torch.ones((self.num_envs,)).to(self.device)
             return
         
         # Update all the parameters in the task config
         # Deal with fixed asset
-        self.cfg_task.fixed_asset_cfg.diameter = (
-            asset_scale_samples * self.cfg_task.fixed_asset_cfg.diameter
-        ).to(self.device)
-        self.cfg_task.fixed_asset_cfg.height = (
-            asset_scale_samples * self.cfg_task.fixed_asset_cfg.height
-        ).to(self.device)
+        if mod_xy:
+            self.cfg_task.fixed_asset_cfg.diameter = (
+                asset_scale_samples * self.cfg_task.fixed_asset_cfg.diameter
+            ).to(self.device)
+        if mod_z:
+            self.cfg_task.fixed_asset_cfg.height = (
+                asset_scale_samples * self.cfg_task.fixed_asset_cfg.height
+            ).to(self.device)
+
         if self.cfg_task.name == "nut_thread":
             self.cfg_task.fixed_asset_cfg.thread_pitch = (
                 asset_scale_samples * self.cfg_task.fixed_asset_cfg.thread_pitch
@@ -253,7 +261,7 @@ class FactoryEnv(DirectRLEnv):
         asset_cfgs = []
         for scale in asset_scale_samples:
             scaled_spawn_cfg = deepcopy(spawn_cfg)
-            scaled_spawn_cfg.scale = (scale, scale, scale)
+            scaled_spawn_cfg.scale = (scale, scale, 1.0)
             asset_cfgs.append(scaled_spawn_cfg)
         assert len(asset_cfgs) == self.num_envs
         assert sum([1 if cfg.activate_contact_sensors else 0 for cfg in asset_cfgs]) == self.num_envs
@@ -277,10 +285,15 @@ class FactoryEnv(DirectRLEnv):
             "/World/envs/env_.*/Table", cfg, translation=(0.55, 0.0, 0.0), orientation=(0.70711, 0.0, 0.0, 0.70711)
         )
 
+        # Scale randomization
         self.randomize_scales(self.cfg)
         self.compute_scaled_held_offset()
 
-        if self.asset_scale_samples is not None:
+        # Simpler implementation, only scale held asset
+        if hasattr(self.cfg, "scale_fixed_asset"):
+            self.cfg_task.fixed_asset.spawn.scale = self.cfg.scale_fixed_asset
+
+        if self.cfg.randomize_scale_method != "none":
             # Must do this before spawning multiplicative assets
             self.scene.clone_environments(copy_from_source=False)
             self.scene.filter_collisions()
