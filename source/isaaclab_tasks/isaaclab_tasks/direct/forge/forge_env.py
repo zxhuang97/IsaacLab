@@ -65,7 +65,7 @@ class ForgeEnv(FactoryEnv):
             torch.tensor([pos_noise_level, pos_noise_level, pos_noise_level], dtype=torch.float32, device=self.device)
         )
         self.noisy_fingertip_pos = self.fingertip_midpoint_pos + fingertip_pos_noise
-
+        # only allow rotation around z-axis ?
         rot_noise_axis = torch.randn((self.num_envs, 3), dtype=torch.float32, device=self.device)
         rot_noise_axis /= torch.linalg.norm(rot_noise_axis, dim=1, keepdim=True)
         rot_noise_angle = torch.randn((self.num_envs,), dtype=torch.float32, device=self.device) * np.deg2rad(
@@ -164,7 +164,8 @@ class ForgeEnv(FactoryEnv):
         fixed_pos_action_frame = self.fixed_pos_obs_frame + self.init_fixed_pos_obs_noise
         ctrl_target_fingertip_preclipped_pos = fixed_pos_action_frame + pos_actions
         # (1.b) Enforce rotation action constraints.
-        rot_actions[:, 0:2] = 0.0
+        if not self.cfg.ctrl.use_full_rotation:
+            rot_actions[:, 0:2] = 0.0
 
         # Assumes joint limit is in (+x, -y)-quadrant of world frame. [-1, 1] -> [-180, 90]
         rot_actions[:, 2] = np.deg2rad(-180.0) + np.deg2rad(270.0) * (rot_actions[:, 2] + 1.0) / 2.0  # Joint limit.
@@ -324,12 +325,12 @@ class ForgeEnv(FactoryEnv):
         contact_rand = torch.rand((self.num_envs,), dtype=torch.float32, device=self.device)
         contact_lower, contact_upper = self.cfg.task.contact_penalty_threshold_range
         self.contact_penalty_thresholds = contact_lower + contact_rand * (contact_upper - contact_lower)
-
-        self.dead_zone_thresholds = (
-            torch.rand((self.num_envs, 6), dtype=torch.float32, device=self.device) * self.default_dead_zone
-        )
-
-        self.force_sensor_world_smooth[:, :] = 0.0
+        if self.cfg.use_dead_zone:
+            self.dead_zone_thresholds = (
+                    torch.rand((self.num_envs, 6), dtype=torch.float32, device=self.device) * self.default_dead_zone
+                )
+        else:
+            self.dead_zone_thresholds = None
 
         self.flip_quats = torch.ones((self.num_envs,), dtype=torch.float32, device=self.device)
         rand_flips = torch.rand(self.num_envs) > 0.5

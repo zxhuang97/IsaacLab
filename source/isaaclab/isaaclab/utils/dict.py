@@ -8,6 +8,8 @@
 import collections.abc
 import hashlib
 import json
+
+from omegaconf import DictConfig, ListConfig, OmegaConf
 import torch
 from collections.abc import Iterable, Mapping, Sized
 from typing import Any
@@ -61,10 +63,12 @@ def class_to_dict(obj: object) -> dict[str, Any]:
         if callable(value):
             data[key] = callable_to_string(value)
         # check if attribute is a dictionary
+        elif isinstance(value, (DictConfig, ListConfig)):
+            data[key] = OmegaConf.to_container(value)
         elif hasattr(value, "__dict__") or isinstance(value, dict):
             data[key] = class_to_dict(value)
         # check if attribute is a list or tuple
-        elif isinstance(value, (list, tuple)):
+        elif isinstance(value, (list, tuple,)):
             data[key] = type(value)([class_to_dict(v) for v in value])
         else:
             data[key] = value

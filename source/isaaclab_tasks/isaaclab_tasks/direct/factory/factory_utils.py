@@ -112,3 +112,17 @@ def collapse_obs_dict(obs_dict, obs_order):
     obs_tensors = [obs_dict[obs_name] for obs_name in obs_order]
     obs_tensors = torch.cat(obs_tensors, dim=-1)
     return obs_tensors
+
+
+def change_FT_frame(source_F, source_T, source_frame, target_frame):
+    """Convert force/torque reading from source to target frame."""
+    # Modern Robotics eq. 3.95
+    source_frame_inv = torch_utils.tf_inverse(source_frame[0], source_frame[1])
+    target_T_source_quat, target_T_source_pos = torch_utils.tf_combine(
+        source_frame_inv[0], source_frame_inv[1], target_frame[0], target_frame[1]
+    )
+    target_F = torch_utils.quat_apply(target_T_source_quat, source_F)
+    target_T = torch_utils.quat_apply(
+        target_T_source_quat, (source_T + torch.cross(target_T_source_pos, source_F, dim=-1))
+    )
+    return target_F, target_T

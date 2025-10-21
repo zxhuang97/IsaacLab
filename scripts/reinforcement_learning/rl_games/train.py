@@ -139,13 +139,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     print(f"[INFO] Logging experiment in directory: {log_root_path}")
     # specify directory for logging runs
-    log_dir = agent_cfg["params"]["config"].get("full_experiment_name", datetime.now().strftime("%m%d_%H%M_")+args_cli.task)
+    experiment_name = datetime.now().strftime("%m%d%H%M%S_")+args_cli.task if args_cli.wandb_name is None else args_cli.wandb_name
+    log_dir = experiment_name
     # set directory into agent config
     # logging directory path: <train_dir>/<full_experiment_name>
     agent_cfg["params"]["config"]["train_dir"] = log_root_path
     agent_cfg["params"]["config"]["full_experiment_name"] = log_dir
     wandb_project = config_name if args_cli.wandb_project_name is None else args_cli.wandb_project_name
-    experiment_name = log_dir if args_cli.wandb_name is None else args_cli.wandb_name
 
     # dump the configuration into log-directory
     dump_yaml(os.path.join(log_root_path, log_dir, "params", "env.yaml"), env_cfg)

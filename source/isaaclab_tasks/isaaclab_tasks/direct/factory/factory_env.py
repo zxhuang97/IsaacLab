@@ -17,8 +17,7 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.utils.math import axis_angle_from_quat
 from isaaclab.sensors import VisuoTactileSensor, TiledCamera
 from . import factory_control, factory_utils
-from .factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG, FactoryEnvCfg
-
+from .factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG, FactoryEnvCfg, ASSET_DIR
 import matplotlib.pyplot as plt
 
 class FactoryEnv(DirectRLEnv):
@@ -124,7 +123,8 @@ class FactoryEnv(DirectRLEnv):
         cfg.func(
             "/World/envs/env_.*/Table", cfg, translation=(0.55, 0.0, 0.0), orientation=(0.70711, 0.0, 0.0, 0.70711)
         )
-
+        robot_usd_file = "franka_mimic_tactile.usd" if self.cfg.use_gelsight_finger else "franka_mimic.usd"
+        self.cfg.robot.spawn.usd_path = f"{ASSET_DIR}/{robot_usd_file}"
         self._robot = Articulation(self.cfg.robot)
         self._fixed_asset = Articulation(self.cfg_task.fixed_asset)
         self._held_asset = Articulation(self.cfg_task.held_asset)
@@ -246,6 +246,9 @@ class FactoryEnv(DirectRLEnv):
             "ee_linvel": self.ee_linvel_fd,
             "ee_angvel": self.ee_angvel_fd,
             "prev_actions": prev_actions,
+            "held_pos": self.held_pos,
+            "held_pos_rel_fixed": self.held_pos - self.fixed_pos_obs_frame,
+            "held_quat": self.held_quat,
         }
 
         state_dict = {
@@ -857,25 +860,64 @@ class FactoryEnv(DirectRLEnv):
             held_asset_relative_quat, held_asset_relative_pos
         )
 
-        translated_held_asset_quat, translated_held_asset_pos = torch_utils.tf_combine(
-            q1=fingertip_flipped_quat, t1=fingertip_flipped_pos, q2=asset_in_hand_quat, t2=asset_in_hand_pos
-        )
+        ##################### OLD Initialization #########################3
+        # translated_held_asset_quat, translated_held_asset_pos = torch_utils.tf_combine(
+        #     q1=fingertip_flipped_quat, t1=fingertip_flipped_pos, q2=asset_in_hand_quat, t2=asset_in_hand_pos
+        # )
 
+        # # Add asset in hand randomization
+        # rand_sample = torch.rand((self.num_envs, 3), dtype=torch.float32, device=self.device)
+        # held_asset_pos_noise = 2 * (rand_sample - 0.5)  # [-1, 1]
+        # if self.cfg_task.name == "gear_mesh":
+        #     held_asset_pos_noise[:, 2] = -rand_sample[:, 2]  # [-1, 0]
+        # # held_asset_pos_noise = [0.003, 0.0, 0.003] for peg
+        # held_asset_pos_noise_level = torch.tensor(self.cfg_task.held_asset_pos_noise, device=self.device)
+        # held_asset_pos_noise = held_asset_pos_noise @ torch.diag(held_asset_pos_noise_level)
+
+        # held_asset_rot_noise_level = torch.tensor(self.cfg_task.held_asset_rot_noise, device=self.device).expand(self.num_envs, 3)
+        # held_asset_rot_noise = 2 * (torch.rand((self.num_envs, 3), dtype=torch.float32, device=self.device) - 0.5)
+        # held_asset_rot_noise = held_asset_rot_noise * held_asset_rot_noise_level
+        # held_asset_rot_noise = torch_utils.quat_from_euler_xyz(
+        #     held_asset_rot_noise[:, 0], held_asset_rot_noise[:, 1], held_asset_rot_noise[:, 2]
+        # )
+        
+        # # Apply position noise and rotation adjustment
+        # translated_held_asset_quat, translated_held_asset_pos = torch_utils.tf_combine(
+        #     q1=translated_held_asset_quat,
+        #     t1=translated_held_asset_pos,
+        #     q2=held_asset_rot_noise,
+        #     t2=held_asset_pos_noise,
+        # )
+
+        ###############3 NEW Initialization #########################3
         # Add asset in hand randomization
         rand_sample = torch.rand((self.num_envs, 3), dtype=torch.float32, device=self.device)
         held_asset_pos_noise = 2 * (rand_sample - 0.5)  # [-1, 1]
         if self.cfg_task.name == "gear_mesh":
             held_asset_pos_noise[:, 2] = -rand_sample[:, 2]  # [-1, 0]
-
+        # held_asset_pos_noise = [0.003, 0.0, 0.003] for peg
         held_asset_pos_noise_level = torch.tensor(self.cfg_task.held_asset_pos_noise, device=self.device)
         held_asset_pos_noise = held_asset_pos_noise @ torch.diag(held_asset_pos_noise_level)
-        translated_held_asset_quat, translated_held_asset_pos = torch_utils.tf_combine(
-            q1=translated_held_asset_quat,
-            t1=translated_held_asset_pos,
-            q2=torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1),
-            t2=held_asset_pos_noise,
-        )
 
+        held_asset_rot_noise_level = torch.tensor(self.cfg_task.held_asset_rot_noise, device=self.device).expand(self.num_envs, 3)
+        held_asset_rot_noise = 2 * (torch.rand((self.num_envs, 3), dtype=torch.float32, device=self.device) - 0.5)
+        held_asset_rot_noise = held_asset_rot_noise * held_asset_rot_noise_level
+        held_asset_rot_noise = torch_utils.quat_from_euler_xyz(
+            held_asset_rot_noise[:, 0], held_asset_rot_noise[:, 1], held_asset_rot_noise[:, 2]
+        )
+        
+        # Apply position noise and rotation adjustment
+        asset_in_hand_quat, asset_in_hand_pos = torch_utils.tf_combine(
+            q1=held_asset_rot_noise,
+            t1=held_asset_pos_noise,
+            q2=asset_in_hand_quat,
+            t2=asset_in_hand_pos,
+
+        )
+        translated_held_asset_quat, translated_held_asset_pos = torch_utils.tf_combine(
+            q1=fingertip_flipped_quat, t1=fingertip_flipped_pos, q2=asset_in_hand_quat, t2=asset_in_hand_pos
+        )
+        ##########################################################
         held_state = self._held_asset.data.default_root_state.clone()
         held_state[:, 0:3] = translated_held_asset_pos + self.scene.env_origins
         held_state[:, 3:7] = translated_held_asset_quat

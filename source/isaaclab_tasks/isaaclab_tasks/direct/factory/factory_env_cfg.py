@@ -32,6 +32,10 @@ OBS_DIM_CFG = {
     "ee_linvel": 3,
     "ee_angvel": 3,
     "scales": 1,
+    "held_pos_rel_fixed": 3,
+    "held_quat": 4,
+    "fixed_pos": 3,
+    "fixed_quat": 4,
 }
 
 STATE_DIM_CFG = {
@@ -113,13 +117,6 @@ class FactoryEnvCfg(DirectRLEnvCfg):
     obs_rand: ObsRandCfg = ObsRandCfg()
     obs_history: ObsHistoryCfg = ObsHistoryCfg()
     ctrl: CtrlCfg = CtrlCfg()
-    
-    # Sensor configuration
-    enable_tactile_sensor: bool = False
-    read_tactile_sensor: bool = False
-    enable_obs_camera: bool = False
-    use_compliant_gripper: bool = True
-    use_gelsight_finger: bool = True
     
     episode_length_s = 10.0  # Probably need to override.
     sim: SimulationCfg = SimulationCfg(
@@ -291,6 +288,13 @@ class FactoryEnvCfg(DirectRLEnvCfg):
     # To enable experiments with cfg dicts
     params = None
 
+    # My parameters
+    enable_tactile_sensor: bool = False
+    read_tactile_sensor: bool = False
+    enable_obs_camera: bool = False
+    use_compliant_gripper: bool = True
+    use_gelsight_finger: bool = True
+
     def update_env_params(self):
         # return
         """Set default environment parameters."""
@@ -311,11 +315,12 @@ class FactoryEnvCfg(DirectRLEnvCfg):
             self.use_compliant_gripper = env.use_compliant_gripper
         if env.get("use_gelsight_finger", None) is not None:
             self.use_gelsight_finger = env.use_gelsight_finger
-        robot_usd_file = "franka_mimic_tactile.usd" if self.use_gelsight_finger else "franka_mimic.usd"
-        self.robot.spawn.usd_path = f"{ASSET_DIR}/{robot_usd_file}"
-        
         if env.get("obs_history", None) is not None and env["obs_history"].get("history_length", None) is not None:
             self.obs_history.history_length = env["obs_history"]["history_length"]
+
+        task = self.params.env.get("task", OmegaConf.create({}))
+        if task.get("held_asset_rot_noise", None) is not None:
+            self.task.held_asset_rot_noise = OmegaConf.to_container(task.held_asset_rot_noise, resolve=True)
 
     def __post_init__(self):
         """Post initialization."""
