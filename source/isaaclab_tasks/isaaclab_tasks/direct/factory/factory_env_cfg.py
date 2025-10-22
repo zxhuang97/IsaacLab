@@ -321,6 +321,11 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         task = self.params.env.get("task", OmegaConf.create({}))
         if task.get("held_asset_rot_noise", None) is not None:
             self.task.held_asset_rot_noise = OmegaConf.to_container(task.held_asset_rot_noise, resolve=True)
+        if task.get("hand_init_pos", None) is not None:
+            self.task.hand_init_pos = OmegaConf.to_container(task.hand_init_pos, resolve=True)
+        ctrl = env.get("ctrl", OmegaConf.create({}))
+        if ctrl.get("ema_factor", None) is not None:
+            self.ctrl.ema_factor = ctrl.ema_factor
 
     def __post_init__(self):
         """Post initialization."""
