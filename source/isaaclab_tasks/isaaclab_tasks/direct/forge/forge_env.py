@@ -151,6 +151,9 @@ class ForgeEnv(FactoryEnv):
         """FORGE actions are defined as targets relative to the fixed asset."""
         if self.last_update_timestamp < self._robot._data._sim_timestamp:
             self._compute_intermediate_values(dt=self.physics_dt)
+        if self.cfg.ctrl.use_delta_pose:
+            super()._apply_action()
+            return
 
         # Step (0): Scale actions to allowed range.
         pos_actions = self.actions[:, 0:3]

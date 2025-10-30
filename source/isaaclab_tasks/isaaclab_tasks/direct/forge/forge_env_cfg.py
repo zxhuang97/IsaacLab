@@ -29,8 +29,10 @@ class ForgeCtrlCfg(CtrlCfg):
     task_prop_gains_noise_level = [0.41, 0.41, 0.41, 0.41, 0.41, 0.41]
     pos_threshold_noise_level = [0.25, 0.25, 0.25]
     rot_threshold_noise_level = [0.29, 0.29, 0.29]
+
     default_dead_zone = [5.0, 5.0, 5.0, 1.0, 1.0, 1.0]
-    use_full_rotation: bool = False
+    use_delta_pose = False
+    
 
 
 @configclass
@@ -150,13 +152,22 @@ class ForgeEnvCfg(FactoryEnvCfg):
         if ctrl.get("ema_factor_range", None) is not None:
             self.ctrl.ema_factor_range = OmegaConf.to_container(ctrl.ema_factor_range, resolve=True)
 
-        
+        if ctrl.get("use_delta_pose", None) is not None:
+            self.ctrl.use_delta_pose = ctrl.use_delta_pose
 
-        
+        if ctrl.get("randomize_controller", None) is not None:
+            self.ctrl.randomize_controller = ctrl.randomize_controller
+            if not self.ctrl.randomize_controller:
+                self.ctrl.task_prop_gains_noise_level = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+                self.ctrl.pos_threshold_noise_level = [0.0, 0.0, 0.0]
+                self.ctrl.rot_threshold_noise_level = [0.0, 0.0, 0.0]
+
+        if ctrl.get("default_task_prop_gains", None) is not None:
+            self.ctrl.default_task_prop_gains = OmegaConf.to_container(ctrl.default_task_prop_gains, resolve=True)
+
+
     def __post_init__(self):
         super().__post_init__()
-
-        
 
         
 

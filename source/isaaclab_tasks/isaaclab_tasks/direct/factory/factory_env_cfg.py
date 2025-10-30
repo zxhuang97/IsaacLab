@@ -89,6 +89,7 @@ class CtrlCfg:
     default_dof_pos_tensor = [-1.3003, -0.4015, 1.1791, -2.1493, 0.4001, 1.9425, 0.4754]
     kp_null = 10.0
     kd_null = 6.3246
+    use_full_rotation: bool = False
 
 
 @configclass
@@ -318,7 +319,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         if env.get("obs_history", None) is not None and env["obs_history"].get("history_length", None) is not None:
             self.obs_history.history_length = env["obs_history"]["history_length"]
 
-        task = self.params.env.get("task", OmegaConf.create({}))
+        task = env.get("task", OmegaConf.create({}))
         if task.get("held_asset_rot_noise", None) is not None:
             self.task.held_asset_rot_noise = OmegaConf.to_container(task.held_asset_rot_noise, resolve=True)
         if task.get("hand_init_pos", None) is not None:
@@ -326,6 +327,15 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         ctrl = env.get("ctrl", OmegaConf.create({}))
         if ctrl.get("ema_factor", None) is not None:
             self.ctrl.ema_factor = ctrl.ema_factor
+        pos_action_bounds = ctrl.get("pos_action_bounds", None)
+        if pos_action_bounds is not None:
+            self.ctrl.pos_action_bounds = OmegaConf.to_container(pos_action_bounds, resolve=True)
+        rot_action_bounds = ctrl.get("rot_action_bounds", None)
+        if rot_action_bounds is not None:
+            self.ctrl.rot_action_bounds = OmegaConf.to_container(rot_action_bounds, resolve=True)
+        use_full_rotation = ctrl.get("use_full_rotation", None)
+        if use_full_rotation is not None:
+            self.ctrl.use_full_rotation = use_full_rotation
 
     def __post_init__(self):
         """Post initialization."""
