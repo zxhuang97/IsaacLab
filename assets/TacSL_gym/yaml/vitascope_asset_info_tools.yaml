@@ -1,0 +1,127 @@
+# in the order of complexity
+
+peg_mountain:
+    peg_mountain:
+        urdf_par_dir: 'industreal'
+        urdf_path: 'peg_mountain'
+        width: 0.04
+        depth: 0.04
+        length: 0.08
+        density: 500.0
+        friction: 1.0
+        grasp_offset: 0.04
+        plug_width: 0.016
+    rectangular_hole_16mm:
+        urdf_par_dir: 'industreal'
+        urdf_path: 'industreal_rectangular_hole_16mm' # contact_gen
+        width: 0.0162182
+        height: 0.028
+        depth: 0.023
+        density: 8000.0
+        friction: 0.5
+
+
+peg_rectangle:
+    peg_rectangle:
+        urdf_par_dir: 'industreal'
+        urdf_path: 'peg_rectangle'
+        width: 0.05
+        depth: 0.03
+        length: 0.08
+        density: 500.0
+        friction: 1.0
+        grasp_offset: 0.04
+        plug_width: 0.016
+    rectangular_hole_16mm:
+        urdf_par_dir: 'industreal'
+        urdf_path: 'industreal_rectangular_hole_16mm' # contact_gen
+        width: 0.0162182
+        height: 0.028
+        depth: 0.023
+        density: 8000.0
+        friction: 0.5
+
+
+peg_pyramid:
+    peg_pyramid:
+        urdf_par_dir: 'industreal'
+        urdf_path: 'peg_pyramid'
+        width: 0.04
+        depth: 0.04
+        length: 0.08
+        density: 500.0
+        friction: 1.0
+        grasp_offset: 0.04
+        plug_width: 0.016
+    rectangular_hole_16mm:
+        urdf_par_dir: 'industreal'
+        urdf_path: 'industreal_rectangular_hole_16mm' # contact_gen
+        width: 0.0162182
+        height: 0.028
+        depth: 0.023
+        density: 8000.0
+        friction: 0.5
+
+
+peg_hex:
+    peg_hex:
+        urdf_par_dir: 'industreal'
+        urdf_path: 'peg_hex'
+        width: 0.04
+        depth: 0.04
+        length: 0.10
+        density: 500.0
+        friction: 1.0
+        grasp_offset: 0.04
+        plug_width: 0.016
+    rectangular_hole_16mm:
+        urdf_par_dir: 'industreal'
+        urdf_path: 'industreal_rectangular_hole_16mm' # contact_gen
+        width: 0.0162182
+        height: 0.028
+        depth: 0.023
+        density: 8000.0
+        friction: 0.5
+
+
+peg_cylinder:
+    peg_cylinder:
+        urdf_par_dir: 'industreal'
+        urdf_path: 'peg_cylinder'
+        width: 0.04
+        depth: 0.04
+        length: 0.08
+        density: 500.0
+        friction: 1.0
+        grasp_offset: 0.04
+        plug_width: 0.016
+    rectangular_hole_16mm:
+        urdf_par_dir: 'industreal'
+        urdf_path: 'industreal_rectangular_hole_16mm' # contact_gen
+        width: 0.0162182
+        height: 0.028
+        depth: 0.023
+        density: 8000.0
+        friction: 0.5
+
+
+peg_semisphere:
+    peg_semisphere:
+        urdf_par_dir: 'industreal'
+        urdf_path: 'peg_semisphere'
+        width: 0.04
+        depth: 0.04
+        length: 0.12
+        density: 500.0
+        friction: 1.0
+        grasp_offset: 0.04
+        plug_width: 0.016
+    socket_semisphere:
+        urdf_par_dir: 'industreal'
+        urdf_path: 'socket_semisphere' # contact_gen
+        width: 0.0162182
+        height: 0.028
+        depth: 0.023
+        density: 8000.0
+        friction: 0.5
+

@@ -130,7 +130,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         # get path to previous checkpoint
         resume_path = get_checkpoint_path(log_root_path, run_dir, checkpoint_file, other_dirs=["nn"])
     else:
-        import ipdb; ipdb.set_trace()
         resume_path = retrieve_file_path(args_cli.checkpoint)
     log_dir = os.path.dirname(os.path.dirname(resume_path))
 

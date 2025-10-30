@@ -301,11 +301,11 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         """Set default environment parameters."""
         # Initialize params structure
         if self.params is None:
-            params = OmegaConf.create({})
-        else:
-            params = self.params
+            self.params = OmegaConf.create({})
+        params = self.params
         
-        env = params.get("env", OmegaConf.create({}))
+        params.env = params.get("env", OmegaConf.create({}))
+        env = params.env
         if env.get("enable_tactile_sensor", None) is not None:
             self.enable_tactile_sensor = env.enable_tactile_sensor
         if env.get("read_tactile_sensor", None) is not None:

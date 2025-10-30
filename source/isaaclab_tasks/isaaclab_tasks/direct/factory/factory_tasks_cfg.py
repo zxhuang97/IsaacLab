@@ -10,7 +10,7 @@ from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR
 from pathlib import Path
 
 # ASSET_DIR = f"{ISAACLAB_NUCLEUS_DIR}/Factory"
-ASSET_DIR = str(Path(__file__).resolve().parents[6] / "assets" / "Factory_new")
+ASSET_DIR = str(Path(__file__).resolve().parents[5] / "assets" / "Factory_new")
 
 
 @configclass
