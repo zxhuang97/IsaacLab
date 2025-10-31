@@ -1,0 +1,122 @@
+<?xml version="1.0" ?>
+<robot name="gelsight_mini_finger">
+  <!-- 
+    Standalone Gelsight Mini Finger URDF
+    Extracted from tacsl_franka_gelsight_mini.urdf
+    This represents the complete finger assembly without the franka arm
+  -->
+
+  <!-- Root finger link -->
+  <link name="gelsight_finger">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <mass value="1.0e-6"/>
+      <inertia ixx="1.0e-09" ixy="0" ixz="0" iyy="1.0e-09" iyz="0" izz="1.0e-09"/>
+    </inertial>
+  </link>
+
+  <!-- Adapter mount -->
+  <joint name="mount_joint" type="fixed">
+    <origin rpy="0 0 0" xyz="0.0 0.0 0.0"/>
+    <parent link="gelsight_finger"/>
+    <child link="panda_adapter"/>
+    <axis xyz="0 0 0"/>
+  </joint>
+
+  <link name="panda_adapter">
+    <visual>
+      <origin rpy="-1.5707963268 0 0" xyz="0.0 0.0 0.0"/>
+      <geometry>
+        <mesh filename="mesh/gs_mini_meshes/panda_adapter_gsmini.obj"/>
+      </geometry>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0.0 0.0 0.0"/>
+      <geometry>
+        <mesh filename="mesh/gs_mini_meshes/panda_adapter_gsmini.obj"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- Gelsight shell (housing) -->
+  <joint name="fingerbox_joint" type="fixed">
+    <origin rpy="0 0 0" xyz="0.0 0.0 0.0"/>
+    <parent link="panda_adapter"/>
+    <child link="fingerbox"/>
+    <axis xyz="0 0 0"/>
+  </joint>
+
+  <link name="fingerbox">
+    <visual>
+      <origin rpy="-1.5707963268 0 0" xyz="0.0 0.0 0.0"/>
+      <geometry>
+        <mesh filename="mesh/gs_mini_meshes/gsmini_shell_hollow_transformed.obj"/>
+      </geometry>
+    </visual>
+    <collision>
+      <geometry>
+        <mesh filename="mesh/gs_mini_meshes/gsmini_shell_hollow_transformed.obj"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin rpy="0 0 0" xyz="0 0.0114 0.0231"/>
+      <mass value="0.0297"/>
+      <inertia ixx="7.552e-06" ixy="0" ixz="0" iyy="7.159e-06" iyz="1.043e-6" izz="2.352e-06"/>
+    </inertial>
+  </link>
+
+  <!-- Elastomer layer -->
+  <joint name="elastomer_joint" type="fixed">
+    <origin rpy="0 0 0" xyz="0.0 0.0 0.0"/>
+    <parent link="fingerbox"/>
+    <child link="elastomer"/>
+    <axis xyz="0 0 0"/>
+  </joint>
+
+  <link name="elastomer">
+    <visual>
+      <origin rpy="-1.5707963268 0 0" xyz="0.0 0.0 0.0"/>
+      <geometry>
+        <mesh filename="mesh/gs_mini_meshes/gsmini_elastomer_transformed_both_sides.obj"/>
+      </geometry>
+    </visual>
+    <collision>
+      <geometry>
+        <mesh filename="mesh/gs_mini_meshes/gsmini_elastomer_transformed_enclosed.obj"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- Elastomer tip (contact point) -->
+  <joint name="elastomer_tip_joint" type="fixed">
+    <origin rpy="3.141592653589793 0 0" xyz="-0.00050001 -0.05975001 -0.01125"/>
+    <parent link="fingerbox"/>
+    <child link="elastomer_tip"/>
+    <axis xyz="0 0 0"/>
+  </joint>
+
+  <link name="elastomer_tip">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <mass value="1.0e-6"/>
+      <inertia ixx="1.0e-09" ixy="0" ixz="0" iyy="1.0e-09" iyz="0" izz="1.0e-09"/>
+    </inertial>
+  </link>
+
+  <!-- Sensor frame (camera frame for vision) -->
+  <joint name="sensor_joint" type="fixed">
+    <origin rpy="1.5707963268 0 0" xyz="0.0 0.0 0.0"/>
+    <parent link="elastomer_tip"/>
+    <child link="sensor"/>
+    <axis xyz="0 0 0"/>
+  </joint>
+
+  <link name="sensor">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <mass value="1.0e-6"/>
+      <inertia ixx="1.0e-09" ixy="0" ixz="0" iyy="1.0e-09" iyz="0" izz="1.0e-09"/>
+    </inertial>
+  </link>
+
+</robot>
