@@ -124,7 +124,8 @@ class FactoryEnv(DirectRLEnv):
             "/World/envs/env_.*/Table", cfg, translation=(0.55, 0.0, 0.0), orientation=(0.70711, 0.0, 0.0, 0.70711)
         )
         # robot_usd_file = "franka_mimic_tactile.usd" if self.cfg.use_gelsight_finger else "franka_mimic.usd"
-        robot_usd_file = "franka_gelsight_r15_assembled.usd" if self.cfg.use_gelsight_finger else "franka_mimic.usd"
+        # robot_usd_file = "franka_gelsight_r15_assembled.usd" if self.cfg.use_gelsight_finger else "franka_mimic.usd"
+        robot_usd_file = "franka_gelsight_mini_assembled.usd" if self.cfg.use_gelsight_finger else "franka_mimic.usd"
         self.cfg.robot.spawn.usd_path = f"{ASSET_DIR}/{robot_usd_file}"
         self._robot = Articulation(self.cfg.robot)
         self._fixed_asset = Articulation(self.cfg_task.fixed_asset)

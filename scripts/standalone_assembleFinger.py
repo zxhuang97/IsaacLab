@@ -1,5 +1,5 @@
 from isaaclab.app import AppLauncher
-app_launcher = AppLauncher()
+app_launcher = AppLauncher(headless=True)
 simulation_app = app_launcher.app
 
 import isaacsim.core.utils.stage as stage_utils
@@ -19,14 +19,10 @@ if FINGER_TYPE == "r15":
     finger_use_url = os.path.abspath("assets/TacSL/gelsight_r15_finger.usd")
     output_usd_path = "assets/Factory_new/franka_gelsight_r15_assembled.usd"
     fingertip_z_offset = 0.135
-    # Hide camera for r15
-    has_camera = True
 elif FINGER_TYPE == "mini":
-    finger_use_url = os.path.abspath("assets/TacSL/gelsight_mini_finger.usd")
+    finger_use_url = os.path.abspath("assets/TacSL/gsmini_finger.usda")
     output_usd_path = "assets/Factory_new/franka_gelsight_mini_assembled.usd"
-    fingertip_z_offset = 0.135
-    # Mini doesn't have camera in USD yet
-    has_camera = False
+    fingertip_z_offset = 0.13
 else:
     raise ValueError(f"Unknown finger type: {FINGER_TYPE}")
 
@@ -81,27 +77,36 @@ left_joint = UsdPhysics.PrismaticJoint(left_joint_prim)
 left_joint.GetBody0Rel().SetTargets([hand_prim.GetPath()])
 left_joint.GetBody1Rel().SetTargets([left_finger_prim.GetPath()])
 
+# Set local translation for left joint from URDF (origin xyz="0 -0.02 0.06340285")
+if FINGER_TYPE == "mini":
+    left_joint.GetLocalPos0Attr().Set(Gf.Vec3f(0.0, 0.01, 0.06340285))
+    print(f"Set left joint localPos0 to (0.0, -0.05, 0.06340285)")
+
 # Configure right joint
 right_joint = UsdPhysics.PrismaticJoint(right_joint_prim)
 right_joint.GetBody0Rel().SetTargets([hand_prim.GetPath()])
 right_joint.GetBody1Rel().SetTargets([right_finger_prim.GetPath()])
+
+# Set local translation for right joint from URDF (origin xyz="0 0.02 0.06340285")
+if FINGER_TYPE == "mini":
+    right_joint.GetLocalPos0Attr().Set(Gf.Vec3f(0.0, -0.01, 0.06340285))
+    print(f"Set right joint localPos0 to (0.0, 0.05, 0.06340285)")
 
 # Rotate right finger by 180 degrees to make it symmetrical
 new_orient = rotations_utils.euler_angles_to_quat(np.array([180, 0.0, 180]), degrees=True, extrinsic=False)
 right_joint.GetLocalRot1Attr().Set(Gf.Quatf(*new_orient.astype(float)))
 
 # Hide cameras if present
-if has_camera:
-    left_cam_path = "/panda/panda_leftfinger/elastomer_tip/cam"
-    right_cam_path = "/panda/panda_rightfinger/elastomer_tip/cam"
-    
-    left_cam_prim = prims_utils.get_prim_at_path(left_cam_path)
-    right_cam_prim = prims_utils.get_prim_at_path(right_cam_path)
-    
-    if left_cam_prim and left_cam_prim.IsValid():
-        left_cam_prim.GetAttribute("visibility").Set("invisible")
-    if right_cam_prim and right_cam_prim.IsValid():
-        right_cam_prim.GetAttribute("visibility").Set("invisible")
+left_cam_path = "/panda/panda_leftfinger/elastomer_tip/cam"
+right_cam_path = "/panda/panda_rightfinger/elastomer_tip/cam"
+
+left_cam_prim = prims_utils.get_prim_at_path(left_cam_path)
+right_cam_prim = prims_utils.get_prim_at_path(right_cam_path)
+
+if left_cam_prim and left_cam_prim.IsValid():
+    left_cam_prim.GetAttribute("visibility").Set("invisible")
+if right_cam_prim and right_cam_prim.IsValid():
+    right_cam_prim.GetAttribute("visibility").Set("invisible")
 
 # Export the assembled stage as a flattened USD
 temp_layer = Sdf.Layer.CreateNew(output_usd_path)
