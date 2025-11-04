@@ -20,7 +20,7 @@ if FINGER_TYPE == "r15":
     output_usd_path = "assets/Factory_new/franka_gelsight_r15_assembled.usd"
     fingertip_z_offset = 0.135
 elif FINGER_TYPE == "mini":
-    finger_use_url = os.path.abspath("assets/TacSL/gsmini_finger.usda")
+    finger_use_url = os.path.abspath("assets/TacSL/gsmini_finger.usd")
     output_usd_path = "assets/Factory_new/franka_gelsight_mini_assembled.usd"
     fingertip_z_offset = 0.13
 else:
@@ -97,8 +97,8 @@ new_orient = rotations_utils.euler_angles_to_quat(np.array([180, 0.0, 180]), deg
 right_joint.GetLocalRot1Attr().Set(Gf.Quatf(*new_orient.astype(float)))
 
 # Hide cameras if present
-left_cam_path = "/panda/panda_leftfinger/elastomer_tip/cam"
-right_cam_path = "/panda/panda_rightfinger/elastomer_tip/cam"
+left_cam_path = "/panda/panda_leftfinger/gelsight_finger/elastomer_tip/cam"
+right_cam_path = "/panda/panda_rightfinger/gelsight_finger/elastomer_tip/cam"
 
 left_cam_prim = prims_utils.get_prim_at_path(left_cam_path)
 right_cam_prim = prims_utils.get_prim_at_path(right_cam_path)
@@ -126,6 +126,20 @@ temp_layer.defaultPrim = "panda"
 
 # Save and flatten the stage
 temp_stage.Flatten()
+
+# Now rename the gelsight_finger prims in the flattened stage
+# After flattening, the prims are no longer from references, so we can rename them
+left_gelsight_spec = temp_layer.GetPrimAtPath("/panda/panda_leftfinger/gelsight_finger")
+right_gelsight_spec = temp_layer.GetPrimAtPath("/panda/panda_rightfinger/gelsight_finger")
+
+if left_gelsight_spec:
+    left_gelsight_spec.name = "panda_leftfinger"
+    print(f"Renamed left gelsight_finger to panda_leftfinger")
+
+if right_gelsight_spec:
+    right_gelsight_spec.name = "panda_rightfinger"
+    print(f"Renamed right gelsight_finger to panda_rightfinger")
+
 temp_layer.Save()
 
 print(f"Flattened USD exported to: {output_usd_path}")

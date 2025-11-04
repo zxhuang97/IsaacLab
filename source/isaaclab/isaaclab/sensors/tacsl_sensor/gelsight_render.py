@@ -50,7 +50,7 @@ def generate_normals_tensor(img_tensor):
     """
     img_grad_tensor = torch.gradient(img_tensor, dim=(1, 2))
     dzdx, dzdy = img_grad_tensor
-
+    # dzdx: [-2.15, 0.26] dzdy: [-0.80, 0.80]
     grad_mag_orig_tensor = torch.sqrt(dzdx**2 + dzdy**2)
     grad_mag_tensor = torch.arctan(grad_mag_orig_tensor)  # seems that arctan is used as a squashing function
     grad_dir_tensor = torch.arctan2(dzdx, dzdy)
@@ -144,8 +144,8 @@ class CalibData:
         self.dataPath = dataPath
         data = np.load(dataPath)
 
-        self.numBins = data["bins"]
-        self.grad_r = data["grad_r"]
+        self.numBins = data["bins"]  # mini: 125
+        self.grad_r = data["grad_r"] # mini: 125 x 125 x 6
         self.grad_g = data["grad_g"]
         self.grad_b = data["grad_b"]
 
@@ -175,26 +175,26 @@ class gelsightRender:
         self.background = cv2.cvtColor(cv2.imread(bg_path), cv2.COLOR_BGR2RGB)
 
         self.calib_data = CalibData(calib_path)
-        h, w = self.conf["h"], self.conf["w"]
-        bins = self.conf["numBins"]
+        h, w = self.conf["h"], self.conf["w"]  # mini: 240 x 320  r15: 320 x 240
+        bins = self.conf["numBins"]          # mini: 120
         [xx, yy] = np.meshgrid(range(w), range(h))
         xf = xx.flatten()
         yf = yy.flatten()
-        self.A = np.array([xf * xf, yf * yf, xf * yf, xf, yf, np.ones(h * w)]).T
+        self.A = np.array([xf * xf, yf * yf, xf * yf, xf, yf, np.ones(h * w)]).T  # r15: 76800 x 6
 
-        binm = bins - 1
+        binm = bins - 1                     # 119
         self.x_binr = 0.5 * np.pi / binm  # x [0,pi/2]
         self.y_binr = 2 * np.pi / binm  # y [-pi, pi]
 
         kernel = get_filtering_kernel(kernel_sz=5)
         self.kernel = torch.tensor(kernel, dtype=torch.float, device=self.device)
 
-        self.calib_data_grad_r_tensor = torch.tensor(self.calib_data.grad_r, device=self.device)
+        self.calib_data_grad_r_tensor = torch.tensor(self.calib_data.grad_r, device=self.device)  # 125 x 125 x 6
         self.calib_data_grad_g_tensor = torch.tensor(self.calib_data.grad_g, device=self.device)
         self.calib_data_grad_b_tensor = torch.tensor(self.calib_data.grad_b, device=self.device)
 
-        self.A_tensor = torch.tensor(self.A.reshape(h, w, 6), device=self.device).unsqueeze(0)
-        self.background_tensor = torch.tensor(self.background, device=self.device)
+        self.A_tensor = torch.tensor(self.A.reshape(h, w, 6), device=self.device).unsqueeze(0)  # r15: 1 x 320 x 240 x 6
+        self.background_tensor = torch.tensor(self.background, device=self.device)  # r15: 320 x 240 x 3
         print("Gelsight initialization done!")
 
     def render_tensorized(self, heightMap):
@@ -207,19 +207,19 @@ class gelsightRender:
         Returns:
         torch.Tensor: Rendered image tensor.
         """
-        height_map = heightMap.clone()
+        height_map = heightMap.clone() # max: 0.001 min: -9e-7
         height_map[torch.abs(height_map) < 1e-6] = 0  # remove minor artifact
         height_map = height_map * -1000.0
-        height_map /= self.conf["pixmm"]
+        height_map /= self.conf["pixmm"]  # [-11.328, 0]
 
         height_map = gaussian_filtering(height_map.unsqueeze(-1), self.kernel).squeeze(-1)
 
         grad_mag_tensor, grad_dir_tensor, _ = generate_normals_tensor(height_map)
 
-        idx_x_tensor = torch.floor(grad_mag_tensor / self.x_binr).long()
-        idx_y_tensor = torch.floor((grad_dir_tensor + np.pi) / self.y_binr).long()
+        idx_x_tensor = torch.floor(grad_mag_tensor / self.x_binr).long()              # r15: N x 320 x 240
+        idx_y_tensor = torch.floor((grad_dir_tensor + np.pi) / self.y_binr).long()    # r15: N x 320 x 240
 
-        params_r_tensor = self.calib_data_grad_r_tensor[idx_x_tensor, idx_y_tensor, :]
+        params_r_tensor = self.calib_data_grad_r_tensor[idx_x_tensor, idx_y_tensor, :] # max 119
         params_g_tensor = self.calib_data_grad_g_tensor[idx_x_tensor, idx_y_tensor, :]
         params_b_tensor = self.calib_data_grad_b_tensor[idx_x_tensor, idx_y_tensor, :]
 

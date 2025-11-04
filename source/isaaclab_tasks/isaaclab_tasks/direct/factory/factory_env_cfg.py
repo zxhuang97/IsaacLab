@@ -242,8 +242,9 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         debug_vis=False,
         # Sensor configuration
         sensor_type="gelsight_r15",
+        # sensor_type="gs_mini",
         enable_camera_tactile=True,
-        enable_force_field=True,
+        enable_force_field=False,
         # Elastomer configuration
         elastomer_rigid_body="elastomer",
         elastomer_tactile_mesh="elastomer/visuals",
@@ -268,8 +269,6 @@ class FactoryEnvCfg(DirectRLEnvCfg):
             update_period=1 / 60,  # 60 Hz
             height=320,
             width=240,
-            # height=80,
-            # width=60,
             data_types=["distance_to_image_plane"],
             spawn=None,  # the camera is already spawned in the scene, properties are set in the gelsight_r15_finger.usd file
         ),
@@ -286,7 +285,6 @@ class FactoryEnvCfg(DirectRLEnvCfg):
             },
         ),
     )
-    # To enable experiments with cfg dicts
     params = None
 
     # My parameters
@@ -294,7 +292,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
     read_tactile_sensor: bool = False
     enable_obs_camera: bool = False
     use_compliant_gripper: bool = True
-    use_gelsight_finger: bool = True
+    finger_type: str = "gelsight_r15"
 
     def update_env_params(self):
         # return
@@ -314,8 +312,14 @@ class FactoryEnvCfg(DirectRLEnvCfg):
             self.enable_obs_camera = env.enable_obs_camera
         if env.get("use_compliant_gripper", None) is not None:
             self.use_compliant_gripper = env.use_compliant_gripper
-        if env.get("use_gelsight_finger", None) is not None:
-            self.use_gelsight_finger = env.use_gelsight_finger
+        if env.get("finger_type", None) is not None:
+            self.finger_type = env.finger_type
+        if self.finger_type == "gs_mini":
+            self.tactile_cam.sensor_type = "gs_mini"
+            self.tactile_cam.camera_cfg.height = 240
+            self.tactile_cam.camera_cfg.width = 320
+        elif self.finger_type == "gelsight_r15":
+            self.tactile_cam.sensor_type = "gelsight_r15"
         if env.get("obs_history", None) is not None and env["obs_history"].get("history_length", None) is not None:
             self.obs_history.history_length = env["obs_history"]["history_length"]
 

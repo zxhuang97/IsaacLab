@@ -106,11 +106,13 @@ if not camera_prim or not camera_prim.IsValid():
     xformable.ClearXformOpOrder()
     
     translate_op = xformable.AddTranslateOp()
-    translate_op.Set(Gf.Vec3d(0, 0, -0.0267))
+    translate_op.Set(Gf.Vec3d(0, -0.0267, 0))
     
     # Use quatd to match R15 format
     orient_op = xformable.AddOrientOp(precision=UsdGeom.XformOp.PrecisionDouble)
-    orient_op.Set(Gf.Quatd(0.70711, 0.70711, 0.0, 0.0))
+    # orient_op.Set(Gf.Quatd(0.70711, 0.70711, 0.0, 0.0))
+    # 90 0 90
+    orient_op.Set(Gf.Quatd(0.5, 0.5, 0.5, -0.5))
     
     scale_op = xformable.AddScaleOp()
     scale_op.Set(Gf.Vec3d(1, 1, 1))

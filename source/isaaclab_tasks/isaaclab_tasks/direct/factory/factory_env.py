@@ -95,7 +95,7 @@ class FactoryEnv(DirectRLEnv):
             )
 
         # Computer body indices.
-        if not self.cfg.use_gelsight_finger:
+        if self.cfg.finger_type == "franka":
             self.left_finger_body_idx = self._robot.body_names.index("panda_leftfinger")
             self.right_finger_body_idx = self._robot.body_names.index("panda_rightfinger")
         else:
@@ -125,7 +125,12 @@ class FactoryEnv(DirectRLEnv):
         )
         # robot_usd_file = "franka_mimic_tactile.usd" if self.cfg.use_gelsight_finger else "franka_mimic.usd"
         # robot_usd_file = "franka_gelsight_r15_assembled.usd" if self.cfg.use_gelsight_finger else "franka_mimic.usd"
-        robot_usd_file = "franka_gelsight_mini_assembled.usd" if self.cfg.use_gelsight_finger else "franka_mimic.usd"
+        if self.cfg.finger_type == "gelsight_r15":
+            robot_usd_file = "franka_gelsight_r15_assembled.usd"
+        elif self.cfg.finger_type == "gs_mini":
+            robot_usd_file = "franka_gelsight_mini_assembled.usd"
+        else:
+            robot_usd_file = "franka_mimic.usd"
         self.cfg.robot.spawn.usd_path = f"{ASSET_DIR}/{robot_usd_file}"
         self._robot = Articulation(self.cfg.robot)
         self._fixed_asset = Articulation(self.cfg_task.fixed_asset)
@@ -168,7 +173,6 @@ class FactoryEnv(DirectRLEnv):
             self._tactile_cam = None
         if self.cfg.use_compliant_gripper:
             VisuoTactileSensor.setup_compliant_materials(self.cfg.tactile_cam)
-
         # Debug: Print environment info
         print(f"[INFO] Scene created with {self.scene.num_envs} environments")
         print(f"[INFO] Environment prim paths: {self.scene.env_prim_paths[0]} ... {self.scene.env_prim_paths[-1]}")

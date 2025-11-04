@@ -66,13 +66,15 @@
         </collision>
     </link>
 
-    <link name="elastomer_tip"/>    <!-- surface tip of the elastomer  -->
+    
     <joint name="elastomer_tip_joint" type="fixed">
-        <origin rpy="3.141592653589793 0 0" xyz="-0.00050001 -0.05975001 -0.01125"/>
+        <!-- <origin rpy="3.141592653589793 0 0" xyz="-0.00050001 -0.05975001 -0.01125"/> -->
+        <origin rpy="3.141592653589793 0 0" xyz="0.00050001 -0.01125 0.05975001"/>
         <parent link="gelsight_finger"/>
         <child link="elastomer_tip"/>
         <axis xyz="0 0 0"/>
     </joint>
+    <link name="elastomer_tip"/>    <!-- surface tip of the elastomer  -->
 
     <!-- <link name="camera_link"/>
     <joint name="tactile_camera_joint" type="fixed">
