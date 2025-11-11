@@ -21,8 +21,8 @@ if FINGER_TYPE == "r15":
     fingertip_z_offset = 0.135
 elif FINGER_TYPE == "mini":
     finger_use_url = os.path.abspath("assets/TacSL/gsmini_finger.usd")
-    output_usd_path = "assets/Factory_new/franka_gelsight_mini_assembled.usd"
-    fingertip_z_offset = 0.13
+    output_usd_path = "assets/Factory_new/franka_gelsight_mini_assembled_z135.usd"
+    fingertip_z_offset = 0.135
 else:
     raise ValueError(f"Unknown finger type: {FINGER_TYPE}")
 
@@ -79,8 +79,9 @@ left_joint.GetBody1Rel().SetTargets([left_finger_prim.GetPath()])
 
 # Set local translation for left joint from URDF (origin xyz="0 -0.02 0.06340285")
 if FINGER_TYPE == "mini":
-    left_joint.GetLocalPos0Attr().Set(Gf.Vec3f(0.0, 0.01, 0.06340285))
-    print(f"Set left joint localPos0 to (0.0, -0.05, 0.06340285)")
+    # left_joint.GetLocalPos0Attr().Set(Gf.Vec3f(0.0, 0.01, 0.06340285))
+    left_joint.GetLocalPos0Attr().Set(Gf.Vec3f(0.0, 0.005, 0.06340285))
+    print(f"Set left joint localPos0 to (0.0, 0.005, 0.06340285)")
 
 # Configure right joint
 right_joint = UsdPhysics.PrismaticJoint(right_joint_prim)

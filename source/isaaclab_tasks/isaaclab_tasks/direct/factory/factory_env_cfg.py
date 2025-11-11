@@ -242,7 +242,6 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         debug_vis=False,
         # Sensor configuration
         sensor_type="gelsight_r15",
-        # sensor_type="gs_mini",
         enable_camera_tactile=True,
         enable_force_field=False,
         # Elastomer configuration

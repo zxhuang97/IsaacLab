@@ -128,7 +128,9 @@ class FactoryEnv(DirectRLEnv):
         if self.cfg.finger_type == "gelsight_r15":
             robot_usd_file = "franka_gelsight_r15_assembled.usd"
         elif self.cfg.finger_type == "gs_mini":
-            robot_usd_file = "franka_gelsight_mini_assembled.usd"
+            # robot_usd_file = "franka_gelsight_mini_assembled.usd"
+            # robot_usd_file = "franka_gelsight_mini_assembled_z13.usd"
+            robot_usd_file = "franka_gelsight_mini_assembled_z135.usd"
         else:
             robot_usd_file = "franka_mimic.usd"
         self.cfg.robot.spawn.usd_path = f"{ASSET_DIR}/{robot_usd_file}"
