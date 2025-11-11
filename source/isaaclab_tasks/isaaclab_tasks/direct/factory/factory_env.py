@@ -123,17 +123,16 @@ class FactoryEnv(DirectRLEnv):
         cfg.func(
             "/World/envs/env_.*/Table", cfg, translation=(0.55, 0.0, 0.0), orientation=(0.70711, 0.0, 0.0, 0.70711)
         )
-        # robot_usd_file = "franka_mimic_tactile.usd" if self.cfg.use_gelsight_finger else "franka_mimic.usd"
-        # robot_usd_file = "franka_gelsight_r15_assembled.usd" if self.cfg.use_gelsight_finger else "franka_mimic.usd"
-        if self.cfg.finger_type == "gelsight_r15":
-            robot_usd_file = "franka_gelsight_r15_assembled.usd"
-        elif self.cfg.finger_type == "gs_mini":
-            # robot_usd_file = "franka_gelsight_mini_assembled.usd"
-            # robot_usd_file = "franka_gelsight_mini_assembled_z13.usd"
-            robot_usd_file = "franka_gelsight_mini_assembled_z135.usd"
-        else:
-            robot_usd_file = "franka_mimic.usd"
-        self.cfg.robot.spawn.usd_path = f"{ASSET_DIR}/{robot_usd_file}"
+        # if self.cfg.finger_type == "gelsight_r15":
+        #     robot_usd_file = "franka_gelsight_r15_assembled.usd"
+        # elif self.cfg.finger_type == "gs_mini":
+        #     # robot_usd_file = "franka_gelsight_mini_assembled.usd"
+        #     # robot_usd_file = "franka_gelsight_mini_assembled_z13.usd"
+        #     # robot_usd_file = "franka_gelsight_mini_assembled_z135.usd"
+        #     robot_usd_file = "franka_gelsight_mini_assembled_z13_tight.usd"
+        # else:
+        #     robot_usd_file = "franka_mimic.usd"
+        self.cfg.robot.spawn.usd_path = f"{ASSET_DIR}/{self.cfg.robot_usd_path}"
         self._robot = Articulation(self.cfg.robot)
         self._fixed_asset = Articulation(self.cfg_task.fixed_asset)
         self._held_asset = Articulation(self.cfg_task.held_asset)

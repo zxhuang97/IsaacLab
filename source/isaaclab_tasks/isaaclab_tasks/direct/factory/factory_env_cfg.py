@@ -292,6 +292,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
     enable_obs_camera: bool = False
     use_compliant_gripper: bool = True
     finger_type: str = "gelsight_r15"
+    robot_usd_path: str = "franka_mimic.usd"
 
     def update_env_params(self):
         # return
@@ -339,6 +340,8 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         use_full_rotation = ctrl.get("use_full_rotation", None)
         if use_full_rotation is not None:
             self.ctrl.use_full_rotation = use_full_rotation
+        if env.get("robot_usd_path", None) is not None:
+            self.robot_usd_path = env.robot_usd_path
 
     def __post_init__(self):
         """Post initialization."""
