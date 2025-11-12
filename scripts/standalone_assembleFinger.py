@@ -21,8 +21,9 @@ if FINGER_TYPE == "r15":
     fingertip_z_offset = 0.135
 elif FINGER_TYPE == "mini":
     finger_use_url = os.path.abspath("assets/TacSL/gsmini_finger.usd")
-    output_usd_path = "assets/Factory_new/franka_gelsight_mini_assembled_z125_tight.usd"
-    fingertip_z_offset = 0.125
+    output_usd_path = "assets/Factory_new/franka_gelsight_mini_assembled_z13_tight.usd"
+    fingertip_z_offset = 0.13
+    finger_x_offset = 0.01
 else:
     raise ValueError(f"Unknown finger type: {FINGER_TYPE}")
 
@@ -85,11 +86,11 @@ right_joint.GetBody1Rel().SetTargets([right_finger_prim.GetPath()])
 
 # Set local translation for right joint from URDF (origin xyz="0 0.02 0.06340285")
 if FINGER_TYPE == "mini":
-    # left_joint.GetLocalPos0Attr().Set(Gf.Vec3f(0.0, 0.01, 0.06340285))
-    left_joint.GetLocalPos0Attr().Set(Gf.Vec3f(0.0, 0.005, 0.06340285))
-    print(f"Set left joint localPos0 to (0.0, 0.005, 0.06340285)")
-    right_joint.GetLocalPos0Attr().Set(Gf.Vec3f(0.0, -0.005, 0.06340285))
-    print(f"Set right joint localPos0 to (0.0, 0.005, 0.06340285)")
+    left_joint.GetLocalPos0Attr().Set(Gf.Vec3f(0.0, finger_x_offset, 0.06340285))
+    # left_joint.GetLocalPos0Attr().Set(Gf.Vec3f(0.0, 0.005, 0.06340285))
+    print(f"Set left joint localPos0 to (0.0, {finger_x_offset}, 0.06340285)")
+    right_joint.GetLocalPos0Attr().Set(Gf.Vec3f(0.0, -finger_x_offset, 0.06340285))
+    print(f"Set right joint localPos0 to (0.0, -{finger_x_offset}, 0.06340285)")
 
 # Rotate right finger by 180 degrees to make it symmetrical
 new_orient = rotations_utils.euler_angles_to_quat(np.array([180, 0.0, 180]), degrees=True, extrinsic=False)
