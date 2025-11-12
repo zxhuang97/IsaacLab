@@ -1,0 +1,601 @@
+<?xml version="1.0" ?>
+<robot name="panda" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- ========================= -->
+  <!-- === CORE ARM SECTION === -->
+  <!-- ========================= -->
+
+  <!-- Link 0 -->
+  <link name="panda_link0">
+    <visual>
+      <geometry>
+        <mesh filename="../../urdf/franka_description/meshes/visual/link0.obj"/>
+      </geometry>
+    </visual>
+    <collision>
+      <geometry>
+        <mesh filename="../../urdf/franka_description/meshes/collision/link0.stl"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin rpy="0 0 0" xyz="-0.041018 -0.00014 0.049974"/>
+      <mass value="0.629769"/>
+      <inertia
+        ixx="0.00315" ixy="8.2904e-07" ixz="0.00015"
+        iyy="0.00388" iyz="8.2299e-06" izz="0.004285"/>
+    </inertial>
+  </link>
+  <joint name="panda_joint1" type="revolute">
+    <origin rpy="0 0 0" xyz="0 0 0.333"/>
+    <parent link="panda_link0"/>
+    <child  link="panda_link1"/>
+    <axis   xyz="0 0 1"/>
+    <limit  effort="87" lower="-2.8973" upper="2.8973" velocity="2.1750"/>
+    <dynamics damping="0.003" friction="0.0"/>
+  </joint>
+
+  <!-- Link 1 -->
+  <link name="panda_link1">
+    <visual>
+      <geometry>
+        <mesh filename="../../urdf/franka_description/meshes/visual/link1.obj"/>
+      </geometry>
+    </visual>
+    <collision>
+      <geometry>
+        <mesh filename="../../urdf/franka_description/meshes/collision/link1.stl"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin rpy="0 0 0" xyz="0.003875 0.002081 -0.04762"/>
+      <mass value="4.970684"/>
+      <inertia
+        ixx="0.70337" ixy="-0.000139" ixz="0.006772"
+        iyy="0.70661" iyz="0.019169" izz="0.009117"/>
+    </inertial>
+  </link>
+  <joint name="panda_joint2" type="revolute">
+    <origin rpy="-1.5707963268 0 0" xyz="0 0 0"/>
+    <parent link="panda_link1"/>
+    <child  link="panda_link2"/>
+    <axis   xyz="0 0 1"/>
+    <limit  effort="87" lower="-1.7628" upper="1.7628" velocity="2.1750"/>
+    <dynamics damping="0.003" friction="0.0"/>
+  </joint>
+
+  <!-- Link 2 -->
+  <link name="panda_link2">
+    <visual>
+      <geometry>
+        <mesh filename="../../urdf/franka_description/meshes/visual/link2.obj"/>
+      </geometry>
+    </visual>
+    <collision>
+      <geometry>
+        <mesh filename="../../urdf/franka_description/meshes/collision/link2.stl"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin rpy="0 0 0" xyz="-0.003141 -0.02872 0.003495"/>
+      <mass value="0.646926"/>
+      <inertia
+        ixx="0.007962" ixy="-0.003925" ixz="0.010254"
+        iyy="0.02811"  iyz="0.000704" izz="0.025995"/>
+    </inertial>
+  </link>
+  <joint name="panda_joint3" type="revolute">
+    <origin rpy="1.5707963268 0 0" xyz="0 -0.316 0"/>
+    <parent link="panda_link2"/>
+    <child  link="panda_link3"/>
+    <axis   xyz="0 0 1"/>
+    <limit  effort="87"  lower="-2.8973" upper="2.8973" velocity="2.1750"/>
+    <dynamics damping="0.003" friction="0.0"/>
+  </joint>
+
+  <!-- Link 3 -->
+  <link name="panda_link3">
+    <visual>
+      <geometry>
+        <mesh filename="../../urdf/franka_description/meshes/visual/link3.obj"/>
+      </geometry>
+    </visual>
+    <collision>
+      <geometry>
+        <mesh filename="../../urdf/franka_description/meshes/collision/link3.stl"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin rpy="0 0 0" xyz="0.027518 0.039252 -0.066502"/>
+      <mass value="3.228604"/>
+      <inertia
+        ixx="0.037242" ixy="-0.004761" ixz="-0.011396"
+        iyy="0.036155" iyz="-0.012805" izz="0.010830"/>
+    </inertial>
+  </link>
+  <joint name="panda_joint4" type="revolute">
+    <origin rpy="1.5707963268 0 0" xyz="0.0825 0 0"/>
+    <parent link="panda_link3"/>
+    <child  link="panda_link4"/>
+    <axis   xyz="0 0 1"/>
+    <limit  effort="87" lower="-3.0718" upper="-0.0698" velocity="2.1750"/>
+    <dynamics damping="0.003" friction="0.0"/>
+  </joint>
+
+  <!-- Link 4 -->
+  <link name="panda_link4">
+    <visual>
+      <geometry>
+        <mesh filename="../../urdf/franka_description/meshes/visual/link4.obj"/>
+      </geometry>
+    </visual>
+    <collision>
+      <geometry>
+        <mesh filename="../../urdf/franka_description/meshes/collision/link4.stl"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin rpy="0 0 0" xyz="-0.05317 0.104419 0.027454"/>
+      <mass value="3.587895"/>
+      <inertia
+        ixx="0.025853" ixy="0.007796" ixz="-0.001332"
+        iyy="0.019552" iyz="0.008641" izz="0.028323"/>
+    </inertial>
+  </link>
+  <joint name="panda_joint5" type="revolute">
+    <origin rpy="-1.5707963268 0 0" xyz="-0.0825 0.384 0"/>
+    <parent link="panda_link4"/>
+    <child  link="panda_link5"/>
+    <axis   xyz="0 0 1"/>
+    <limit  effort="12" lower="-2.8973" upper="2.8973" velocity="2.6100"/>
+    <dynamics damping="0.003" friction="0.0"/>
+  </joint>
+
+  <!-- Link 5 -->
+  <link name="panda_link5">
+    <visual>
+      <geometry>
+        <mesh filename="../../urdf/franka_description/meshes/visual/link5.obj"/>
+      </geometry>
+    </visual>
+    <collision>
+      <geometry>
+        <mesh filename="../../urdf/franka_description/meshes/collision/link5.stl"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin rpy="0 0 0" xyz="-0.011953 0.041065 -0.038437"/>
+      <mass value="1.225946"/>
+      <inertia
+        ixx="0.035549" ixy="-0.002117" ixz="-0.004037"
+        iyy="0.029474" iyz="0.000229" izz="0.008627"/>
+    </inertial>
+  </link>
+  <joint name="panda_joint6" type="revolute">
+    <origin rpy="1.5707963268 0 0" xyz="0 0 0"/>
+    <parent link="panda_link5"/>
+    <child  link="panda_link6"/>
+    <axis   xyz="0 0 1"/>
+    <limit  effort="12" lower="-0.0175" upper="3.7525" velocity="2.6100"/>
+    <dynamics damping="0.003" friction="0.0"/>
+  </joint>
+
+  <!-- Link 6 -->
+  <link name="panda_link6">
+    <visual>
+      <geometry>
+        <mesh filename="../../urdf/franka_description/meshes/visual/link6.obj"/>
+      </geometry>
+    </visual>
+    <collision>
+      <geometry>
+        <mesh filename="../../urdf/franka_description/meshes/collision/link6.stl"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin rpy="0 0 0" xyz="0.060149 -0.014117 -0.010517"/>
+      <mass value="1.666555"/>
+      <inertia
+        ixx="0.001964" ixy="0.000109" ixz="-0.001158"
+        iyy="0.004354" iyz="0.000341" izz="0.005433"/>
+    </inertial>
+  </link>
+  <joint name="panda_joint7" type="revolute">
+    <origin rpy="1.5707963268 0 0" xyz="0.088 0 0"/>
+    <parent link="panda_link6"/>
+    <child  link="panda_link7"/>
+    <axis   xyz="0 0 1"/>
+    <limit  effort="12" lower="-2.8973" upper="2.8973" velocity="2.6100"/>
+    <dynamics damping="0.003" friction="0.0"/>
+  </joint>
+
+  <!-- Link 7 -->
+  <link name="panda_link7">
+    <visual>
+      <geometry>
+        <mesh filename="../../urdf/franka_description/meshes/visual/link7.obj"/>
+      </geometry>
+    </visual>
+    <collision>
+      <geometry>
+        <mesh filename="../../urdf/franka_description/meshes/collision/link7.stl"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin rpy="0 0 0" xyz="0.010517 -0.004252 0.061597"/>
+      <mass value="0.735522"/>
+      <inertia
+        ixx="0.012516" ixy="-0.000428" ixz="-0.001196"
+        iyy="0.010027" iyz="-0.000741" izz="0.004815"/>
+    </inertial>
+  </link>
+
+  <!-- Panda hand fixed joint -->
+  <joint name="panda_hand_joint" type="fixed">
+    <parent link="panda_link7"/>
+    <child  link="panda_hand"/>
+    <origin rpy="0 0 -0.7853981634" xyz="0 0 0.107"/>
+  </joint>
+  <link name="panda_hand">
+    <visual>
+      <geometry>
+        <mesh filename="../../urdf/franka_description/meshes/visual/hand.obj"/>
+      </geometry>
+    </visual>
+    <collision>
+      <geometry>
+        <mesh filename="../../urdf/franka_description/meshes/collision/hand.stl"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin rpy="0 0 0" xyz="-0.01 0 0.03"/>
+      <mass value="0.73"/>
+      <inertia
+        ixx="0.001" ixy="0" ixz="0"
+        iyy="0.0025" iyz="0" izz="0.0017"/>
+    </inertial>
+  </link>
+
+  <!-- =================================== -->
+  <!-- === LEFT FINGER (panda_leftfinger) -->
+  <!-- =================================== -->
+
+  <joint name="panda_finger_joint1" type="prismatic">
+        <parent link="panda_hand"/>
+        <child link="mount_left"/>
+        <origin rpy="-1.5707963268 0 0" xyz="0 -0.02 0.06340285"/>
+        <axis xyz="0 0 1"/>
+        <limit effort="100" lower="0" upper="0.04" velocity="0.2"/>
+        <dynamics damping="0.0" friction="5.0"/>
+  </joint>
+
+     <link name="mount_left">         <!-- surface tip of the elastomer  -->
+        <inertial>
+            <origin rpy="0 0 0" xyz="0 0 0"/>
+            <mass value="1.0e-6"/>
+            <inertia ixx="1.0e-09" ixy="0" ixz="0" iyy="1.0e-09" iyz="0" izz="1.0e-09"/>
+        </inertial>
+        <!-- <visual>
+            <origin rpy="-1.5707963268 0 0" xyz="0.0 0.0 0.0"/>
+            <geometry>
+                <mesh filename="../mesh/gs_mini_meshes/panda_adapter_gsmini.obj"/>
+            </geometry>
+        </visual>
+        <collision> 
+            <origin rpy="0 0 0" xyz="0.0 0.0 0.0"/>
+            <geometry>
+                <mesh filename="../mesh/gs_mini_meshes/panda_adapter_gsmini.obj"/>
+            </geometry>
+        </collision> -->
+        <visual>
+            <origin rpy="1.5707963268 0 0" xyz="0.0 0.0 0.0"/>
+            <geometry>
+                <mesh filename="../mesh/gs_mini_meshes/panda_attach_gs_mini.obj"/>
+            </geometry>
+        </visual>
+        <collision>
+            <origin rpy="3.1415926536 0 0" xyz="0.0 0.0 0.0"/>
+            <geometry>
+                <mesh filename="../mesh/gs_mini_meshes/panda_attach_gs_mini.obj"/>
+            </geometry>
+        </collision>
+    </link>
+
+    <joint name="mount_joint_left" type="fixed">
+        <origin rpy="0 0 0" xyz="0.0 -0.02 0.0175"/>
+        <parent link="mount_left"/>
+        <child link="panda_leftfinger"/>
+        <axis xyz="0 0 0"/>
+    </joint>
+
+  <link name="panda_leftfinger">
+          <visual>
+            <origin rpy="-1.5707963268 0 0" xyz="0 0 0"/>
+            <geometry>
+                <mesh filename="../mesh/gs_mini_meshes/panda_adapter_gsmini.obj"/>
+            </geometry>
+        </visual>
+        <collision> 
+            <origin rpy="0 0 0" xyz="0.0 0.0 0.0"/>
+            <geometry>
+                <mesh filename="../mesh/gs_mini_meshes/panda_adapter_gsmini.obj"/>
+            </geometry>
+        </collision>
+
+        <!-- <visual>
+            <origin rpy="-1.5707963268 0 0" xyz="0.0 0.0 0.0"/>
+            <geometry>
+                <mesh filename="../mesh/gs_mini_meshes/gsmini_shell_hollow_transformed.obj"/>
+            </geometry>
+        </visual>
+        <collision>
+            <geometry>
+                <mesh filename="../mesh/gs_mini_meshes/gsmini_shell_hollow_transformed.obj"/>
+            </geometry>
+        </collision> -->
+        <!-- <inertial>
+            <origin rpy="0 0 0" xyz="0 0.0114 0.0231"/>
+            <mass value="0.0297"/>
+            <inertia ixx="7.552e-06" ixy="0" ixz="0" iyy="7.159e-06" iyz="1.043e-6" izz="2.352e-06"/>
+        </inertial> -->
+    </link>
+  <joint name="panda_fingerbox_left_joint" type="fixed">
+      <origin rpy="0 0 0" xyz="0.0 0.0 0.0"/>
+        <parent link="panda_leftfinger"/>
+        <child link="panda_fingerbox_left"/>
+        <axis xyz="0 0 0"/>
+  </joint>
+
+  <link name="panda_fingerbox_left">
+        <visual>
+            <origin rpy="-1.5707963268 0 0" xyz="0.0 0.0 0.0"/>
+            <geometry>
+                <mesh filename="../mesh/gs_mini_meshes/gsmini_shell_hollow_transformed.obj"/>
+            </geometry>
+        </visual>
+        <collision>
+            <origin rpy="0 0 0" xyz="0.0 -0.06 0.005"/>
+            <geometry>    
+                <!-- <mesh filename="../mesh/gs_mini_meshes/gsmini_shell_hollow_transformed.obj"/> -->
+                <box size="0.028 0.032 0.028"/>
+            </geometry>
+        </collision>
+        <inertial>
+            <origin rpy="0 0 0" xyz="0 0.0114 0.0231"/>
+            <mass value="0.0297"/>
+            <inertia ixx="7.552e-06" ixy="0" ixz="0" iyy="7.159e-06" iyz="1.043e-6" izz="2.352e-06"/>
+        </inertial>
+  </link>
+
+
+  <joint name="elastomer_joint_left" type="fixed">
+        <origin rpy="0 0 0" xyz="0.0 0.0 0.0"/>
+        <parent link="panda_fingerbox_left"/>
+        <child link="elastomer_left"/>
+        <axis xyz="0 0 0"/>
+    </joint>
+    <link name="elastomer_left">         <!-- surface tip of the elastomer  -->
+        <visual>
+            <origin rpy="-1.5707963268 0 0" xyz="0.0 0.0 0.0"/> 
+            <geometry>
+                <mesh filename="../mesh/gs_mini_meshes/gsmini_elastomer_transformed_both_sides.obj"/>
+            </geometry>
+        </visual>
+        <collision>
+            <origin rpy="0 0 0" xyz="0.0 0.0 0.005"/> 
+            <geometry>
+                <mesh filename="../mesh/gs_mini_meshes/gsmini_elastomer_transformed_enclosed.obj"/>
+            </geometry>
+        </collision>
+    </link>
+
+    <joint name="elastomer_tip_joint_left" type="fixed">
+        <!-- <origin rpy="1.5707963267948966 0 0" xyz="0.0 -0.00255914 0.06776"/>  -->
+        <origin rpy="3.141592653589793 0 0" xyz="-0.00050001 -0.05975001 -0.01125"/>
+        <parent link="panda_fingerbox_left"/>
+        <child link="elastomer_tip_left"/>
+        <axis xyz="0 0 0"/>
+    </joint>
+    <link name="elastomer_tip_left">
+        <inertial>
+            <origin rpy="0 0 0" xyz="0 0 0"/>
+            <mass value="1.0e-6"/>
+            <inertia ixx="1.0e-09" ixy="0" ixz="0" iyy="1.0e-09" iyz="0" izz="1.0e-09"/>
+        </inertial>
+    </link>
+
+     <!--   Finger tip links  -->
+    <joint name="panda_fingertip_joint1" type="fixed">
+        <parent link="panda_fingerbox_left"/>
+        <child link="panda_leftfingertip"/>
+        <!--0.08388700 (franka_finger_length)-->
+        <origin rpy="0 0 0" xyz="0 -0.07388700 0"/>
+    </joint>
+    <link name="panda_leftfingertip">
+        <inertial>
+            <origin rpy="0 0 0" xyz="0 0 0"/>
+            <mass value="1.0e-6"/>
+            <inertia ixx="1.0e-09" ixy="0" ixz="0" iyy="1.0e-09" iyz="0" izz="1.0e-09"/>
+        </inertial>
+    </link>
+
+  <!-- ========================== -->
+  <!-- === RIGHT FINGER (panda_rightfinger) -->
+  <!-- ========================== -->
+    <joint name="panda_finger_joint2" type="prismatic">
+        <parent link="panda_hand"/>
+        <child link="mount_right"/>
+        <origin rpy="-1.5707 0 3.1415926536" xyz="0 0.02 0.06340285"/>
+        <axis xyz="0 0 1"/>
+        <limit effort="100" lower="0.0" upper="0.04" velocity="0.2"/>
+        <dynamics damping="0.0" friction="5.0"/>
+        <mimic joint="panda_finger_joint1" multiplier="1" offset="0" />
+    </joint>
+
+    <link name="mount_right">         <!-- surface tip of the elastomer  -->
+        <inertial>
+            <origin rpy="0 0 0" xyz="0 0 0"/>
+            <mass value="1.0e-6"/>
+            <inertia ixx="1.0e-09" ixy="0" ixz="0" iyy="1.0e-09" iyz="0" izz="1.0e-09"/>
+        </inertial>
+        <!-- <visual>
+            <origin rpy="-1.5707963268 0 0" xyz="0.0 0.0 0.0"/>
+            <geometry>
+                <mesh filename="../mesh/gs_mini_meshes/panda_adapter_gsmini.obj"/>
+            </geometry>
+        </visual>
+        <collision>
+            <origin rpy="0 0 0" xyz="0.0 0.0 0.0"/>
+            <geometry>
+                <mesh filename="../mesh/gs_mini_meshes/panda_adapter_gsmini.obj"/>
+            </geometry>
+        </collision> -->
+        <visual>
+            <origin rpy="1.5707963268 0 0" xyz="0.0 0.0 0.0"/>
+            <geometry>
+                <mesh filename="../mesh/gs_mini_meshes/panda_attach_gs_mini.obj"/>
+            </geometry>
+        </visual>
+        <collision>
+            <origin rpy="3.1415926536 0 0" xyz="0.0 0.0 0.0"/>
+            <geometry>
+                <mesh filename="../mesh/gs_mini_meshes/panda_attach_gs_mini.obj"/>
+            </geometry>
+        </collision>
+    </link>
+
+  <joint name="mount_joint_right" type="fixed">
+        <origin rpy="0 0 0" xyz="0.0 -0.02 0.0175"/>
+        <parent link="mount_right"/>
+        <child link="panda_rightfinger"/>
+        <axis xyz="0 0 0"/>
+    </joint>
+
+<link name="panda_rightfinger">
+        <visual>
+            <origin rpy="-1.5707963268 0 0" xyz="0.0 0.0 0.0"/>
+            <geometry>
+                <mesh filename="../mesh/gs_mini_meshes/panda_adapter_gsmini.obj"/>
+            </geometry>
+        </visual>
+        <collision>
+            <origin rpy="0 0 0" xyz="0.0 0.0 0.0"/>
+            <geometry>
+                <mesh filename="../mesh/gs_mini_meshes/panda_adapter_gsmini.obj"/>
+            </geometry>
+        </collision>
+
+        <!-- <visual>
+            <origin rpy="-1.5707963268 0 0" xyz="0.0 0.0 0.0"/>
+            <geometry>
+                <mesh filename="../mesh/gs_mini_meshes/gsmini_shell_hollow_transformed.obj"/>
+            </geometry>
+        </visual>
+        <collision>
+            <geometry>
+                <mesh filename="../mesh/gs_mini_meshes/gsmini_shell_hollow_transformed.obj"/>
+            </geometry>
+        </collision> -->
+    </link>
+
+  <joint name="panda_fingerbox_right_joint" type="fixed">
+      <origin rpy="0 0 0" xyz="0.0 0.0 0.0"/>
+        <parent link="panda_rightfinger"/>
+        <child link="panda_fingerbox_right"/>
+        <axis xyz="0 0 0"/>
+  </joint>
+
+  <link name="panda_fingerbox_right">
+        <visual>
+            <origin rpy="-1.5707963268 0 0" xyz="0.0 0.0 0.0"/>
+            <geometry>
+                <mesh filename="../mesh/gs_mini_meshes/gsmini_shell_hollow_transformed.obj"/>
+            </geometry>
+        </visual>
+        <collision>
+            <origin rpy="0 0 0" xyz="0.0 -0.06 0.005"/>
+            <geometry>    
+                <!-- <mesh filename="../mesh/gs_mini_meshes/gsmini_shell_hollow_transformed.obj"/> -->
+                <box size="0.028 0.032 0.028"/>
+            </geometry>
+        </collision>
+        <inertial>
+            <origin rpy="0 0 0" xyz="0 0.0114 0.0231"/>
+            <mass value="0.0297"/>
+            <inertia ixx="7.552e-06" ixy="0" ixz="0" iyy="7.159e-06" iyz="1.043e-6" izz="2.352e-06"/>
+        </inertial>
+  </link>
+
+    <joint name="elastomer_joint_right" type="fixed">
+        <origin rpy="0 0 0" xyz="0.0 0.0 0.0"/>
+        <parent link="panda_rightfinger"/>
+        <child link="elastomer_right"/>
+        <axis xyz="0 0 0"/>
+    </joint>
+    <link name="elastomer_right">         <!-- surface tip of the elastomer  -->
+        <visual>
+            <origin rpy="-1.5707963268 0 0" xyz="0.0 0.0 0.0"/> 
+            <geometry>
+                <mesh filename="../mesh/gs_mini_meshes/gsmini_elastomer_transformed_both_sides.obj"/>
+            </geometry>
+        </visual>
+        <collision>
+            <origin rpy="0 0 0" xyz="0.0 0.0 0.005"/> 
+            <geometry>
+                <mesh filename="../mesh/gs_mini_meshes/gsmini_elastomer_transformed_enclosed.obj"/>
+            </geometry>
+        </collision>
+    </link>
+    <joint name="elastomer_tip_joint_right" type="fixed">
+        <!-- <origin rpy="1.5707963267948966 0 0" xyz="0.0 -0.00255914 0.06776"/> -->
+        <origin rpy="3.141592653589793 0 0" xyz="-0.00050001 -0.05975001 -0.01125"/>
+        <parent link="panda_fingerbox_right"/>
+        <child link="elastomer_tip_right"/>
+        <axis xyz="0 0 0"/>
+    </joint>
+    <link name="elastomer_tip_right">
+        <inertial>
+            <origin rpy="0 0 0" xyz="0 0 0"/>
+            <mass value="1.0e-6"/>
+            <inertia ixx="1.0e-09" ixy="0" ixz="0" iyy="1.0e-09" iyz="0" izz="1.0e-09"/>
+        </inertial>
+    </link>
+
+    <joint name="panda_fingertip_joint2" type="fixed">
+        <parent link="panda_fingerbox_right"/>
+        <child link="panda_rightfingertip"/>
+        <!--0.08388700 (franka_finger_length)-->
+        <origin rpy="0 0 0" xyz="0 -0.07388700 0"/>
+    </joint>
+    <link name="panda_rightfingertip">
+        <inertial>
+            <origin rpy="0 0 0" xyz="0 0 0"/>
+            <mass value="1.0e-6"/>
+            <inertia ixx="1.0e-09" ixy="0" ixz="0" iyy="1.0e-09" iyz="0" izz="1.0e-09"/>
+        </inertial>
+    </link>
+
+
+
+  <!-- ========================================== -->
+  <!-- === END OF PANDA + LEFT/RIGHT FINGER URDF === -->
+  <!-- ========================================== -->
+
+     <!--Used for calculating pose and Jacobian.
+    Joint connects hand to dummy link located at midpoint between bottoms of fingertips (when centered).-->
+    <joint name="panda_fingertip_centered_joint" type="fixed">
+        <parent link="panda_hand"/>
+        <child link="panda_fingertip_centered"/>
+        <!--0.08040285 (franka_hand_to_finger_dist) + 0.08388700 (franka_finger_length) = 0.16428985-->
+        <origin rpy="0 0 0" xyz="0 0 0.15428985"/>
+    </joint>
+    <link name="panda_fingertip_centered">
+        <inertial>
+            <origin rpy="0 0 0" xyz="0 0 0"/>
+            <mass value="1.0e-6"/>
+            <inertia ixx="1.0e-09" ixy="0" ixz="0" iyy="1.0e-09" iyz="0" izz="1.0e-09"/>
+        </inertial>
+    </link>
+
+
+
+</robot>
