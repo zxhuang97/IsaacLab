@@ -324,6 +324,8 @@ class FactoryEnvCfg(DirectRLEnvCfg):
             self.obs_history.history_length = env["obs_history"]["history_length"]
 
         task = env.get("task", OmegaConf.create({}))
+        if task.get("held_asset_pos_noise", None) is not None:
+            self.task.held_asset_pos_noise = OmegaConf.to_container(task.held_asset_pos_noise, resolve=True)
         if task.get("held_asset_rot_noise", None) is not None:
             self.task.held_asset_rot_noise = OmegaConf.to_container(task.held_asset_rot_noise, resolve=True)
         if task.get("hand_init_pos", None) is not None:
