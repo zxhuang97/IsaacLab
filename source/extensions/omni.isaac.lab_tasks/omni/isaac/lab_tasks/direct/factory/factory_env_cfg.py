@@ -55,13 +55,13 @@ STATE_DIM_CFG = {
 
 @configclass
 class ObsRandCfg:
-    fixed_asset_pos = [0.001, 0.001, 0.001]
-    # fixed_asset_pos = [0.0, 0.0, 0.0]
+    # fixed_asset_pos = [0.001, 0.001, 0.001]
+    fixed_asset_pos = [0.0, 0.0, 0.0]
 
 
 @configclass
 class CtrlCfg:
-    ema_factor = 1
+    ema_factor = 0.2
 
     pos_action_bounds = [0.05, 0.05, 0.05]
     rot_action_bounds = [1.0, 1.0, 1.0]

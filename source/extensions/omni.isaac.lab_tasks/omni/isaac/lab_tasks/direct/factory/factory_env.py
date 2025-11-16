@@ -488,6 +488,18 @@ class FactoryEnv(DirectRLEnv):
             "held_pos": self.held_pos,
         }
 
+        collect_dict = {
+            "held_pos_rel_fixed": self.held_pos - self.fixed_pos_obs_frame,
+            "held_quat": self.held_quat,
+            # "fingertip_pos": self.fingertip_midpoint_pos,
+            "fingertip_pos_rel_fixed": self.fingertip_midpoint_pos - noisy_fixed_pos,
+            "fingertip_quat": self.fingertip_midpoint_quat,
+            "ee_linvel": self.ee_linvel_fd,
+            "ee_angvel": self.ee_angvel_fd,
+            "prev_actions": prev_actions,
+        }
+        self.collect_obs = torch.cat([t for _, t in collect_dict.items()], dim=-1)
+
         state_dict = {
             "fingertip_pos": self.fingertip_midpoint_pos,
             "fingertip_pos_rel_fixed": self.fingertip_midpoint_pos - self.fixed_pos_obs_frame,
