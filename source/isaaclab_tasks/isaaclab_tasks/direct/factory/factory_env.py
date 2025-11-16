@@ -341,8 +341,9 @@ class FactoryEnv(DirectRLEnv):
         ctrl_target_fingertip_midpoint_quat = torch_utils.quat_mul(rot_actions_quat, self.fingertip_midpoint_quat)
 
         target_euler_xyz = torch.stack(torch_utils.get_euler_xyz(ctrl_target_fingertip_midpoint_quat), dim=1)
-        target_euler_xyz[:, 0] = 3.14159
-        target_euler_xyz[:, 1] = 0.0
+        if not self.cfg.ctrl.use_full_rotation:
+            target_euler_xyz[:, 0] = 3.14159
+            target_euler_xyz[:, 1] = 0.0
 
         ctrl_target_fingertip_midpoint_quat = torch_utils.quat_from_euler_xyz(
             roll=target_euler_xyz[:, 0], pitch=target_euler_xyz[:, 1], yaw=target_euler_xyz[:, 2]
@@ -378,10 +379,11 @@ class FactoryEnv(DirectRLEnv):
             delta_pos, -self.cfg.ctrl.pos_action_bounds[0], self.cfg.ctrl.pos_action_bounds[1]
         )
         ctrl_target_fingertip_midpoint_pos = fixed_pos_action_frame + pos_error_clipped
-
+        self.delta_pos = delta_pos
         # Convert to quat and set rot target
         angle = torch.norm(rot_actions, p=2, dim=-1)
         axis = rot_actions / angle.unsqueeze(-1)
+        self.delta_yaw = angle
 
         rot_actions_quat = torch_utils.quat_from_angle_axis(angle, axis)
         rot_actions_quat = torch.where(

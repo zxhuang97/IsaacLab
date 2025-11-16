@@ -146,6 +146,11 @@ class ForgeEnvCfg(FactoryEnvCfg):
             self.policy_use_held_state = env.policy_use_held_state
         if self.policy_use_held_state:
             self.obs_order = self.obs_order + ["held_pos", "held_quat"]
+
+        obs_rand = env.get("obs_rand", OmegaConf.create({}))
+        if obs_rand.get("fingertip_pos", None) is not None:
+            self.obs_rand.fingertip_pos = obs_rand.fingertip_pos
+
         if env.get("use_dead_zone", None) is not None:
             self.use_dead_zone = env.use_dead_zone
         ctrl = env.get("ctrl", OmegaConf.create({}))

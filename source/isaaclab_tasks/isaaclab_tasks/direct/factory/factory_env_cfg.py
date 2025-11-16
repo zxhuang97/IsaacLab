@@ -330,6 +330,14 @@ class FactoryEnvCfg(DirectRLEnvCfg):
             self.task.held_asset_rot_noise = OmegaConf.to_container(task.held_asset_rot_noise, resolve=True)
         if task.get("hand_init_pos", None) is not None:
             self.task.hand_init_pos = OmegaConf.to_container(task.hand_init_pos, resolve=True)
+        if task.get("fixed_asset_init_pos_noise", None) is not None:
+            self.task.fixed_asset_init_pos_noise = OmegaConf.to_container(task.fixed_asset_init_pos_noise, resolve=True)
+        if task.get("fixed_asset_init_orn_range_deg", None) is not None:
+            self.task.fixed_asset_init_orn_range_deg = task.fixed_asset_init_orn_range_deg
+        obs_rand = env.get("obs_rand", OmegaConf.create({}))
+        if obs_rand.get("fixed_asset_pos", None) is not None:
+            self.obs_rand.fixed_asset_pos = OmegaConf.to_container(obs_rand.fixed_asset_pos, resolve=True)
+
         ctrl = env.get("ctrl", OmegaConf.create({}))
         if ctrl.get("ema_factor", None) is not None:
             self.ctrl.ema_factor = ctrl.ema_factor
