@@ -7,7 +7,7 @@ import torch
 
 import isaacsim.core.utils.torch as torch_utils
 
-from isaaclab.utils.math import axis_angle_from_quat
+from isaaclab.utils.math import axis_angle_from_quat, quat_apply
 
 from isaaclab_tasks.direct.factory import factory_utils
 from isaaclab_tasks.direct.factory.factory_env import FactoryEnv
@@ -234,6 +234,18 @@ class ForgeEnv(FactoryEnv):
             ctrl_target_gripper_dof_pos=0.0,
         )
 
+    def dir_align_reward(self, a: float = 700, b: float = 0, tol: float = 0):
+        # penalize if nut is not upright relative to the bolt's orientation
+        # compute the cosine distance between the nut normal and the bolt's up vector
+        held_quat = self.held_quat
+        fixed_quat = self.fixed_quat
+        global_up = torch.tensor([[0, 0, 1.0]], device=held_quat.device)
+        global_up_expanded = global_up.expand(fixed_quat.shape[0], 3)
+        fixed_up_vec = quat_apply(fixed_quat, global_up_expanded)
+        held_up_vec = quat_apply(held_quat, global_up_expanded)
+        cos_sim = torch.sum(held_up_vec * fixed_up_vec, dim=1)
+        return factory_utils.squashing_fn(cos_sim, a, b)
+
     def _get_rewards(self):
         """FORGE reward includes a contact penalty and success prediction error."""
         # Use same base rewards as Factory.
@@ -257,16 +269,19 @@ class ForgeEnv(FactoryEnv):
         if true_successes.float().mean() >= self.cfg_task.delay_until_ratio:
             self.success_pred_scale = 1.0
 
+        dir_align_rew = self.dir_align_reward()
         # Add new FORGE reward terms.
         rew_dict = {
             "action_penalty_asset": pos_error + rot_error,
             "contact_penalty": contact_penalty,
             "success_pred_error": success_pred_error,
+            "dir_align_rew": dir_align_rew,
         }
         rew_scales = {
             "action_penalty_asset": -self.cfg_task.action_penalty_asset_scale,
             "contact_penalty": -self.cfg_task.contact_penalty_scale,
             "success_pred_error": -self.success_pred_scale,
+            "dir_align_rew": 1,
         }
         for rew_name, rew in rew_dict.items():
             rew_buf += rew_dict[rew_name] * rew_scales[rew_name]

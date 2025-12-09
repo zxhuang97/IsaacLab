@@ -169,7 +169,10 @@ class ForgeEnvCfg(FactoryEnvCfg):
 
         if ctrl.get("default_task_prop_gains", None) is not None:
             self.ctrl.default_task_prop_gains = OmegaConf.to_container(ctrl.default_task_prop_gains, resolve=True)
-
+        task = env.get("task", OmegaConf.create({}))
+        if task.get("contact_penalty_threshold_range", None) is not None:
+            self.task.contact_penalty_threshold_range = OmegaConf.to_container(task.contact_penalty_threshold_range, resolve=True)
+    
 
     def __post_init__(self):
         super().__post_init__()
