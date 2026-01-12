@@ -165,6 +165,7 @@ class ForgeEnv(FactoryEnv):
         # Step (1): Compute desired pose targets in EE frame.
         # (1.a) Position. Action frame is assumed to be the top of the bolt (noisy estimate).
         fixed_pos_action_frame = self.fixed_pos_obs_frame + self.init_fixed_pos_obs_noise
+        # fixed_pos_action_frame = self.fixed_pos_obs_frame
         ctrl_target_fingertip_preclipped_pos = fixed_pos_action_frame + pos_actions
         # (1.b) Enforce rotation action constraints.
         if not self.cfg.ctrl.use_full_rotation:

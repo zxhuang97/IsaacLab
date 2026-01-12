@@ -5,7 +5,10 @@
 
 from isaaclab.utils import configclass
 
-from isaaclab_tasks.direct.factory.factory_tasks_cfg import FactoryTask, GearMesh, NutThread, PegInsert
+from isaaclab_tasks.direct.factory.factory_tasks_cfg import (
+    FactoryTask, GearMesh, NutThread, PegInsert,
+    PegInsertTac, GearMeshTac, NutThreadTac
+)
 
 
 @configclass
@@ -30,4 +33,26 @@ class ForgeGearMesh(GearMesh, ForgeTask):
 
 @configclass
 class ForgeNutThread(NutThread, ForgeTask):
+    contact_penalty_scale: float = 0.05
+
+
+# =============================================================================
+# Tactile Finger Forge Task Configurations
+# =============================================================================
+
+@configclass
+class ForgePegInsertTac(PegInsertTac, ForgeTask):
+    """Forge peg insertion task configured for tactile fingers."""
+    contact_penalty_scale: float = 0.2
+
+
+@configclass
+class ForgeGearMeshTac(GearMeshTac, ForgeTask):
+    """Forge gear mesh task configured for tactile fingers."""
+    contact_penalty_scale: float = 0.05
+
+
+@configclass
+class ForgeNutThreadTac(NutThreadTac, ForgeTask):
+    """Forge nut threading task configured for tactile fingers."""
     contact_penalty_scale: float = 0.05

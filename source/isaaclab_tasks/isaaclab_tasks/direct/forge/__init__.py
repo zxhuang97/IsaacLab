@@ -7,7 +7,10 @@ import gymnasium as gym
 
 from . import agents
 from .forge_env import ForgeEnv
-from .forge_env_cfg import ForgeTaskGearMeshCfg, ForgeTaskNutThreadCfg, ForgeTaskPegInsertCfg
+from .forge_env_cfg import (
+    ForgeTaskGearMeshCfg, ForgeTaskNutThreadCfg, ForgeTaskPegInsertCfg,
+    ForgeTaskPegInsertTacCfg, ForgeTaskGearMeshTacCfg, ForgeTaskNutThreadTacCfg
+)
 
 ##
 # Register Gym environments.
@@ -39,6 +42,40 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": ForgeTaskNutThreadCfg,
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg_nut_thread.yaml",
+    },
+)
+
+##
+# Tactile Finger Environment Registrations
+##
+
+gym.register(
+    id="Isaac-Forge-PegInsertTac-Direct-v0",
+    entry_point="isaaclab_tasks.direct.forge:ForgeEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": ForgeTaskPegInsertTacCfg,
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+    },
+)
+
+gym.register(
+    id="Isaac-Forge-GearMeshTac-Direct-v0",
+    entry_point="isaaclab_tasks.direct.forge:ForgeEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": ForgeTaskGearMeshTacCfg,
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+    },
+)
+
+gym.register(
+    id="Isaac-Forge-NutThreadTac-Direct-v0",
+    entry_point="isaaclab_tasks.direct.forge:ForgeEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": ForgeTaskNutThreadTacCfg,
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg_nut_thread.yaml",
     },
 )

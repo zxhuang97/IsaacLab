@@ -21,7 +21,10 @@ from isaaclab.sensors import TiledCameraCfg, VisuoTactileSensorCfg
 from isaaclab.markers import VisualizationMarkersCfg
 from isaaclab.utils import configclass
 
-from .factory_tasks_cfg import ASSET_DIR, FactoryTask, GearMesh, NutThread, PegInsert
+from .factory_tasks_cfg import (
+    ASSET_DIR, FactoryTask, GearMesh, NutThread, PegInsert,
+    PegInsertTac, GearMeshTac, NutThreadTac
+)
 from omegaconf import OmegaConf
 
 OBS_DIM_CFG = {
@@ -386,4 +389,32 @@ class FactoryTaskGearMeshCfg(FactoryEnvCfg):
 class FactoryTaskNutThreadCfg(FactoryEnvCfg):
     task_name = "nut_thread"
     task = NutThread()
+    episode_length_s = 30.0
+
+
+# =============================================================================
+# Tactile Finger Environment Configurations
+# =============================================================================
+
+@configclass
+class FactoryTaskPegInsertTacCfg(FactoryEnvCfg):
+    """Peg insertion environment for tactile fingers."""
+    task_name = "peg_insert_tac"
+    task = PegInsertTac()
+    episode_length_s = 10.0
+
+
+@configclass
+class FactoryTaskGearMeshTacCfg(FactoryEnvCfg):
+    """Gear mesh environment for tactile fingers."""
+    task_name = "gear_mesh_tac"
+    task = GearMeshTac()
+    episode_length_s = 20.0
+
+
+@configclass
+class FactoryTaskNutThreadTacCfg(FactoryEnvCfg):
+    """Nut threading environment for tactile fingers."""
+    task_name = "nut_thread_tac"
+    task = NutThreadTac()
     episode_length_s = 30.0

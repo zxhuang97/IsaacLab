@@ -11,7 +11,10 @@ from omegaconf import OmegaConf
 from isaaclab_tasks.direct.factory.factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG, CtrlCfg, FactoryEnvCfg, ObsRandCfg
 
 from .forge_events import randomize_dead_zone
-from .forge_tasks_cfg import ForgeGearMesh, ForgeNutThread, ForgePegInsert, ForgeTask
+from .forge_tasks_cfg import (
+    ForgeGearMesh, ForgeNutThread, ForgePegInsert, ForgeTask,
+    ForgePegInsertTac, ForgeGearMeshTac, ForgeNutThreadTac
+)
 
 OBS_DIM_CFG.update({"force_threshold": 1, "ft_force": 3})
 
@@ -197,4 +200,32 @@ class ForgeTaskGearMeshCfg(ForgeEnvCfg):
 class ForgeTaskNutThreadCfg(ForgeEnvCfg):
     task_name = "nut_thread"
     task = ForgeNutThread()
+    episode_length_s = 30.0
+
+
+# =============================================================================
+# Tactile Finger Forge Environment Configurations
+# =============================================================================
+
+@configclass
+class ForgeTaskPegInsertTacCfg(ForgeEnvCfg):
+    """Forge peg insertion environment for tactile fingers."""
+    task_name = "peg_insert_tac"
+    task = ForgePegInsertTac()
+    episode_length_s = 10.0
+
+
+@configclass
+class ForgeTaskGearMeshTacCfg(ForgeEnvCfg):
+    """Forge gear mesh environment for tactile fingers."""
+    task_name = "gear_mesh_tac"
+    task = ForgeGearMeshTac()
+    episode_length_s = 20.0
+
+
+@configclass
+class ForgeTaskNutThreadTacCfg(ForgeEnvCfg):
+    """Forge nut threading environment for tactile fingers."""
+    task_name = "nut_thread_tac"
+    task = ForgeNutThreadTac()
     episode_length_s = 30.0

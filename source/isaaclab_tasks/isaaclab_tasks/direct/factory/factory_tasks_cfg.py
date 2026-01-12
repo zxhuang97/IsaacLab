@@ -457,3 +457,67 @@ class NutThread(FactoryTask):
         ),
         actuators={},
     )
+
+
+# =============================================================================
+# Tactile Finger Task Configurations
+# =============================================================================
+# These configurations are adjusted for tactile finger setups (gs_mini, gelsight_r15)
+# Key differences:
+# - Higher hand_init_pos to account for different finger geometry
+# - Added held_asset_rot_noise for more realistic grasping uncertainty
+# - Reduced fixed_asset_init_pos_noise and orn_range for controlled experiments
+
+@configclass
+class PegInsertTac(PegInsert):
+    """Peg insertion task configured for tactile fingers."""
+    name = "peg_insert_tac"
+    
+    # Robot - higher init position for tactile finger geometry
+    hand_init_pos: list = [0.0, 0.0, 0.057]
+    # hand_init_pos_noise: list = [0.02, 0.02, 0.01]
+    
+    # Held Asset - add rotation noise for tactile sensing
+    held_asset_pos_noise: list = [0.003, 0.0, 0.003]
+    held_asset_rot_noise: list = [0.0, 0.1, 0.0]  # pitch noise
+    
+    # Fixed Asset - reduced noise for controlled experiments
+    fixed_asset_init_pos_noise: list = [0.01, 0.01, 0.01]
+    fixed_asset_init_orn_range_deg: float = 0.0
+
+
+@configclass
+class GearMeshTac(GearMesh):
+    """Gear mesh task configured for tactile fingers."""
+    name = "gear_mesh_tac"
+    
+    # Robot - higher init position for tactile finger geometry
+    hand_init_pos: list = [0.0, 0.0, 0.045]
+    # hand_init_pos_noise: list = [0.02, 0.02, 0.01]
+    
+    # Held Asset - add rotation noise for tactile sensing
+    held_asset_pos_noise: list = [0.003, 0.0, 0.003]
+    held_asset_rot_noise: list = [0.0, 0.1, 0.0]  # pitch noise
+    held_asset_rot_init: float = -90.0
+    
+    # Fixed Asset - reduced noise for controlled experiments
+    fixed_asset_init_pos_noise: list = [0.01, 0.01, 0.01]
+    fixed_asset_init_orn_range_deg: float = 15.0
+
+
+@configclass
+class NutThreadTac(NutThread):
+    """Nut threading task configured for tactile fingers."""
+    name = "nut_thread_tac"
+    
+    # Robot - higher init position for tactile finger geometry
+    hand_init_pos: list = [0.0, 0.0, 0.025]
+    hand_init_pos_noise: list = [0.02, 0.02, 0.01]
+    
+    # Held Asset - add rotation noise for tactile sensing
+    held_asset_pos_noise: list = [0.0, 0.003, 0.003]
+    held_asset_rot_noise: list = [0.0, 0.1, 0.0]  # pitch noise
+    
+    # Fixed Asset - reduced noise for controlled experiments
+    fixed_asset_init_pos_noise: list = [0.01, 0.01, 0.01]
+    fixed_asset_init_orn_range_deg: float = 30.0

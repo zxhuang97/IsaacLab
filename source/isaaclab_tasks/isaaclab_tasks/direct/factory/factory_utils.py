@@ -49,13 +49,13 @@ def set_body_inertias(robot, num_envs):
 def get_held_base_pos_local(task_name, fixed_asset_cfg, num_envs, device):
     """Get transform between asset default frame and geometric base frame."""
     held_base_x_offset = 0.0
-    if task_name == "peg_insert":
+    if "peg_insert" in task_name:
         held_base_z_offset = 0.0
-    elif task_name == "gear_mesh":
+    elif "gear_mesh" in task_name:
         gear_base_offset = fixed_asset_cfg.medium_gear_base_offset
         held_base_x_offset = gear_base_offset[0]
         held_base_z_offset = gear_base_offset[2]
-    elif task_name == "nut_thread":
+    elif "nut_thread" in task_name:
         held_base_z_offset = fixed_asset_cfg.base_height
     else:
         raise NotImplementedError("Task not implemented")
@@ -81,13 +81,13 @@ def get_held_base_pose(held_pos, held_quat, task_name, fixed_asset_cfg, num_envs
 def get_target_held_base_pose(fixed_pos, fixed_quat, task_name, fixed_asset_cfg, num_envs, device):
     """Get target poses for keypoint and success computation."""
     fixed_success_pos_local = torch.zeros((num_envs, 3), device=device)
-    if task_name == "peg_insert":
+    if "peg_insert" in task_name:
         fixed_success_pos_local[:, 2] = 0.0
-    elif task_name == "gear_mesh":
+    elif "gear_mesh" in task_name:
         gear_base_offset = fixed_asset_cfg.medium_gear_base_offset
         fixed_success_pos_local[:, 0] = gear_base_offset[0]
         fixed_success_pos_local[:, 2] = gear_base_offset[2]
-    elif task_name == "nut_thread":
+    elif "nut_thread" in task_name:
         head_height = fixed_asset_cfg.base_height
         shank_length = fixed_asset_cfg.height
         thread_pitch = fixed_asset_cfg.thread_pitch
