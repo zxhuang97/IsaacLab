@@ -98,8 +98,7 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 
 # PLACEHOLDER: Extension template (do not remove this comment)
 
-torch.backends.cuda.matmul.allow_tf32 = True
-torch.backends.cudnn.allow_tf32 = True
+torch.backends.cudnn.conv.fp32_precision = 'tf32'
 torch.backends.cudnn.deterministic = False
 torch.backends.cudnn.benchmark = False
 

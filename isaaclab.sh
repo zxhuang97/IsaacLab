@@ -99,9 +99,12 @@ is_docker() {
 ensure_cuda_torch() {
   local pip_command=$(extract_pip_command)
   local pip_uninstall_command=$(extract_pip_uninstall_command)
-  local -r TORCH_VER="2.7.0"
-  local -r TV_VER="0.22.0"
-  local -r CUDA_TAG="cu128"
+#   local -r TORCH_VER="2.7.0"
+#   local -r TV_VER="0.22.0"
+#   local -r CUDA_TAG="cu128"
+  local -r TORCH_VER="2.9.0"
+  local -r TV_VER="0.24.0"
+  local -r CUDA_TAG="cu130"
   local -r PYTORCH_INDEX="https://download.pytorch.org/whl/${CUDA_TAG}"
   local torch_ver
 
@@ -487,7 +490,7 @@ while [[ $# -gt 0 ]]; do
 
             # check if pytorch is installed and its version
             # install pytorch with cuda 12.8 for blackwell support
-            ensure_cuda_torch
+            # ensure_cuda_torch
             # recursively look into directories and install them
             # this does not check dependencies between extensions
             export -f extract_python_exe
