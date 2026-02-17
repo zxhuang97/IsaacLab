@@ -520,7 +520,7 @@ while [[ $# -gt 0 ]]; do
 
             # in some rare cases, torch might not be installed properly by setup.py, add one more check here
             # can prevent that from happening
-            ensure_cuda_torch
+            # ensure_cuda_torch
             # check if we are inside a docker container or are building a docker image
             # in that case don't setup VSCode since it asks for EULA agreement which triggers user interaction
             if is_docker; then
