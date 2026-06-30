@@ -54,6 +54,16 @@ class ForgeEnv(FactoryEnv):
         self.pos_threshold = self.default_pos_threshold.clone()
         self.rot_threshold = self.default_rot_threshold.clone()
 
+        # Compliance-eval execution hooks (set externally during the interact
+        # eval loop; both None => standard behavior, byte-identical to before).
+        #   compliance_stiffness_override: (num_envs, 6) task_prop_gains to use
+        #       in place of the per-episode randomized gains.
+        #   compliance_pose_target: (num_envs, 7) [pos3, quat4] fingertip target
+        #       fed directly to the controller, bypassing the action->target map.
+        self.compliance_stiffness_override = None
+        self.compliance_pose_target = None
+        self.compliance_clip_pose_target = True
+
     def _compute_intermediate_values(self, dt):
         """Add noise to observations for force sensing."""
         super()._compute_intermediate_values(dt)
@@ -151,6 +161,19 @@ class ForgeEnv(FactoryEnv):
         """FORGE actions are defined as targets relative to the fixed asset."""
         if self.last_update_timestamp < self._robot._data._sim_timestamp:
             self._compute_intermediate_values(dt=self.physics_dt)
+
+        # Compliance-eval: optionally override the task-space stiffness for this
+        # step. Applies to both the standard and pose-target paths below.
+        if self.compliance_stiffness_override is not None:
+            self.task_prop_gains = self.compliance_stiffness_override
+            self.task_deriv_gains = factory_utils.get_deriv_gains(self.compliance_stiffness_override)
+
+        # Compliance-eval: execute a fingertip pose target directly, bypassing
+        # the action->target mapping (used by the `tool_pose` execution mode).
+        if self.compliance_pose_target is not None:
+            self._apply_compliance_pose_target()
+            return
+
         if self.cfg.ctrl.use_delta_pose:
             super()._apply_action()
             return
@@ -228,6 +251,49 @@ class ForgeEnv(FactoryEnv):
         ctrl_target_fingertip_midpoint_quat = torch_utils.quat_from_euler_xyz(
             roll=desired_xyz[:, 0], pitch=desired_xyz[:, 1], yaw=desired_xyz[:, 2]
         )
+
+        self.generate_ctrl_signals(
+            ctrl_target_fingertip_midpoint_pos=ctrl_target_fingertip_midpoint_pos,
+            ctrl_target_fingertip_midpoint_quat=ctrl_target_fingertip_midpoint_quat,
+            ctrl_target_gripper_dof_pos=0.0,
+        )
+
+    def _apply_compliance_pose_target(self):
+        """Drive the controller toward `compliance_pose_target` (fingertip frame).
+
+        `compliance_pose_target` is (num_envs, 7) = [pos(3), quat(4) wxyz] in the
+        same frame as `fingertip_midpoint_pos/quat`. When
+        `compliance_clip_pose_target` is True (default) the position and
+        orientation errors are clipped to `pos_threshold`/`rot_threshold`, exactly
+        as the standard action path does, so the per-step target stays bounded.
+        """
+        target_pos = self.compliance_pose_target[:, 0:3]
+        target_quat = self.compliance_pose_target[:, 3:7]
+        target_quat = target_quat / torch.linalg.norm(target_quat, dim=-1, keepdim=True).clamp_min(1e-8)
+
+        # Position error (used for action_penalty logging too).
+        self.delta_pos = target_pos - self.fingertip_midpoint_pos
+
+        # Orientation error as axis-angle of (target * current^-1).
+        quat_err = torch_utils.quat_mul(target_quat, torch_utils.quat_conjugate(self.fingertip_midpoint_quat))
+        quat_err = quat_err * torch.sign(quat_err[:, 0:1])
+        aa_err = axis_angle_from_quat(quat_err)  # (num_envs, 3)
+        self.delta_yaw = aa_err[:, 2]
+
+        if self.compliance_clip_pose_target:
+            pos_error_clipped = torch.clip(self.delta_pos, -self.pos_threshold, self.pos_threshold)
+            ctrl_target_fingertip_midpoint_pos = self.fingertip_midpoint_pos + pos_error_clipped
+
+            aa_clipped = torch.clip(aa_err, -self.rot_threshold, self.rot_threshold)
+            angle = torch.linalg.norm(aa_clipped, dim=-1)
+            axis = aa_clipped / angle.unsqueeze(-1).clamp_min(1e-8)
+            clipped_delta_quat = torch_utils.quat_from_angle_axis(angle, axis)
+            ctrl_target_fingertip_midpoint_quat = torch_utils.quat_mul(
+                clipped_delta_quat, self.fingertip_midpoint_quat
+            )
+        else:
+            ctrl_target_fingertip_midpoint_pos = target_pos
+            ctrl_target_fingertip_midpoint_quat = target_quat
 
         self.generate_ctrl_signals(
             ctrl_target_fingertip_midpoint_pos=ctrl_target_fingertip_midpoint_pos,
