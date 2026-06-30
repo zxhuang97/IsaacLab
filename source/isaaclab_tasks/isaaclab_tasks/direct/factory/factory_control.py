@@ -188,7 +188,20 @@ def get_delta_dof_pos(delta_pose, ik_method, jacobian, device):
 def _apply_task_space_gains(
     delta_fingertip_pose, fingertip_midpoint_linvel, fingertip_midpoint_angvel, task_prop_gains, task_deriv_gains
 ):
-    """Interpret PD gains as task-space gains. Apply to task-space error."""
+    """Interpret PD gains as task-space gains. Apply to task-space error.
+
+    `task_prop_gains`/`task_deriv_gains` may be either per-axis gains of shape
+    (num_envs, 6) (diagonal stiffness, applied element-wise) or full task-space
+    stiffness/damping matrices of shape (num_envs, 6, 6) (e.g. anisotropic
+    directional compliance), applied as matrix-vector products.
+    """
+    # Matrix-valued gains: task_wrench = K @ pose_error - D @ vel.
+    if task_prop_gains.dim() == 3:
+        vel = torch.cat((fingertip_midpoint_linvel, fingertip_midpoint_angvel), dim=-1)
+        task_wrench = (task_prop_gains @ delta_fingertip_pose.unsqueeze(-1)).squeeze(-1) + (
+            task_deriv_gains @ (0.0 - vel).unsqueeze(-1)
+        ).squeeze(-1)
+        return task_wrench
 
     task_wrench = torch.zeros_like(delta_fingertip_pose)
 

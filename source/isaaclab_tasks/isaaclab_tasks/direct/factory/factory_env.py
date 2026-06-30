@@ -412,6 +412,13 @@ class FactoryEnv(DirectRLEnv):
         self, ctrl_target_fingertip_midpoint_pos, ctrl_target_fingertip_midpoint_quat, ctrl_target_gripper_dof_pos
     ):
         """Get Jacobian. Set Franka DOF position targets (fingers) or DOF torques (arm)."""
+        # Optional matrix-valued task-space gains (e.g. directional compliance).
+        # When unset (the default), use the per-axis prop/deriv vectors.
+        task_prop = getattr(self, "task_prop_gains_matrix", None)
+        task_deriv = getattr(self, "task_deriv_gains_matrix", None)
+        if task_prop is None:
+            task_prop = self.task_prop_gains
+            task_deriv = self.task_deriv_gains
         self.joint_torque, self.applied_wrench = factory_control.compute_dof_torque(
             cfg=self.cfg,
             dof_pos=self.joint_pos,
@@ -424,8 +431,8 @@ class FactoryEnv(DirectRLEnv):
             arm_mass_matrix=self.arm_mass_matrix,
             ctrl_target_fingertip_midpoint_pos=ctrl_target_fingertip_midpoint_pos,
             ctrl_target_fingertip_midpoint_quat=ctrl_target_fingertip_midpoint_quat,
-            task_prop_gains=self.task_prop_gains,
-            task_deriv_gains=self.task_deriv_gains,
+            task_prop_gains=task_prop,
+            task_deriv_gains=task_deriv,
             device=self.device,
             dead_zone_thresholds=self.dead_zone_thresholds,
         )

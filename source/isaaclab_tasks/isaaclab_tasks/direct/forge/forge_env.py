@@ -56,13 +56,23 @@ class ForgeEnv(FactoryEnv):
 
         # Compliance-eval execution hooks (set externally during the interact
         # eval loop; both None => standard behavior, byte-identical to before).
-        #   compliance_stiffness_override: (num_envs, 6) task_prop_gains to use
-        #       in place of the per-episode randomized gains.
+        #   compliance_stiffness_override: task_prop_gains to use in place of the
+        #       per-episode randomized gains. Either (num_envs, 6) per-axis gains
+        #       or (num_envs, 6, 6) full anisotropic stiffness matrices.
+        #   compliance_deriv_override: optional matching task_deriv_gains, same
+        #       shape as the prop override. If None, deriv is derived from prop
+        #       via critical damping (only valid for the (num_envs, 6) case).
         #   compliance_pose_target: (num_envs, 7) [pos3, quat4] fingertip target
         #       fed directly to the controller, bypassing the action->target map.
         self.compliance_stiffness_override = None
+        self.compliance_deriv_override = None
         self.compliance_pose_target = None
         self.compliance_clip_pose_target = True
+        # Matrix-valued gain channel for directional (anisotropic) compliance.
+        # When set (num_envs, 6, 6), generate_ctrl_signals uses these instead of
+        # the per-axis task_prop_gains / task_deriv_gains vectors.
+        self.task_prop_gains_matrix = None
+        self.task_deriv_gains_matrix = None
 
     def _compute_intermediate_values(self, dt):
         """Add noise to observations for force sensing."""
@@ -164,9 +174,27 @@ class ForgeEnv(FactoryEnv):
 
         # Compliance-eval: optionally override the task-space stiffness for this
         # step. Applies to both the standard and pose-target paths below.
+        # Reset the matrix-gain channel each step; only the directional override
+        # below repopulates it. `task_prop_gains` itself stays a (num_envs, 6)
+        # vector so the observation builder (which includes task_prop_gains in
+        # state_order) keeps working.
+        self.task_prop_gains_matrix = None
+        self.task_deriv_gains_matrix = None
         if self.compliance_stiffness_override is not None:
-            self.task_prop_gains = self.compliance_stiffness_override
-            self.task_deriv_gains = factory_utils.get_deriv_gains(self.compliance_stiffness_override)
+            override = self.compliance_stiffness_override
+            if override.dim() == 3:
+                # Full (num_envs, 6, 6) anisotropic stiffness: route it (and its
+                # matching damping) to the controller via the matrix channel,
+                # leaving the per-axis task_prop_gains untouched for observations.
+                self.task_prop_gains_matrix = override
+                self.task_deriv_gains_matrix = self.compliance_deriv_override
+            else:
+                self.task_prop_gains = override
+                if self.compliance_deriv_override is not None:
+                    self.task_deriv_gains = self.compliance_deriv_override
+                else:
+                    # Per-axis prop -> critical damping (legacy isotropic path).
+                    self.task_deriv_gains = factory_utils.get_deriv_gains(override)
 
         # Compliance-eval: execute a fingertip pose target directly, bypassing
         # the action->target mapping (used by the `tool_pose` execution mode).
