@@ -38,6 +38,23 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self.command_pos = torch.zeros((self.num_envs, 3), device=self.device)
         self.command_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1)
 
+        # Nominal reset EE pose (from `ctrl.reset_joints`), captured at reset and
+        # used as the center of the randomized start-pose sampling box.
+        self.nominal_start_pos = torch.zeros((self.num_envs, 3), device=self.device)
+        self.nominal_start_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1)
+
+        # cuRobo IK runs in a persistent subprocess (avoids a warp/PhysX GPU clash);
+        # the worker + cached kinematic frames are set up lazily on first reset.
+        self._ik_proc = None
+        self._ik_worker_mod = None
+        self._kin_frames_cached = False
+        # Constant transform of `panda_hand` expressed in the fingertip frame.
+        self.hand_in_fingertip_pos = torch.zeros((self.num_envs, 3), device=self.device)
+        self.hand_in_fingertip_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1)
+        # World pose of the `panda_link0` base (fixed per env).
+        self.base_pos_w = torch.zeros((self.num_envs, 3), device=self.device)
+        self.base_quat_w = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1)
+
         # Reference-trajectory parameters, sampled per env at reset.
         self.traj_start_pos = torch.zeros((self.num_envs, 3), device=self.device)
         self.traj_start_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1)
@@ -128,7 +145,15 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         else:
             self.payload_body_idx = self.fingertip_body_idx
 
+        # cuRobo IK solves for `panda_hand` in the `panda_link0` base frame; cache both
+        # body indices so reset targets (defined at the fingertip) can be converted.
+        self.hand_body_idx = body_names.index("panda_hand")
+        self.base_body_idx = body_names.index("panda_link0")
+
         self.arm_joint_ids = list(range(7))
+        joint_names = list(self._robot.joint_names)
+        self.arm_joint_names = [f"panda_joint{i}" for i in range(1, 8)]
+        self.isaac_arm_joint_idx = [joint_names.index(name) for name in self.arm_joint_names]
 
     def _cache_default_dynamics(self):
         self.default_masses = self._robot.root_physx_view.get_masses().clone()
@@ -397,6 +422,23 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self._robot.reset(env_ids)
         super()._reset_idx(env_ids)
 
+        # Move to the nominal reset joints and record the resulting EE pose as the
+        # center of the start-pose sampling box.
+        self._set_franka_to_reset_pose(env_ids)
+        self.step_sim_no_action()
+        self.nominal_start_pos[env_ids] = self.fingertip_midpoint_pos[env_ids].clone()
+        self.nominal_start_quat[env_ids] = self.fingertip_midpoint_quat[env_ids].clone()
+        self._cache_kinematic_frames()
+
+        self.actions[env_ids] = 0.0
+        self.prev_actions[env_ids] = 0.0
+        self._randomize_dynamics(env_ids)
+        self._randomize_controller(env_ids)
+        self._sample_reachable_start_and_trajectory(env_ids)
+        self._update_command()
+
+    def _set_franka_to_reset_pose(self, env_ids: torch.Tensor):
+        """Teleport the arm to the nominal `ctrl.reset_joints` configuration."""
         joint_pos = self._robot.data.default_joint_pos[env_ids].clone()
         joint_pos[:, 0:7] = torch.tensor(self.cfg.ctrl.reset_joints, device=self.device).unsqueeze(0)
         if joint_pos.shape[1] > 7:
@@ -407,29 +449,212 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self._robot.set_joint_position_target(self.ctrl_target_joint_pos[env_ids], env_ids=env_ids)
         self._robot.set_joint_effort_target(torch.zeros_like(joint_pos), env_ids=env_ids)
 
+    def step_sim_no_action(self):
+        """Advance the sim one physics step without applying a policy action.
+
+        Used only during resets, where all environments are stepped together while
+        joint states are written directly (teleported) for the IK solve.
+        """
         self.scene.write_data_to_sim()
         self.sim.step(render=False)
         self.scene.update(dt=self.physics_dt)
         self._compute_intermediate_values()
 
-        self.actions[env_ids] = 0.0
-        self.prev_actions[env_ids] = 0.0
-        self._randomize_dynamics(env_ids)
-        self._randomize_controller(env_ids)
-        self._sample_trajectory(env_ids)
-        self._update_command()
+    def _cache_kinematic_frames(self):
+        """Cache the constant fingertip->hand and world->base transforms once.
+
+        cuRobo IK targets `panda_hand` in the `panda_link0` base frame, while the
+        env's reference poses are defined at the fingertip. Both the fingertip->hand
+        offset and the base pose are fixed, so they are captured a single time after
+        the first reset-pose step.
+        """
+        if self._kin_frames_cached:
+            return
+        fp_pos_w = self._robot.data.body_pos_w[:, self.fingertip_body_idx]
+        fp_quat_w = self._robot.data.body_quat_w[:, self.fingertip_body_idx]
+        hand_pos_w = self._robot.data.body_pos_w[:, self.hand_body_idx]
+        hand_quat_w = self._robot.data.body_quat_w[:, self.hand_body_idx]
+        self.hand_in_fingertip_pos[:], self.hand_in_fingertip_quat[:] = math_utils.subtract_frame_transforms(
+            fp_pos_w, fp_quat_w, hand_pos_w, hand_quat_w
+        )
+        self.base_pos_w[:] = self._robot.data.body_pos_w[:, self.base_body_idx]
+        self.base_quat_w[:] = self._robot.data.body_quat_w[:, self.base_body_idx]
+        self._kin_frames_cached = True
+
+    def _ensure_ik_worker(self):
+        """Launch (once) the persistent cuRobo IK subprocess.
+
+        cuRobo IK is run out-of-process because its warp kernels clash with Isaac
+        Sim's GPU pipeline in-process (illegal memory access). The worker is a
+        clean interpreter with standalone warp; it builds the solver lazily, so the
+        first solve request blocks until the solver is ready.
+        """
+        if self._ik_proc is not None:
+            return
+
+        import json
+        import subprocess
+        import sys
+
+        from force_tool.utils import curobo_ik_worker
+
+        cfg = self.cfg.init
+        worker_cfg = {
+            "robot_cfg": cfg.ik_robot_cfg,
+            "num_seeds": cfg.ik_num_seeds,
+            "max_batch_size": self.num_envs * cfg.reach_check_waypoints,
+            "ik_batch_size": cfg.ik_batch_size,
+            "position_tolerance": cfg.reach_pos_tol,
+            "orientation_tolerance": cfg.reach_rot_tol,
+            "use_cuda_graph": cfg.ik_use_cuda_graph,
+            "device": str(self.device),
+        }
+        self._ik_worker_mod = curobo_ik_worker
+        self._ik_proc = subprocess.Popen(
+            [sys.executable, curobo_ik_worker.__file__, json.dumps(worker_cfg)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+        )
+
+    def _solve_curobo_ik(self, fingertip_pos: torch.Tensor, fingertip_quat: torch.Tensor, env_ids: torch.Tensor):
+        """Solve cuRobo IK (in the worker) for fingertip targets.
+
+        `fingertip_pos`/`fingertip_quat` are (n, W, ...) env-local targets for the
+        envs in `env_ids`. Targets are converted fingertip->hand->base frame here,
+        sent to the worker as a flat batch of n*W problems, and the returned
+        per-target success and arm joints are reshaped back. Returns
+        (success (n, W) bool, arm_q (n, W, 7)).
+        """
+        self._ensure_ik_worker()
+        n_envs, num_wp = fingertip_pos.shape[0], fingertip_pos.shape[1]
+
+        env_origins = self.scene.env_origins[env_ids].unsqueeze(1)  # (n, 1, 3)
+        base_pos = self.base_pos_w[env_ids].unsqueeze(1).expand(-1, num_wp, -1)
+        base_quat = self.base_quat_w[env_ids].unsqueeze(1).expand(-1, num_wp, -1)
+        off_pos = self.hand_in_fingertip_pos[env_ids].unsqueeze(1).expand(-1, num_wp, -1)
+        off_quat = self.hand_in_fingertip_quat[env_ids].unsqueeze(1).expand(-1, num_wp, -1)
+
+        # Fingertip target: env-local -> world (env frame is a pure translation).
+        fp_pos_w = (fingertip_pos + env_origins).reshape(-1, 3)
+        fp_quat_w = fingertip_quat.reshape(-1, 4)
+        # Fingertip -> hand (constant offset), then world -> base frame.
+        hand_pos_w, hand_quat_w = math_utils.combine_frame_transforms(
+            fp_pos_w, fp_quat_w, off_pos.reshape(-1, 3), off_quat.reshape(-1, 4)
+        )
+        hand_pos_b, hand_quat_b = math_utils.subtract_frame_transforms(
+            base_pos.reshape(-1, 3), base_quat.reshape(-1, 4), hand_pos_w, hand_quat_w
+        )
+
+        self._ik_worker_mod.send_msg(
+            self._ik_proc.stdin,
+            (hand_pos_b.detach().cpu().numpy(), hand_quat_b.detach().cpu().numpy()),
+        )
+        response = self._ik_worker_mod.recv_msg(self._ik_proc.stdout)
+        if response is None:
+            raise RuntimeError(
+                f"cuRobo IK worker exited unexpectedly (return code {self._ik_proc.poll()}); see its stderr above."
+            )
+        success_np, arm_q_np = response
+
+        success = torch.as_tensor(success_np, device=self.device).view(n_envs, num_wp)
+        arm_q = torch.as_tensor(arm_q_np, device=self.device, dtype=torch.float32).view(n_envs, num_wp, 7)
+        return success, arm_q
+
+    def close(self):
+        """Tear down the cuRobo IK worker before closing the sim."""
+        import subprocess
+
+        if self._ik_proc is not None:
+            if self._ik_proc.poll() is None:
+                self._ik_proc.stdin.close()
+                try:
+                    self._ik_proc.wait(timeout=5.0)
+                except subprocess.TimeoutExpired:
+                    self._ik_proc.kill()
+            self._ik_proc = None
+        super().close()
+
+    def _sample_reachable_start_and_trajectory(self, env_ids: torch.Tensor):
+        """Sample a start pose + trajectory per env, keeping only reachable ones.
+
+        For each env we sample a start EE pose and the trajectory anchored at it,
+        then solve cuRobo IK for the start pose and a set of trajectory waypoints
+        spanning the episode. An env is accepted only if every waypoint is reachable
+        (cuRobo IK success within `reach_pos_tol`/`reach_rot_tol`); failures are
+        resampled (up to `init.max_reach_attempts`). Finally every reset env is
+        placed at the cuRobo joint solution for its start pose (t=0).
+        """
+        cfg = self.cfg.init
+        # cuRobo arm-joint solution for each env's start pose; filled during the check.
+        start_arm_q = self.joint_pos[:, 0:7].clone()
+        waypoint_times = torch.linspace(0.0, self.max_episode_length_s, cfg.reach_check_waypoints, device=self.device)
+
+        bad_envs = env_ids.clone()
+        attempt = 0
+        while True:
+            self._sample_start_pose(bad_envs)
+            self._sample_trajectory(bad_envs)
+
+            # Evaluate the reference pose at each waypoint for the pending envs.
+            wp_pos = torch.zeros((len(bad_envs), cfg.reach_check_waypoints, 3), device=self.device)
+            wp_quat = torch.zeros((len(bad_envs), cfg.reach_check_waypoints, 4), device=self.device)
+            for i in range(cfg.reach_check_waypoints):
+                elapsed_time = torch.full((self.num_envs, 1), waypoint_times[i].item(), device=self.device)
+                pos_i, quat_i = self._command_pose_at(elapsed_time)
+                wp_pos[:, i] = pos_i[bad_envs]
+                wp_quat[:, i] = quat_i[bad_envs]
+
+            success, arm_q = self._solve_curobo_ik(wp_pos, wp_quat, bad_envs)
+            reachable = success.all(dim=1)
+            start_arm_q[bad_envs] = arm_q[:, 0]
+
+            bad_envs = bad_envs[(~reachable).nonzero(as_tuple=False).squeeze(-1)]
+            attempt += 1
+            if bad_envs.shape[0] == 0 or attempt >= cfg.max_reach_attempts:
+                break
+
+        # Place every reset env at the cuRobo joint solution that reaches its start pose.
+        self.joint_pos[env_ids, 0:7] = start_arm_q[env_ids]
+        if self.joint_pos.shape[1] > 7:
+            self.joint_pos[env_ids, 7:] = 0.04
+        self.joint_vel[env_ids] = 0.0
+        self.ctrl_target_joint_pos[env_ids] = self.joint_pos[env_ids]
+        self._robot.write_joint_state_to_sim(self.joint_pos, self.joint_vel)
+        self._robot.set_joint_position_target(self.ctrl_target_joint_pos)
+        self._robot.set_joint_effort_target(torch.zeros_like(self.joint_pos))
+        self.step_sim_no_action()
+        self.extras["log"]["Init/unreachable_envs"] = torch.tensor(float(bad_envs.shape[0]), device=self.device)
+
+    def _sample_start_pose(self, env_ids: torch.Tensor):
+        """Sample a start EE pose in a box around the nominal reset pose."""
+        n_envs = len(env_ids)
+        cfg = self.cfg.init
+
+        if cfg.start_pos_box is not None:
+            # Absolute box in the base/env-local frame: uniform in [min, max] per axis.
+            box = torch.tensor(cfg.start_pos_box, device=self.device)  # (3, 2)
+            lo, hi = box[:, 0], box[:, 1]
+            self.traj_start_pos[env_ids] = lo + (hi - lo) * torch.rand((n_envs, 3), device=self.device)
+        else:
+            pos_noise = torch.tensor(cfg.start_pos_noise, device=self.device)
+            offset = (2.0 * torch.rand((n_envs, 3), device=self.device) - 1.0) * pos_noise
+            self.traj_start_pos[env_ids] = self.nominal_start_pos[env_ids] + offset
+
+        axis = torch.randn((n_envs, 3), device=self.device)
+        axis = axis / torch.clamp(torch.linalg.norm(axis, dim=-1, keepdim=True), min=1.0e-6)
+        angle = cfg.start_rot_noise * torch.rand(n_envs, device=self.device)
+        delta_quat = torch_utils.quat_from_angle_axis(angle, axis)
+        self.traj_start_quat[env_ids] = torch_utils.quat_mul(delta_quat, self.nominal_start_quat[env_ids])
 
     def _sample_trajectory(self, env_ids: torch.Tensor):
         """Sample per-env reference trajectory parameters at reset.
 
-        The trajectory anchors at the current fingertip pose and follows the
-        configured `tracking.mode` for the whole episode (no resampling).
+        The trajectory anchors at the sampled start pose (`traj_start_pos`/
+        `traj_start_quat`, set by `_sample_start_pose`) and follows the configured
+        `tracking.mode` for the whole episode (no resampling).
         """
         n_envs = len(env_ids)
         cfg = self.cfg.tracking
-
-        self.traj_start_pos[env_ids] = self.fingertip_midpoint_pos[env_ids].clone()
-        self.traj_start_quat[env_ids] = self.fingertip_midpoint_quat[env_ids].clone()
 
         if cfg.mode == "line":
             direction = torch.randn((n_envs, 3), device=self.device)

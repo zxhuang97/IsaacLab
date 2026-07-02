@@ -73,6 +73,42 @@ class TrackingCfg:
 
 
 @configclass
+class InitCfg:
+    """Randomized start pose and trajectory-reachability check at reset.
+
+    At each reset a start EE pose is sampled (uniform position box around the
+    nominal reset EE position, plus a random orientation perturbation). The
+    trajectory is anchored at that start pose, and the start pose together with
+    `reach_check_waypoints` evenly-spaced trajectory waypoints (spanning the
+    episode) are solved with cuRobo IK; an env is kept only if every waypoint is
+    reachable within the tolerances below, otherwise it is resampled. The robot
+    is then placed at the cuRobo joint solution for the start pose.
+    """
+
+    # Start-position sampling (base/env-local frame, meters). If `start_pos_box`
+    # is set to [[x_min, x_max], [y_min, y_max], [z_min, z_max]], the start EE
+    # position is drawn uniformly from that absolute box. Otherwise it is drawn
+    # from a box of half-extent `start_pos_noise` centered on the nominal reset EE.
+    start_pos_box = None
+    start_pos_noise = [0.10, 0.10, 0.10]  # m, per-axis half-extent of the start-pos box
+    start_rot_noise = 0.5  # rad, max random rotation angle about a random axis
+
+    reach_check_waypoints: int = 8  # trajectory waypoints checked for reachability (incl. start)
+    reach_pos_tol: float = 0.01  # m, cuRobo IK position tolerance for success
+    reach_rot_tol: float = 0.05  # rad, cuRobo IK orientation tolerance for success
+    ik_num_seeds: int = 16  # cuRobo IK seeds per waypoint
+    # Max IK queries solved per cuRobo call. A reset sends num_envs *
+    # reach_check_waypoints queries; the worker splits larger requests into
+    # chunks of this size to bound GPU memory (avoids OOM at high num_envs).
+    ik_batch_size: int = 1024
+    ik_robot_cfg: str = "franka.yml"  # cuRobo robot config (base=panda_link0, tool=panda_hand)
+    # CUDA-graph replay in the cuRobo worker triggers an illegal memory access at
+    # large batch sizes; keep it off (a few tenths of a second slower per solve).
+    ik_use_cuda_graph: bool = False
+    max_reach_attempts: int = 20  # resampling attempts before accepting the current sample
+
+
+@configclass
 class RandomizationCfg:
     """Dynamics randomization applied at reset."""
 
@@ -123,6 +159,7 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
 
     ctrl: CtrlCfg = CtrlCfg()
     tracking: TrackingCfg = TrackingCfg()
+    init: InitCfg = InitCfg()
     randomization: RandomizationCfg = RandomizationCfg()
     reward: RewardCfg = RewardCfg()
 
@@ -269,6 +306,23 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
         ]:
             if tracking.get(key, None) is not None:
                 setattr(self.tracking, key, _to_plain(tracking[key]))
+
+        init = env.get("init", OmegaConf.create({}))
+        for key in [
+            "start_pos_box",
+            "start_pos_noise",
+            "start_rot_noise",
+            "reach_check_waypoints",
+            "reach_pos_tol",
+            "reach_rot_tol",
+            "ik_num_seeds",
+            "ik_batch_size",
+            "ik_robot_cfg",
+            "ik_use_cuda_graph",
+            "max_reach_attempts",
+        ]:
+            if init.get(key, None) is not None:
+                setattr(self.init, key, _to_plain(init[key]))
 
         randomization = env.get("randomization", OmegaConf.create({}))
         for key in [
