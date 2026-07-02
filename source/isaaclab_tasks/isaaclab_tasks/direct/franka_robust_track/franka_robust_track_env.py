@@ -13,7 +13,9 @@ import torch
 import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation
 from isaaclab.envs import DirectRLEnv
+from isaaclab.markers import FRAME_MARKER_CFG, SPHERE_MARKER_CFG, VisualizationMarkers
 from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
+import isaaclab.utils.math as math_utils
 import isaacsim.core.utils.torch as torch_utils
 
 from isaaclab_tasks.direct.factory import factory_control, factory_utils
@@ -75,8 +77,17 @@ class FrankaRobustTrackEnv(DirectRLEnv):
 
         self.payload_mass = torch.zeros((self.num_envs, 1), device=self.device)
         self.payload_com = torch.zeros((self.num_envs, 3), device=self.device)
+        self.gravity_vec = torch.tensor(self.cfg.sim.gravity, device=self.device).repeat(self.num_envs, 1)
         self.link_mass_scales = torch.ones((self.num_envs, self._robot.num_bodies), device=self.device)
         self.joint_friction = torch.zeros((self.num_envs, 7), device=self.device)
+
+        # Validate the mass-matrix reconstruction against PhysX once at startup (nominal parameters)
+        # and once more after the first dynamics randomization (payload merged, link masses scaled).
+        # PhysX refreshes its generalized mass matrix only when the simulation steps, so checks run
+        # at least two sim steps after the last mass-property write.
+        self._mass_matrix_checks_pending = 1
+        self._dynamics_write_sim_step = 0
+        self._randomized_mass_matrix_validated = False
 
         self._resolve_robot_indices()
         factory_utils.set_body_inertias(self._robot, self.scene.num_envs)
@@ -87,6 +98,8 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             key: torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
             for key in ["pos_track", "rot_track", "ee_vel", "action_rate", "joint_vel", "joint_limit"]
         }
+
+        self.set_debug_vis(self.cfg.debug_vis)
 
     def _setup_scene(self):
         spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg(), translation=(0.0, 0.0, -1.05))
@@ -122,6 +135,16 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self.default_inertias = self._robot.root_physx_view.get_inertias().clone()
         self.default_coms = self._robot.root_physx_view.get_coms().clone()
 
+        # Per-link nominal inertial parameters for the controller-side mass-matrix reconstruction.
+        # Body 0 (fixed base) is dropped to match the PhysX jacobian rows.
+        num_links = self._robot.num_bodies - 1
+        self.nominal_link_masses = self.default_masses[:, 1:].to(self.device)
+        self.nominal_link_inertias = self.default_inertias[:, 1:].to(self.device).view(self.num_envs, num_links, 3, 3)
+        # Link-frame offset from the current link CoM (the PhysX jacobian reference point) to the
+        # nominal link CoM. Nonzero only for the payload body after a payload merge.
+        self.nominal_com_offsets = torch.zeros((self.num_envs, num_links, 3), device=self.device)
+        self.arm_armature = self._robot.root_physx_view.get_dof_armatures().to(self.device)[:, 0:7]
+
     def _compute_intermediate_values(self):
         self.fingertip_midpoint_pos = self._robot.data.body_pos_w[:, self.fingertip_body_idx] - self.scene.env_origins
         self.fingertip_midpoint_quat = self._robot.data.body_quat_w[:, self.fingertip_body_idx]
@@ -130,9 +153,74 @@ class FrankaRobustTrackEnv(DirectRLEnv):
 
         jacobians = self._robot.root_physx_view.get_jacobians()
         self.fingertip_midpoint_jacobian = jacobians[:, self.fingertip_body_idx - 1, 0:6, 0:7]
-        self.arm_mass_matrix = self._robot.root_physx_view.get_generalized_mass_matrices()[:, 0:7, 0:7]
+        # The controller runs on the nominal model: rebuild the mass matrix from the default inertial
+        # parameters instead of querying PhysX, which would expose the payload and link-mass scales.
+        self.arm_mass_matrix = self._compute_arm_mass_matrix(
+            jacobians, self.nominal_link_masses, self.nominal_link_inertias, self.nominal_com_offsets
+        )
+        if self._mass_matrix_checks_pending > 0 and self._sim_step_counter >= self._dynamics_write_sim_step + 2:
+            self._validate_arm_mass_matrix(jacobians)
+            self._mass_matrix_checks_pending -= 1
         self.joint_pos = self._robot.data.joint_pos.clone()
         self.joint_vel = self._robot.data.joint_vel.clone()
+
+    def _compute_arm_mass_matrix(
+        self,
+        jacobians: torch.Tensor,
+        link_masses: torch.Tensor,
+        link_inertias: torch.Tensor,
+        com_offsets: torch.Tensor,
+    ) -> torch.Tensor:
+        """Rebuild the 7x7 arm mass matrix from per-link jacobians and inertial parameters.
+
+        M(q) = sum_l m_l J_vc^T J_vc + J_w^T (R I R^T) J_w + diag(armature). PhysX link jacobians are
+        referenced at each link's *current* CoM (world axes) and inertias are link-frame tensors about
+        the CoM (verified against `get_generalized_mass_matrices`). `com_offsets` is the link-frame
+        offset from the current CoM to the CoM that `link_masses`/`link_inertias` refer to — nonzero
+        only for the payload body when reconstructing the nominal model after a payload merge.
+
+        Evaluated with the cached nominal parameters this gives the mass matrix of the unrandomized
+        robot, independent of the payload and link-mass randomization in PhysX.
+        """
+        num_links = self._robot.num_bodies - 1
+        J_v = jacobians[:, :, 0:3, 0:7]
+        J_w = jacobians[:, :, 3:6, 0:7]
+
+        link_quat_w = self._robot.data.body_quat_w[:, 1:]
+        R = math_utils.matrix_from_quat(link_quat_w.reshape(-1, 4)).view(self.num_envs, num_links, 3, 3)
+        offset_w = (R @ com_offsets.unsqueeze(-1)).squeeze(-1)
+        offset_skew = math_utils.skew_symmetric_matrix(offset_w.reshape(-1, 3)).view(
+            self.num_envs, num_links, 3, 3
+        )
+        J_vc = J_v - offset_skew @ J_w
+
+        inertia_w = R @ link_inertias @ R.transpose(-1, -2)
+        mass_term = torch.einsum("nl,nlai,nlaj->nij", link_masses, J_vc, J_vc)
+        rot_term = torch.einsum("nlai,nlab,nlbj->nij", J_w, inertia_w, J_w)
+        return mass_term + rot_term + torch.diag_embed(self.arm_armature)
+
+    def _validate_arm_mass_matrix(self, jacobians: torch.Tensor):
+        """Check the jacobian-based reconstruction against PhysX using the current inertial parameters.
+
+        Rebuilding with the *current* (randomized, payload-merged) parameters must reproduce PhysX's own
+        generalized mass matrix; this pins down the jacobian reference conventions and the payload merge.
+        Only valid once the simulation has stepped after the last dynamics write, since
+        `get_generalized_mass_matrices` does not refresh until then.
+        """
+        num_links = self._robot.num_bodies - 1
+        masses = self._robot.root_physx_view.get_masses().to(self.device)[:, 1:]
+        inertias = (
+            self._robot.root_physx_view.get_inertias().to(self.device)[:, 1:].view(self.num_envs, num_links, 3, 3)
+        )
+        zero_offsets = torch.zeros((self.num_envs, num_links, 3), device=self.device)
+        reconstructed = self._compute_arm_mass_matrix(jacobians, masses, inertias, zero_offsets)
+        physx_matrix = self._robot.root_physx_view.get_generalized_mass_matrices()[:, 0:7, 0:7]
+        error = (reconstructed - physx_matrix).abs().max().item()
+        assert error < 0.01, (
+            f"Arm mass-matrix reconstruction deviates from PhysX (max abs error {error:.4f}). "
+            "Likely a convention mismatch: expected jacobians referenced at the link CoM and inertia "
+            "tensors expressed in the link frame about the CoM."
+        )
 
     def _pre_physics_step(self, actions: torch.Tensor):
         self.prev_actions[:] = self.actions
@@ -142,6 +230,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
 
     def _apply_action(self):
         self._compute_intermediate_values()
+        self._apply_payload_gravity()
         target_pos, target_quat = self._get_action_target_pose()
 
         if self.cfg.ctrl.backend == "factory_osc":
@@ -150,6 +239,23 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             self._apply_dls_ik(target_pos, target_quat)
         else:
             raise ValueError(f"Unsupported Franka robust track controller backend: {self.cfg.ctrl.backend}")
+
+    def _apply_payload_gravity(self):
+        """Apply the payload weight as an external wrench on the payload body.
+
+        Robot gravity is disabled (nominal gravity compensation is assumed perfect), so the payload
+        shows up exactly as its uncompensated weight `m * g`, acting at the payload CoM. The force is
+        rotated into the link frame each step since the wrench buffers are consumed in that frame.
+        """
+        payload_quat_w = self._robot.data.body_quat_w[:, self.payload_body_idx]
+        force_w = self.payload_mass * self.gravity_vec
+        force_b = math_utils.quat_apply_inverse(payload_quat_w, force_w)
+        self._robot.set_external_force_and_torque(
+            forces=force_b.unsqueeze(1),
+            torques=torch.zeros((self.num_envs, 1, 3), device=self.device),
+            positions=self.payload_com.unsqueeze(1),
+            body_ids=[self.payload_body_idx],
+        )
 
     def _get_action_target_pose(self):
         pos_actions = self.actions[:, 0:3] * self.pos_threshold
@@ -446,7 +552,6 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         mass_device = masses.device
         default_masses = self.default_masses.to(mass_device)
         default_inertias = self.default_inertias.to(mass_device)
-        default_coms = self.default_coms.to(mass_device)
 
         if rand_cfg.enable_link_mass:
             lower, upper = rand_cfg.link_mass_scale_range
@@ -458,36 +563,60 @@ class FrankaRobustTrackEnv(DirectRLEnv):
 
         masses[env_ids_cpu] = default_masses[env_ids_cpu] * scales
         inertias[env_ids_cpu] = default_inertias[env_ids_cpu] * scales.unsqueeze(-1)
-        coms[env_ids_cpu] = default_coms[env_ids_cpu]
 
+        # The payload is merged into the payload body as a rigid point mass: combined mass, mass-weighted
+        # CoM, and parallel-axis inertia update. The simulated dynamics are then exactly "nominal robot +
+        # point mass", while its weight is applied separately as an external wrench (robot gravity is
+        # disabled, see `_apply_payload_gravity`). The controller stays blind to all of this because it
+        # receives the reconstructed nominal mass matrix (see `_compute_arm_mass_matrix`).
         if rand_cfg.enable_payload:
             payload_mass_lower, payload_mass_upper = rand_cfg.payload_mass_range
             payload_mass = payload_mass_lower + (payload_mass_upper - payload_mass_lower) * torch.rand(
-                (len(env_ids),), device=mass_device
+                (len(env_ids), 1), device=self.device
             )
-            payload_com_ranges = torch.tensor(rand_cfg.payload_com_range, device=mass_device)
+            payload_com_ranges = torch.tensor(rand_cfg.payload_com_range, device=self.device)
             payload_com = payload_com_ranges[:, 0] + (
                 payload_com_ranges[:, 1] - payload_com_ranges[:, 0]
-            ) * torch.rand((len(env_ids), 3), device=mass_device)
+            ) * torch.rand((len(env_ids), 3), device=self.device)
+            self.payload_mass[env_ids] = payload_mass
+            self.payload_com[env_ids] = payload_com
 
             body_idx = self.payload_body_idx
-            body_mass = masses[env_ids_cpu, body_idx]
-            base_com = default_coms[env_ids_cpu, body_idx, 0:3]
-            new_mass = body_mass + payload_mass
-            new_com = (body_mass.unsqueeze(-1) * base_com + payload_mass.unsqueeze(-1) * payload_com) / torch.clamp(
-                new_mass.unsqueeze(-1), min=1.0e-6
+            m_p = payload_mass.to(mass_device)
+            p = payload_com.to(mass_device)
+            m_b = masses[env_ids_cpu, body_idx].unsqueeze(-1)
+            c_b = coms[env_ids_cpu, body_idx, 0:3]
+            m_new = m_b + m_p
+            c_new = (m_b * c_b + m_p * p) / m_new
+            d_b = c_b - c_new
+            d_p = p - c_new
+            eye = torch.eye(3, device=mass_device).unsqueeze(0)
+            inertia_b = inertias[env_ids_cpu, body_idx].view(-1, 3, 3)
+            shift_b = m_b.unsqueeze(-1) * (
+                (d_b * d_b).sum(-1)[:, None, None] * eye - d_b.unsqueeze(-1) * d_b.unsqueeze(-2)
             )
-            masses[env_ids_cpu, body_idx] = new_mass
-            coms[env_ids_cpu, body_idx, 0:3] = new_com
-            self.payload_mass[env_ids] = payload_mass.to(self.device).unsqueeze(-1)
-            self.payload_com[env_ids] = payload_com.to(self.device)
+            shift_p = m_p.unsqueeze(-1) * (
+                (d_p * d_p).sum(-1)[:, None, None] * eye - d_p.unsqueeze(-1) * d_p.unsqueeze(-2)
+            )
+            masses[env_ids_cpu, body_idx] = m_new.squeeze(-1)
+            coms[env_ids_cpu, body_idx, 0:3] = c_new
+            inertias[env_ids_cpu, body_idx] = (inertia_b + shift_b + shift_p).view(-1, 9)
+            # PhysX jacobians are referenced at the current (merged) CoM; record the link-frame offset
+            # back to the nominal CoM for the controller-side mass-matrix reconstruction.
+            self.nominal_com_offsets[env_ids, body_idx - 1] = (c_b - c_new).to(self.device)
         else:
             self.payload_mass[env_ids] = 0.0
             self.payload_com[env_ids] = 0.0
+            self.nominal_com_offsets[env_ids, self.payload_body_idx - 1] = 0.0
 
         self._robot.root_physx_view.set_masses(masses, env_ids_cpu)
         self._robot.root_physx_view.set_inertias(inertias, env_ids_cpu)
         self._robot.root_physx_view.set_coms(coms, env_ids_cpu)
+
+        self._dynamics_write_sim_step = self._sim_step_counter
+        if not self._randomized_mass_matrix_validated:
+            self._mass_matrix_checks_pending += 1
+            self._randomized_mass_matrix_validated = True
 
         self.link_mass_scales[env_ids] = scales.to(self.device)
 
@@ -502,6 +631,59 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             joint_ids=self.arm_joint_ids,
             env_ids=env_ids,
         )
+
+    def _set_debug_vis_impl(self, debug_vis: bool):
+        if debug_vis:
+            if not hasattr(self, "command_pose_visualizer"):
+                frame_cfg = FRAME_MARKER_CFG.copy()
+                frame_cfg.markers["frame"].scale = (0.08, 0.08, 0.08)
+                frame_cfg.prim_path = "/Visuals/Command/pose"
+                self.command_pose_visualizer = VisualizationMarkers(frame_cfg)
+
+                path_cfg = SPHERE_MARKER_CFG.copy()
+                path_cfg.markers["sphere"].radius = 0.004
+                path_cfg.markers["sphere"].visual_material.diffuse_color = (0.0, 1.0, 0.0)
+                path_cfg.prim_path = "/Visuals/Command/traj_path"
+                self.traj_path_visualizer = VisualizationMarkers(path_cfg)
+
+                future_cfg = SPHERE_MARKER_CFG.copy()
+                future_cfg.markers["sphere"].radius = 0.008
+                future_cfg.markers["sphere"].visual_material.diffuse_color = (0.0, 0.4, 1.0)
+                future_cfg.prim_path = "/Visuals/Command/future_targets"
+                self.future_target_visualizer = VisualizationMarkers(future_cfg)
+            self.command_pose_visualizer.set_visibility(True)
+            self.traj_path_visualizer.set_visibility(True)
+            self.future_target_visualizer.set_visibility(True)
+        else:
+            if hasattr(self, "command_pose_visualizer"):
+                self.command_pose_visualizer.set_visibility(False)
+                self.traj_path_visualizer.set_visibility(False)
+                self.future_target_visualizer.set_visibility(False)
+
+    def _debug_vis_callback(self, event):
+        env_origins = self.scene.env_origins
+
+        # Current reference pose (frame marker).
+        self.command_pose_visualizer.visualize(self.command_pos + env_origins, self.command_quat)
+
+        # Full reference path over the episode, sampled uniformly in time.
+        num_samples = self.cfg.debug_vis_path_samples
+        times = torch.linspace(0.0, self.max_episode_length_s, num_samples, device=self.device)
+        path_points = []
+        for t in times:
+            elapsed_time = torch.full((self.num_envs, 1), t.item(), device=self.device)
+            pos, _ = self._command_pose_at(elapsed_time)
+            path_points.append(pos + env_origins)
+        self.traj_path_visualizer.visualize(torch.cat(path_points, dim=0))
+
+        # Lookahead targets fed to the policy.
+        base_time = self.episode_length_buf.to(torch.float) * self.step_dt
+        future_points = []
+        for i in range(self.cfg.tracking.num_future_steps):
+            elapsed_time = (base_time + i * self.cfg.tracking.future_step_dt).unsqueeze(-1)
+            pos, _ = self._command_pose_at(elapsed_time)
+            future_points.append(pos + env_origins)
+        self.future_target_visualizer.visualize(torch.cat(future_points, dim=0))
 
     def _command_errors(self):
         pos_error, rot_error = factory_control.get_pose_error(

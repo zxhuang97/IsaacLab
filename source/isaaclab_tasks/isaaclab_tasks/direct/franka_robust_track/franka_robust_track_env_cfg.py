@@ -109,6 +109,11 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
     episode_length_s = 10.0
     decimation = 4
     action_space = 6
+
+    # Debug visualization of the reference trajectory: current command frame,
+    # lookahead targets, and the full episode path (sampled in time).
+    debug_vis: bool = False
+    debug_vis_path_samples: int = 40
     # observation_space / state_space are recomputed in __post_init__ from the
     # number of lookahead poses (tracking.num_future_steps). Values below are for
     # the default num_future_steps = 4 (33 proprio + 6*4 future errors = 57;
@@ -230,6 +235,10 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
 
         if env.get("robot_usd_path", None) is not None:
             self.robot_usd_path = env.robot_usd_path
+        if env.get("debug_vis", None) is not None:
+            self.debug_vis = env.debug_vis
+        if env.get("debug_vis_path_samples", None) is not None:
+            self.debug_vis_path_samples = env.debug_vis_path_samples
 
         ctrl = env.get("ctrl", OmegaConf.create({}))
         for key in [
