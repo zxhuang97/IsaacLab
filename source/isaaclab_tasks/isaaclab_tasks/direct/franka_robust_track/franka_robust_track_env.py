@@ -73,6 +73,17 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self.traj_rot_speed = torch.zeros((self.num_envs, 1), device=self.device)
         self.traj_rot_angle = torch.zeros((self.num_envs, 1), device=self.device)
 
+        # Discretized reference trajectory: at reset the analytic curve is sampled
+        # onto a fixed grid of control steps (one waypoint per env step) and cached
+        # here. Runtime command/lookahead just index into these buffers by step,
+        # so the policy tracks a discrete pose sequence. The grid is extended past
+        # the episode so the furthest lookahead sample is always in-range.
+        self._traj_len = self.max_episode_length + (self.cfg.tracking.num_future_steps - 1)
+        self.traj_pos_buf = torch.zeros((self.num_envs, self._traj_len, 3), device=self.device)
+        self.traj_quat_buf = torch.zeros((self.num_envs, self._traj_len, 4), device=self.device)
+        self.traj_quat_buf[..., 0] = 1.0
+        self._env_arange = torch.arange(self.num_envs, device=self.device)
+
         self.fingertip_midpoint_pos = torch.zeros((self.num_envs, 3), device=self.device)
         self.fingertip_midpoint_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1)
         self.fingertip_midpoint_linvel = torch.zeros((self.num_envs, 3), device=self.device)
@@ -353,10 +364,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             [
                 self.fingertip_midpoint_pos,
                 self.fingertip_midpoint_quat,
-                self.fingertip_midpoint_linvel,
-                self.fingertip_midpoint_angvel,
                 self.joint_pos[:, 0:7],
-                self.joint_vel[:, 0:7],
                 future_errors,
                 self.actions,
             ],
@@ -613,6 +621,9 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             if bad_envs.shape[0] == 0 or attempt >= cfg.max_reach_attempts:
                 break
 
+        # Discretize the (now-final) analytic trajectory onto the per-step grid.
+        self._build_trajectory_buffer(env_ids)
+
         # Place every reset env at the cuRobo joint solution that reaches its start pose.
         self.joint_pos[env_ids, 0:7] = start_arm_q[env_ids]
         if self.joint_pos.shape[1] > 7:
@@ -727,26 +738,43 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         quat = torch_utils.quat_mul(delta_quat, self.traj_start_quat)
         return pos, quat
 
+    def _build_trajectory_buffer(self, env_ids: torch.Tensor):
+        """Sample the analytic trajectory onto the fixed per-step grid for `env_ids`.
+
+        The grid times are `arange(self._traj_len) * step_dt`, i.e. one waypoint
+        per control step, extended past the episode so the furthest lookahead is
+        always in-range. After this call the runtime command and lookahead read
+        straight out of `traj_pos_buf`/`traj_quat_buf` by integer step index.
+        """
+        for i in range(self._traj_len):
+            elapsed_time = torch.full((self.num_envs, 1), i * self.step_dt, device=self.device)
+            pos_i, quat_i = self._command_pose_at(elapsed_time)
+            self.traj_pos_buf[env_ids, i] = pos_i[env_ids]
+            self.traj_quat_buf[env_ids, i] = quat_i[env_ids]
+
+    def _traj_pose_at_index(self, idx: torch.Tensor):
+        """Gather the discretized reference pose at per-env step index `idx` (num_envs,)."""
+        idx = idx.clamp(0, self._traj_len - 1)
+        return self.traj_pos_buf[self._env_arange, idx], self.traj_quat_buf[self._env_arange, idx]
+
     def _update_command(self):
-        """Advance the current reference pose to the current episode time."""
-        elapsed_time = (self.episode_length_buf.to(torch.float) * self.step_dt).unsqueeze(-1)
-        self.command_pos[:], self.command_quat[:] = self._command_pose_at(elapsed_time)
+        """Set the current reference pose to the discretized waypoint at the current step."""
+        self.command_pos[:], self.command_quat[:] = self._traj_pose_at_index(self.episode_length_buf)
 
     def _future_command_errors(self) -> torch.Tensor:
         """Errors to `num_future_steps` lookahead reference poses (index 0 = now).
 
-        Returns a (num_envs, 6 * num_future_steps) tensor of stacked
-        (pos_error, axis_angle_error) pairs, letting the policy infer the
+        Lookahead poses are the next discretized waypoints (one per step) starting
+        from the current step. Returns a (num_envs, 6 * num_future_steps) tensor of
+        stacked (pos_error, axis_angle_error) pairs, letting the policy infer the
         reference velocity from the future pose sequence.
         """
         num_steps = self.cfg.tracking.num_future_steps
-        step_dt = self.cfg.tracking.future_step_dt
-        base_time = self.episode_length_buf.to(torch.float) * self.step_dt
+        base_idx = self.episode_length_buf
 
         errors = []
         for i in range(num_steps):
-            elapsed_time = (base_time + i * step_dt).unsqueeze(-1)
-            target_pos, target_quat = self._command_pose_at(elapsed_time)
+            target_pos, target_quat = self._traj_pose_at_index(base_idx + i)
             pos_error, axis_angle_error = factory_control.get_pose_error(
                 fingertip_midpoint_pos=self.fingertip_midpoint_pos,
                 fingertip_midpoint_quat=self.fingertip_midpoint_quat,
@@ -891,22 +919,19 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         # Current reference pose (frame marker).
         self.command_pose_visualizer.visualize(self.command_pos + env_origins, self.command_quat)
 
-        # Full reference path over the episode, sampled uniformly in time.
-        num_samples = self.cfg.debug_vis_path_samples
-        times = torch.linspace(0.0, self.max_episode_length_s, num_samples, device=self.device)
+        # Full discretized reference path over the episode (strided waypoints).
+        num_samples = min(self.cfg.debug_vis_path_samples, self.max_episode_length)
+        sample_idx = torch.linspace(0, self.max_episode_length - 1, num_samples, device=self.device).long()
         path_points = []
-        for t in times:
-            elapsed_time = torch.full((self.num_envs, 1), t.item(), device=self.device)
-            pos, _ = self._command_pose_at(elapsed_time)
-            path_points.append(pos + env_origins)
+        for idx in sample_idx:
+            path_points.append(self.traj_pos_buf[:, idx] + env_origins)
         self.traj_path_visualizer.visualize(torch.cat(path_points, dim=0))
 
         # Lookahead targets fed to the policy.
-        base_time = self.episode_length_buf.to(torch.float) * self.step_dt
+        base_idx = self.episode_length_buf
         future_points = []
         for i in range(self.cfg.tracking.num_future_steps):
-            elapsed_time = (base_time + i * self.cfg.tracking.future_step_dt).unsqueeze(-1)
-            pos, _ = self._command_pose_at(elapsed_time)
+            pos, _ = self._traj_pose_at_index(base_idx + i)
             future_points.append(pos + env_origins)
         self.future_target_visualizer.visualize(torch.cat(future_points, dim=0))
 

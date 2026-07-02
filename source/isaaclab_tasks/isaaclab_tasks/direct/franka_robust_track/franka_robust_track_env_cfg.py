@@ -46,7 +46,13 @@ class CtrlCfg:
 
 @configclass
 class TrackingCfg:
-    """Time-parameterized end-effector reference trajectory configuration."""
+    """Discretized end-effector reference trajectory configuration.
+
+    The trajectory is generated analytically per env at reset and then sampled
+    onto a fixed grid of control steps (one waypoint per env step), so the
+    reference the policy tracks is a discrete sequence of poses rather than a
+    continuously-evaluated function of time.
+    """
 
     mode: str = "line"  # line, circle
 
@@ -65,11 +71,10 @@ class TrackingCfg:
     rot_speed_range = [0.0, 0.20]  # rad/s
     rot_angle_range = [0.0, 0.30]  # rad, max sweep
 
-    # Lookahead: the policy observes `num_future_steps` reference poses spaced
-    # `future_step_dt` apart (index 0 = current target), so it can infer the
-    # reference velocity from the future pose sequence.
+    # Lookahead: the policy observes the next `num_future_steps` reference
+    # waypoints (index 0 = current target, one per trajectory step), so it can
+    # infer the reference velocity from the future pose sequence.
     num_future_steps: int = 4
-    future_step_dt: float = 0.1  # s between successive lookahead samples
 
 
 @configclass
@@ -152,10 +157,10 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
     debug_vis_path_samples: int = 40
     # observation_space / state_space are recomputed in __post_init__ from the
     # number of lookahead poses (tracking.num_future_steps). Values below are for
-    # the default num_future_steps = 4 (33 proprio + 6*4 future errors = 57;
-    # critic adds 23 privileged dims = 80).
-    observation_space = 57
-    state_space = 80
+    # the default num_future_steps = 4 (20 proprio + 6*4 future errors = 44;
+    # critic adds 23 privileged dims = 67).
+    observation_space = 44
+    state_space = 67
 
     ctrl: CtrlCfg = CtrlCfg()
     tracking: TrackingCfg = TrackingCfg()
@@ -302,7 +307,6 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "rot_speed_range",
             "rot_angle_range",
             "num_future_steps",
-            "future_step_dt",
         ]:
             if tracking.get(key, None) is not None:
                 setattr(self.tracking, key, _to_plain(tracking[key]))
@@ -344,12 +348,12 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
         self.robot.spawn.usd_path = f"{ASSET_DIR}/{self.robot_usd_path}"
         self.sim.render_interval = self.decimation
 
-        # Proprio obs: ee_pos(3)+ee_quat(4)+ee_linvel(3)+ee_angvel(3)+joint_pos(7)
-        # +joint_vel(7)+actions(6) = 33. Each lookahead pose contributes a
-        # (pos_error, axis_angle_error) pair = 6 dims. Critic adds 23 privileged
-        # dims: payload_mass(1)+payload_com(3)+joint_friction(7)+task_gains(6)
-        # +pos_threshold(3)+rot_threshold(3).
-        proprio_dim = 33
+        # Proprio obs: ee_pos(3)+ee_quat(4)+joint_pos(7)+actions(6) = 20 (velocity
+        # terms are omitted; the LSTM infers them from history). Each lookahead
+        # pose contributes a (pos_error, axis_angle_error) pair = 6 dims. Critic
+        # adds 23 privileged dims: payload_mass(1)+payload_com(3)+joint_friction(7)
+        # +task_gains(6)+pos_threshold(3)+rot_threshold(3).
+        proprio_dim = 20
         future_dim = 6 * self.tracking.num_future_steps
         privileged_dim = 23
         self.observation_space = proprio_dim + future_dim

@@ -38,6 +38,14 @@ params:
       regularizer:
         name: None
 
+    rnn:
+      name: lstm
+      units: 256
+      layers: 1
+      before_mlp: True
+      concat_input: True
+      layer_norm: True
+
   load_checkpoint: False
   load_path: ""
 
@@ -75,6 +83,7 @@ params:
     mini_epochs: 4
     critic_coef: 2
     clip_value: True
+    seq_length: 128
     bounds_loss_coef: 0.0001
 
     central_value_config:
@@ -100,6 +109,14 @@ params:
             name: default
           regularizer:
             name: None
+
+        rnn:
+          name: lstm
+          units: 256
+          layers: 1
+          before_mlp: True
+          concat_input: True
+          layer_norm: True
 
     player:
       deterministic: False
