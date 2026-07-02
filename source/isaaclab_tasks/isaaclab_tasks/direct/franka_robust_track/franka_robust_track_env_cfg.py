@@ -101,6 +101,17 @@ class InitCfg:
     reach_check_waypoints: int = 8  # trajectory waypoints checked for reachability (incl. start)
     reach_pos_tol: float = 0.01  # m, cuRobo IK position tolerance for success
     reach_rot_tol: float = 0.05  # rad, cuRobo IK orientation tolerance for success
+    # Max allowed per-joint jump (rad) between consecutive waypoint IK solutions.
+    # Each waypoint is solved seeded with the previous solution; an env is rejected
+    # if any joint moves more than this between neighboring waypoints, so the whole
+    # trajectory stays on a single continuous IK branch (no elbow flips / wrist
+    # wraps) that the policy can actually track.
+    reach_joint_diff_threshold: float = 0.5
+    # Candidate trajectories drawn per env each resample attempt. The reachability
+    # + continuity check rejects many samples, so oversampling evaluates this many
+    # independent candidates per env in one batched IK pass and keeps the first
+    # accepted one, drastically cutting the number of sequential resample attempts.
+    reach_oversample: int = 8
     ik_num_seeds: int = 16  # cuRobo IK seeds per waypoint
     # Max IK queries solved per cuRobo call. A reset sends num_envs *
     # reach_check_waypoints queries; the worker splits larger requests into
@@ -346,6 +357,8 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "reach_check_waypoints",
             "reach_pos_tol",
             "reach_rot_tol",
+            "reach_joint_diff_threshold",
+            "reach_oversample",
             "ik_num_seeds",
             "ik_batch_size",
             "ik_robot_cfg",
