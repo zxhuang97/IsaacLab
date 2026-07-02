@@ -29,6 +29,13 @@ class CtrlCfg:
     backend: str = "factory_osc"  # factory_osc, dls_ik
     ema_factor: float = 1.0
 
+    # By default the OSC controller runs on the *nominal* mass matrix, rebuilt from
+    # the default inertial parameters, so it stays blind to the payload and link-mass
+    # randomization (that mismatch is the point of the robustness task). Set this to
+    # True to instead feed the controller PhysX's ground-truth generalized mass matrix
+    # (payload merge + link-mass scaling included), i.e. a perfectly-modeled controller.
+    use_gt_mass_matrix: bool = False
+
     pos_action_threshold = [0.02, 0.02, 0.02]
     rot_action_threshold = [0.15, 0.15, 0.15]
 
@@ -333,6 +340,7 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
         for key in [
             "backend",
             "ema_factor",
+            "use_gt_mass_matrix",
             "pos_action_threshold",
             "rot_action_threshold",
             "default_task_prop_gains",

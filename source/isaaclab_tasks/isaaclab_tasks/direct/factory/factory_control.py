@@ -32,6 +32,7 @@ def compute_dof_torque(
     task_deriv_gains,
     device,
     dead_zone_thresholds=None,
+    nullspace_joint_target=None,
 ):
     """Compute Franka DOF torque to move fingertips towards target pose."""
     # References:
@@ -85,7 +86,12 @@ def compute_dof_torque(
         jacobian @ torch.inverse(arm_mass_matrix) @ jacobian_T
     )  # ETH eq. 3.86; geometric Jacobian is assumed
     j_eef_inv = arm_mass_matrix_task @ jacobian @ arm_mass_matrix_inv
-    default_dof_pos_tensor = torch.tensor(cfg.ctrl.default_dof_pos_tensor, device=device).repeat((num_envs, 1))
+    # Nullspace posture target: a per-env (num_envs, 7) tensor if provided (e.g. each
+    # env's own reset joint configuration), otherwise the single global config from cfg.
+    if nullspace_joint_target is not None:
+        default_dof_pos_tensor = nullspace_joint_target.to(device)
+    else:
+        default_dof_pos_tensor = torch.tensor(cfg.ctrl.default_dof_pos_tensor, device=device).repeat((num_envs, 1))
     # nullspace computation
     distance_to_default_dof_pos = default_dof_pos_tensor - dof_pos[:, :7]
     distance_to_default_dof_pos = (distance_to_default_dof_pos + math.pi) % (

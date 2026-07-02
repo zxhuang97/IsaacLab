@@ -58,6 +58,14 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self.nominal_start_pos = torch.zeros((self.num_envs, 3), device=self.device)
         self.nominal_start_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1)
 
+        # Per-env arm joint configuration the env resets into (the cuRobo IK solution
+        # for the sampled start pose). Used as the OSC nullspace posture anchor so the
+        # redundancy resolution biases toward each env's own reachable start config
+        # rather than a single global `ctrl.default_dof_pos_tensor`.
+        self.nominal_start_joint_pos = torch.tensor(
+            self.cfg.ctrl.reset_joints, device=self.device
+        ).repeat(self.num_envs, 1)
+
         # cuRobo IK runs in a persistent subprocess (avoids a warp/PhysX GPU clash);
         # the worker + cached kinematic frames are set up lazily on first reset.
         self._ik_proc = None
@@ -223,11 +231,18 @@ class FrankaRobustTrackEnv(DirectRLEnv):
 
         jacobians = self._robot.root_physx_view.get_jacobians()
         self.fingertip_midpoint_jacobian = jacobians[:, self.fingertip_body_idx - 1, 0:6, 0:7]
-        # The controller runs on the nominal model: rebuild the mass matrix from the default inertial
-        # parameters instead of querying PhysX, which would expose the payload and link-mass scales.
-        self.arm_mass_matrix = self._compute_arm_mass_matrix(
-            jacobians, self.nominal_link_masses, self.nominal_link_inertias, self.nominal_com_offsets
-        )
+        if self.cfg.ctrl.use_gt_mass_matrix:
+            # Ground-truth controller: use PhysX's own generalized mass matrix, which reflects the
+            # payload merge and link-mass scaling (a perfectly-modeled controller).
+            self.arm_mass_matrix = (
+                self._robot.root_physx_view.get_generalized_mass_matrices()[:, 0:7, 0:7].to(self.device)
+            )
+        else:
+            # The controller runs on the nominal model: rebuild the mass matrix from the default inertial
+            # parameters instead of querying PhysX, which would expose the payload and link-mass scales.
+            self.arm_mass_matrix = self._compute_arm_mass_matrix(
+                jacobians, self.nominal_link_masses, self.nominal_link_inertias, self.nominal_com_offsets
+            )
         if self._mass_matrix_checks_pending > 0 and self._sim_step_counter >= self._dynamics_write_sim_step + 2:
             self._validate_arm_mass_matrix(jacobians)
             self._mass_matrix_checks_pending -= 1
@@ -357,6 +372,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             task_prop_gains=self.task_prop_gains,
             task_deriv_gains=self.task_deriv_gains,
             device=self.device,
+            nullspace_joint_target=self.nominal_start_joint_pos,
         )
         self.ctrl_target_joint_pos[:, 7:] = 0.04
         self.joint_torque[:, 7:] = 0.0
@@ -810,6 +826,8 @@ class FrankaRobustTrackEnv(DirectRLEnv):
 
         # Place every reset env at the cuRobo joint solution that reaches its start pose.
         self.joint_pos[env_ids, 0:7] = start_arm_q[env_ids]
+        # Anchor the OSC nullspace posture on each env's own start configuration.
+        self.nominal_start_joint_pos[env_ids] = start_arm_q[env_ids]
         if self.joint_pos.shape[1] > 7:
             self.joint_pos[env_ids, 7:] = 0.04
         self.joint_vel[env_ids] = 0.0
