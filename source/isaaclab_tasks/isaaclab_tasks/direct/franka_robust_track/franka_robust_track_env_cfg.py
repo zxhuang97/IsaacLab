@@ -151,14 +151,21 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
     decimation = 4
     action_space = 6
 
+    # Optional observation history: if > 1, the policy and critic observations are
+    # the last `obs_history_length` single-step frames concatenated oldest->newest
+    # into one flat vector (frame history replaces the recurrent memory). H = 1
+    # reproduces the original single-step observation.
+    obs_history_length: int = 1
+
     # Debug visualization of the reference trajectory: current command frame,
     # lookahead targets, and the full episode path (sampled in time).
     debug_vis: bool = False
     debug_vis_path_samples: int = 40
     # observation_space / state_space are recomputed in __post_init__ from the
-    # number of lookahead poses (tracking.num_future_steps). Values below are for
-    # the default num_future_steps = 4 (20 proprio + 6*4 future errors = 44;
-    # critic adds 23 privileged dims = 67).
+    # number of lookahead poses (tracking.num_future_steps) and obs_history_length.
+    # Single-frame values for the default num_future_steps = 4 are 20 proprio +
+    # 6*4 future errors = 44 (critic adds 23 privileged dims = 67); the spaces
+    # below are then multiplied by obs_history_length.
     observation_space = 44
     state_space = 67
 
@@ -174,22 +181,25 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
         gravity=(0.0, 0.0, -9.81),
         physx=PhysxCfg(
             solver_type=1,
-            max_position_iteration_count=192,
+            max_position_iteration_count=64,
             max_velocity_iteration_count=1,
             bounce_threshold_velocity=0.2,
             friction_offset_threshold=0.01,
             friction_correlation_distance=0.00625,
-            gpu_max_rigid_contact_count=2**23,
-            gpu_max_rigid_patch_count=2**23,
-            gpu_collision_stack_size=2**29,
+            # gpu_max_rigid_contact_count=2**23,
+            # gpu_max_rigid_patch_count=2**23,
+            # gpu_collision_stack_size=2**29,
             gpu_max_num_partitions=1,
         ),
         physics_material=RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0),
     )
 
     viewer: ViewerCfg = ViewerCfg(
-        eye=(0.6, 0.35, 0.35),
-        lookat=(0.0, 0.0, 0.25),
+        # Offsets are relative to the robot base (origin_type="asset_root").
+        # 3/4 elevated view pulled back to frame the full arm and the tracking
+        # workspace (base-frame center ~ (0.45, 0.0, 0.3)).
+        eye=(1.6, 1.1, 0.8),
+        lookat=(0.45, 0.45, 0.45),
         origin_type="asset_root",
         asset_name="robot",
         resolution=(720, 720),
@@ -277,6 +287,8 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
 
         if env.get("robot_usd_path", None) is not None:
             self.robot_usd_path = env.robot_usd_path
+        if env.get("obs_history_length", None) is not None:
+            self.obs_history_length = int(env.obs_history_length)
         if env.get("debug_vis", None) is not None:
             self.debug_vis = env.debug_vis
         if env.get("debug_vis_path_samples", None) is not None:
@@ -356,5 +368,8 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
         proprio_dim = 20
         future_dim = 6 * self.tracking.num_future_steps
         privileged_dim = 23
-        self.observation_space = proprio_dim + future_dim
-        self.state_space = self.observation_space + privileged_dim
+        single_obs_dim = proprio_dim + future_dim
+        single_state_dim = single_obs_dim + privileged_dim
+        history = max(1, int(self.obs_history_length))
+        self.observation_space = single_obs_dim * history
+        self.state_space = single_state_dim * history

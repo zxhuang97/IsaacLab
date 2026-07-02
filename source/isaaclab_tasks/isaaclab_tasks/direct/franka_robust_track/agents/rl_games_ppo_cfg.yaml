@@ -59,7 +59,7 @@ params:
     normalize_input: True
     normalize_value: True
     value_bootstrap: True
-    num_actors: 128
+    num_actors: 4096
     reward_shaper:
       scale_value: 1.0
     normalize_advantage: True
@@ -79,7 +79,10 @@ params:
     truncate_grads: True
     e_clip: 0.2
     horizon_length: 128
-    minibatch_size: 512
+    # batch_size = num_actors(=num_envs) * horizon_length; at 2048 envs this is
+    # 262144, so minibatch_size=8192 -> 32 minibatches (matches factory ratio).
+    # Must satisfy minibatch_size % seq_length == 0 and batch_size % minibatch_size == 0.
+    minibatch_size: 8192
     mini_epochs: 4
     critic_coef: 2
     clip_value: True
@@ -87,7 +90,7 @@ params:
     bounds_loss_coef: 0.0001
 
     central_value_config:
-      minibatch_size: 512
+      minibatch_size: 8192
       mini_epochs: 4
       learning_rate: 1e-4
       lr_schedule: adaptive
@@ -101,7 +104,7 @@ params:
         central_value: True
 
         mlp:
-          units: [512, 256, 128]
+          units: [1024, 512, 256]
           activation: elu
           d2rl: False
 
@@ -112,7 +115,7 @@ params:
 
         rnn:
           name: lstm
-          units: 256
+          units: 512
           layers: 1
           before_mlp: True
           concat_input: True
