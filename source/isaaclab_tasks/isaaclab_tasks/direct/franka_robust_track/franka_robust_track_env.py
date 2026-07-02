@@ -959,6 +959,13 @@ class FrankaRobustTrackEnv(DirectRLEnv):
                 frame_cfg.prim_path = "/Visuals/Command/pose"
                 self.command_pose_visualizer = VisualizationMarkers(frame_cfg)
 
+                # Current end-effector pose (smaller frame) so the gap to the
+                # command frame shows the live tracking error.
+                ee_cfg = FRAME_MARKER_CFG.copy()
+                ee_cfg.markers["frame"].scale = (0.05, 0.05, 0.05)
+                ee_cfg.prim_path = "/Visuals/EndEffector/pose"
+                self.ee_pose_visualizer = VisualizationMarkers(ee_cfg)
+
                 path_cfg = SPHERE_MARKER_CFG.copy()
                 path_cfg.markers["sphere"].radius = 0.004
                 path_cfg.markers["sphere"].visual_material.diffuse_color = (0.0, 1.0, 0.0)
@@ -971,11 +978,13 @@ class FrankaRobustTrackEnv(DirectRLEnv):
                 future_cfg.prim_path = "/Visuals/Command/future_targets"
                 self.future_target_visualizer = VisualizationMarkers(future_cfg)
             self.command_pose_visualizer.set_visibility(True)
+            self.ee_pose_visualizer.set_visibility(True)
             self.traj_path_visualizer.set_visibility(True)
             self.future_target_visualizer.set_visibility(True)
         else:
             if hasattr(self, "command_pose_visualizer"):
                 self.command_pose_visualizer.set_visibility(False)
+                self.ee_pose_visualizer.set_visibility(False)
                 self.traj_path_visualizer.set_visibility(False)
                 self.future_target_visualizer.set_visibility(False)
 
@@ -984,6 +993,10 @@ class FrankaRobustTrackEnv(DirectRLEnv):
 
         # Current reference pose (frame marker).
         self.command_pose_visualizer.visualize(self.command_pos + env_origins, self.command_quat)
+
+        # Current end-effector pose (frame marker); offset from the command
+        # frame is the live tracking error.
+        self.ee_pose_visualizer.visualize(self.fingertip_midpoint_pos + env_origins, self.fingertip_midpoint_quat)
 
         # Full discretized reference path over the episode (strided waypoints).
         num_samples = min(self.cfg.debug_vis_path_samples, self.max_episode_length)
