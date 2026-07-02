@@ -135,6 +135,12 @@ class RewardCfg:
 
     pos_error_scale: float = 8.0
     rot_error_scale: float = 2.0
+    # Exponential kernel temperatures: reward = exp(-error / temp). These must be
+    # matched to the error magnitude the policy actually operates at, otherwise the
+    # kernel saturates to ~0 and provides no gradient (rot error runs ~1 rad, so a
+    # tight temp like 0.1 leaves it in a flat dead zone).
+    pos_error_temp: float = 0.05  # m
+    rot_error_temp: float = 0.5  # rad
     ee_vel_scale: float = -0.01
     action_rate_scale: float = -0.02
     joint_vel_scale: float = -0.002
@@ -354,6 +360,22 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             if randomization.get(key, None) is not None:
                 value = randomization[key]
                 setattr(self.randomization, key, _to_plain(value))
+
+        reward = env.get("reward", OmegaConf.create({}))
+        for key in [
+            "pos_error_scale",
+            "rot_error_scale",
+            "pos_error_temp",
+            "rot_error_temp",
+            "ee_vel_scale",
+            "action_rate_scale",
+            "joint_vel_scale",
+            "joint_limit_scale",
+            "success_pos_threshold",
+            "success_rot_threshold",
+        ]:
+            if reward.get(key, None) is not None:
+                setattr(self.reward, key, _to_plain(reward[key]))
 
     def __post_init__(self):
         self.update_env_params()

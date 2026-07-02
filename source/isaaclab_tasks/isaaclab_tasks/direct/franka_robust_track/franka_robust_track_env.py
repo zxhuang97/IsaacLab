@@ -35,6 +35,21 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self.prev_actions = torch.zeros_like(self.actions)
         self.ctrl_target_joint_pos = torch.zeros((self.num_envs, self._robot.num_joints), device=self.device)
 
+        # Observation history: the policy/critic input is the last
+        # `obs_history_length` single-step frames concatenated oldest->newest into
+        # one flat vector. cfg.observation_space / cfg.state_space already hold the
+        # flattened (history * single-frame) sizes, so recover the single-frame
+        # dims by dividing out the history length. H = 1 keeps the single-step obs.
+        self.obs_history_length = max(1, int(self.cfg.obs_history_length))
+        self.single_obs_dim = self.cfg.observation_space // self.obs_history_length
+        self.single_state_dim = self.cfg.state_space // self.obs_history_length
+        self.obs_history = torch.zeros(
+            (self.num_envs, self.obs_history_length, self.single_obs_dim), device=self.device
+        )
+        self.critic_history = torch.zeros(
+            (self.num_envs, self.obs_history_length, self.single_state_dim), device=self.device
+        )
+
         self.command_pos = torch.zeros((self.num_envs, 3), device=self.device)
         self.command_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1)
 
@@ -356,7 +371,8 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self._robot.set_joint_position_target(self.ctrl_target_joint_pos)
         self._robot.set_joint_effort_target(self.joint_torque)
 
-    def _get_observations(self) -> dict:
+    def _compute_single_obs(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Build the single-step policy and critic observation frames."""
         self._compute_intermediate_values()
         self._update_command()
         future_errors = self._future_command_errors()
@@ -382,7 +398,22 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             ],
             dim=-1,
         )
-        return {"policy": policy_obs, "critic": critic_obs}
+        return policy_obs, critic_obs
+
+    def _get_observations(self) -> dict:
+        policy_obs, critic_obs = self._compute_single_obs()
+        if self.obs_history_length == 1:
+            return {"policy": policy_obs, "critic": critic_obs}
+
+        # Shift the history left by one frame and append the newest frame, then
+        # flatten oldest->newest into a single vector per env.
+        self.obs_history = torch.roll(self.obs_history, shifts=-1, dims=1)
+        self.obs_history[:, -1] = policy_obs
+        self.critic_history = torch.roll(self.critic_history, shifts=-1, dims=1)
+        self.critic_history[:, -1] = critic_obs
+        policy_stacked = self.obs_history.reshape(self.num_envs, -1)
+        critic_stacked = self.critic_history.reshape(self.num_envs, -1)
+        return {"policy": policy_stacked, "critic": critic_stacked}
 
     def _get_rewards(self) -> torch.Tensor:
         self._compute_intermediate_values()
@@ -398,8 +429,8 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         joint_limit_penalty = self._joint_limit_penalty()
 
         rewards = {
-            "pos_track": (1.0 - torch.tanh(pos_error_norm / 0.05)) * self.cfg.reward.pos_error_scale,
-            "rot_track": (1.0 - torch.tanh(rot_error_norm / 0.35)) * self.cfg.reward.rot_error_scale,
+            "pos_track": torch.exp(-pos_error_norm / self.cfg.reward.pos_error_temp) * self.cfg.reward.pos_error_scale,
+            "rot_track": torch.exp(-rot_error_norm / self.cfg.reward.rot_error_temp) * self.cfg.reward.rot_error_scale,
             "ee_vel": ee_vel_norm * self.cfg.reward.ee_vel_scale,
             "action_rate": action_rate * self.cfg.reward.action_rate_scale,
             "joint_vel": joint_vel_norm * self.cfg.reward.joint_vel_scale,
@@ -444,6 +475,14 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self._randomize_controller(env_ids)
         self._sample_reachable_start_and_trajectory(env_ids)
         self._update_command()
+
+        # Seed the observation history for the reset envs with their current frame
+        # so the stacked observation does not mix in stale frames from the prior
+        # episode. The subsequent `_get_observations` rolls in the same frame again.
+        if self.obs_history_length > 1:
+            policy_obs, critic_obs = self._compute_single_obs()
+            self.obs_history[env_ids] = policy_obs[env_ids].unsqueeze(1)
+            self.critic_history[env_ids] = critic_obs[env_ids].unsqueeze(1)
 
     def _set_franka_to_reset_pose(self, env_ids: torch.Tensor):
         """Teleport the arm to the nominal `ctrl.reset_joints` configuration."""
@@ -501,12 +540,21 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             return
 
         import json
+        import os
         import subprocess
         import sys
 
         from force_tool.utils import curobo_ik_worker
 
         cfg = self.cfg.init
+        # cuRobo/warp default to cuda:0 for the solver and kernel launches, so pin
+        # the worker to our physics GPU via CUDA_VISIBLE_DEVICES and address it as
+        # cuda:0 inside the worker. This avoids the device mismatch (e.g. goal
+        # tensors on cuda:1 while kernels launch on cuda:0) when self.device != cuda:0.
+        device = torch.device(self.device)
+        gpu_index = device.index if device.index is not None else 0
+        worker_env = os.environ.copy()
+        worker_env["CUDA_VISIBLE_DEVICES"] = str(gpu_index)
         worker_cfg = {
             "robot_cfg": cfg.ik_robot_cfg,
             "num_seeds": cfg.ik_num_seeds,
@@ -515,13 +563,14 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             "position_tolerance": cfg.reach_pos_tol,
             "orientation_tolerance": cfg.reach_rot_tol,
             "use_cuda_graph": cfg.ik_use_cuda_graph,
-            "device": str(self.device),
+            "device": "cuda:0",
         }
         self._ik_worker_mod = curobo_ik_worker
         self._ik_proc = subprocess.Popen(
             [sys.executable, curobo_ik_worker.__file__, json.dumps(worker_cfg)],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
+            env=worker_env,
         )
 
     def _solve_curobo_ik(self, fingertip_pos: torch.Tensor, fingertip_quat: torch.Tensor, env_ids: torch.Tensor):
