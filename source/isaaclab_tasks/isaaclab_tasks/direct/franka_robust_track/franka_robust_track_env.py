@@ -35,19 +35,18 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self.prev_actions = torch.zeros_like(self.actions)
         self.ctrl_target_joint_pos = torch.zeros((self.num_envs, self._robot.num_joints), device=self.device)
 
-        # Observation history: the policy/critic input is the last
-        # `obs_history_length` single-step frames concatenated oldest->newest into
-        # one flat vector. cfg.observation_space / cfg.state_space already hold the
-        # flattened (history * single-frame) sizes, so recover the single-frame
-        # dims by dividing out the history length. H = 1 keeps the single-step obs.
+        # Observation history: only the proprioceptive part is stacked over the last
+        # `obs_history_length` frames (concatenated oldest->newest) so the network
+        # can infer velocities/dynamics from the past. The lookahead future errors
+        # and the critic's privileged dims are forward-looking / episode-constant, so
+        # they are appended once from the current frame rather than duplicated across
+        # the history. H = 1 keeps the single-step observation.
         self.obs_history_length = max(1, int(self.cfg.obs_history_length))
-        self.single_obs_dim = self.cfg.observation_space // self.obs_history_length
-        self.single_state_dim = self.cfg.state_space // self.obs_history_length
-        self.obs_history = torch.zeros(
-            (self.num_envs, self.obs_history_length, self.single_obs_dim), device=self.device
-        )
-        self.critic_history = torch.zeros(
-            (self.num_envs, self.obs_history_length, self.single_state_dim), device=self.device
+        self.proprio_dim = 20
+        self.future_dim = 6 * self.cfg.tracking.num_future_steps
+        self.privileged_dim = 23
+        self.proprio_history = torch.zeros(
+            (self.num_envs, self.obs_history_length, self.proprio_dim), device=self.device
         )
 
         self.command_pos = torch.zeros((self.num_envs, 3), device=self.device)
@@ -141,6 +140,21 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             key: torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
             for key in ["pos_track", "rot_track", "ee_vel", "action_rate", "joint_vel", "joint_limit"]
         }
+
+        # Per-episode-step tracking-error profile: bin the pos/rot tracking error
+        # by the step index within the episode, then periodically emit a mean±std
+        # line plot to wandb. All envs step in lockstep (fixed-length episodes, no
+        # early termination), so each bin collects one num_envs-sized sample per
+        # episode; accumulating over several episodes yields the spread. This tests
+        # whether the error drops in later stages as the policy gains more context.
+        self._perstep_num_bins = int(self.max_episode_length)
+        self._perstep_pos_sum = torch.zeros(self._perstep_num_bins, device=self.device)
+        self._perstep_pos_sqsum = torch.zeros(self._perstep_num_bins, device=self.device)
+        self._perstep_rot_sum = torch.zeros(self._perstep_num_bins, device=self.device)
+        self._perstep_rot_sqsum = torch.zeros(self._perstep_num_bins, device=self.device)
+        self._perstep_count = torch.zeros(self._perstep_num_bins, device=self.device)
+        self._perstep_log_every = int(self.cfg.log_perstep_error_episodes) * self._perstep_num_bins
+        self._perstep_step_counter = 0
 
         self.set_debug_vis(self.cfg.debug_vis)
 
@@ -371,24 +385,27 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self._robot.set_joint_position_target(self.ctrl_target_joint_pos)
         self._robot.set_joint_effort_target(self.joint_torque)
 
-    def _compute_single_obs(self) -> tuple[torch.Tensor, torch.Tensor]:
-        """Build the single-step policy and critic observation frames."""
+    def _compute_obs_parts(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Build the current-frame observation parts.
+
+        Returns (proprio, future_errors, privileged): `proprio` is the part stacked
+        over history, `future_errors` is the lookahead reference (policy + critic),
+        and `privileged` is the critic-only privileged information.
+        """
         self._compute_intermediate_values()
         self._update_command()
         future_errors = self._future_command_errors()
-        policy_obs = torch.cat(
+        proprio = torch.cat(
             [
                 self.fingertip_midpoint_pos,
                 self.fingertip_midpoint_quat,
                 self.joint_pos[:, 0:7],
-                future_errors,
                 self.actions,
             ],
             dim=-1,
         )
-        critic_obs = torch.cat(
+        privileged = torch.cat(
             [
-                policy_obs,
                 self.payload_mass,
                 self.payload_com,
                 self.joint_friction,
@@ -398,22 +415,22 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             ],
             dim=-1,
         )
-        return policy_obs, critic_obs
+        return proprio, future_errors, privileged
 
     def _get_observations(self) -> dict:
-        policy_obs, critic_obs = self._compute_single_obs()
+        proprio, future_errors, privileged = self._compute_obs_parts()
         if self.obs_history_length == 1:
-            return {"policy": policy_obs, "critic": critic_obs}
+            proprio_stacked = proprio
+        else:
+            # Shift the proprio history left by one frame and append the newest
+            # frame, then flatten oldest->newest into a single vector per env.
+            self.proprio_history = torch.roll(self.proprio_history, shifts=-1, dims=1)
+            self.proprio_history[:, -1] = proprio
+            proprio_stacked = self.proprio_history.reshape(self.num_envs, -1)
 
-        # Shift the history left by one frame and append the newest frame, then
-        # flatten oldest->newest into a single vector per env.
-        self.obs_history = torch.roll(self.obs_history, shifts=-1, dims=1)
-        self.obs_history[:, -1] = policy_obs
-        self.critic_history = torch.roll(self.critic_history, shifts=-1, dims=1)
-        self.critic_history[:, -1] = critic_obs
-        policy_stacked = self.obs_history.reshape(self.num_envs, -1)
-        critic_stacked = self.critic_history.reshape(self.num_envs, -1)
-        return {"policy": policy_stacked, "critic": critic_stacked}
+        policy_obs = torch.cat([proprio_stacked, future_errors], dim=-1)
+        critic_obs = torch.cat([proprio_stacked, future_errors, privileged], dim=-1)
+        return {"policy": policy_obs, "critic": critic_obs}
 
     def _get_rewards(self) -> torch.Tensor:
         self._compute_intermediate_values()
@@ -447,6 +464,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self.extras["curr_successes"] = successes.float().mean()
         self.extras["tracking_pos_error"] = pos_error_norm.mean()
         self.extras["tracking_rot_error"] = rot_error_norm.mean()
+        self._accumulate_perstep_error(pos_error_norm.detach(), rot_error_norm.detach())
         return reward
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
@@ -476,13 +494,12 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self._sample_reachable_start_and_trajectory(env_ids)
         self._update_command()
 
-        # Seed the observation history for the reset envs with their current frame
-        # so the stacked observation does not mix in stale frames from the prior
+        # Seed the proprio history for the reset envs with their current frame so
+        # the stacked observation does not mix in stale frames from the prior
         # episode. The subsequent `_get_observations` rolls in the same frame again.
         if self.obs_history_length > 1:
-            policy_obs, critic_obs = self._compute_single_obs()
-            self.obs_history[env_ids] = policy_obs[env_ids].unsqueeze(1)
-            self.critic_history[env_ids] = critic_obs[env_ids].unsqueeze(1)
+            proprio, _, _ = self._compute_obs_parts()
+            self.proprio_history[env_ids] = proprio[env_ids].unsqueeze(1)
 
     def _set_franka_to_reset_pose(self, env_ids: torch.Tensor):
         """Teleport the arm to the nominal `ctrl.reset_joints` configuration."""
@@ -994,6 +1011,82 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             rot_error_type="axis_angle",
         )
         return pos_error, rot_error
+
+    def _accumulate_perstep_error(self, pos_error_norm: torch.Tensor, rot_error_norm: torch.Tensor):
+        """Bin the per-step tracking error by episode step and log a profile periodically."""
+        if self._perstep_log_every <= 0:
+            return
+        step_idx = self.episode_length_buf.clamp(0, self._perstep_num_bins - 1)
+        self._perstep_pos_sum.index_add_(0, step_idx, pos_error_norm)
+        self._perstep_pos_sqsum.index_add_(0, step_idx, pos_error_norm.square())
+        self._perstep_rot_sum.index_add_(0, step_idx, rot_error_norm)
+        self._perstep_rot_sqsum.index_add_(0, step_idx, rot_error_norm.square())
+        self._perstep_count.index_add_(0, step_idx, torch.ones_like(pos_error_norm))
+        self._perstep_step_counter += 1
+        if self._perstep_step_counter >= self._perstep_log_every:
+            self._log_perstep_error_profile()
+            self._reset_perstep_error()
+
+    def _reset_perstep_error(self):
+        self._perstep_pos_sum.zero_()
+        self._perstep_pos_sqsum.zero_()
+        self._perstep_rot_sum.zero_()
+        self._perstep_rot_sqsum.zero_()
+        self._perstep_count.zero_()
+        self._perstep_step_counter = 0
+
+    def _log_perstep_error_profile(self):
+        """Log a mean±std line plot of the per-episode-step tracking error to wandb."""
+        import wandb
+
+        if wandb.run is None:
+            return
+
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        valid = self._perstep_count > 0
+        if not torch.any(valid):
+            return
+        count_safe = self._perstep_count.clamp(min=1.0)
+        pos_mean = self._perstep_pos_sum / count_safe
+        pos_std = (self._perstep_pos_sqsum / count_safe - pos_mean.square()).clamp(min=0.0).sqrt()
+        rot_mean = self._perstep_rot_sum / count_safe
+        rot_std = (self._perstep_rot_sqsum / count_safe - rot_mean.square()).clamp(min=0.0).sqrt()
+
+        steps = torch.arange(self._perstep_num_bins, device=self.device)[valid]
+        time_s = (steps.float() * self.step_dt).cpu().numpy()
+        pos_mean_np = pos_mean[valid].cpu().numpy()
+        pos_std_np = pos_std[valid].cpu().numpy()
+        rot_mean_np = rot_mean[valid].cpu().numpy()
+        rot_std_np = rot_std[valid].cpu().numpy()
+
+        fig, axes = plt.subplots(1, 2, figsize=(11, 4))
+        axes[0].plot(time_s, pos_mean_np, color="C0", label="mean")
+        axes[0].fill_between(
+            time_s, pos_mean_np - pos_std_np, pos_mean_np + pos_std_np, color="C0", alpha=0.25, label="±1 std"
+        )
+        axes[0].set_xlabel("time in episode (s)")
+        axes[0].set_ylabel("position error (m)")
+        axes[0].set_title("Per-step position tracking error")
+        axes[0].legend()
+        axes[0].grid(True, alpha=0.3)
+
+        axes[1].plot(time_s, rot_mean_np, color="C1", label="mean")
+        axes[1].fill_between(
+            time_s, rot_mean_np - rot_std_np, rot_mean_np + rot_std_np, color="C1", alpha=0.25, label="±1 std"
+        )
+        axes[1].set_xlabel("time in episode (s)")
+        axes[1].set_ylabel("orientation error (rad)")
+        axes[1].set_title("Per-step orientation tracking error")
+        axes[1].legend()
+        axes[1].grid(True, alpha=0.3)
+
+        fig.tight_layout()
+        wandb.log({"tracking/perstep_error_profile": wandb.Image(fig)})
+        plt.close(fig)
 
     def _joint_limit_penalty(self):
         soft_limit = 0.95 * math.pi

@@ -167,11 +167,18 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
     # lookahead targets, and the full episode path (sampled in time).
     debug_vis: bool = False
     debug_vis_path_samples: int = 40
-    # observation_space / state_space are recomputed in __post_init__ from the
-    # number of lookahead poses (tracking.num_future_steps) and obs_history_length.
-    # Single-frame values for the default num_future_steps = 4 are 20 proprio +
-    # 6*4 future errors = 44 (critic adds 23 privileged dims = 67); the spaces
-    # below are then multiplied by obs_history_length.
+
+    # Per-episode-step tracking-error profile logged to wandb as a mean±std line
+    # plot. The pos/rot tracking error is binned by the step index within the
+    # episode and accumulated over this many episodes, after which the profile is
+    # logged and the accumulators are reset. Set <= 0 to disable the logging.
+    log_perstep_error_episodes: int = 5
+    # observation_space / state_space are recomputed in __post_init__. Only the
+    # proprioceptive part (20 dims) is stacked over obs_history_length frames so
+    # the network can infer velocities/dynamics from the past. The lookahead future
+    # errors (6 * num_future_steps) are forward-looking reference info and the
+    # critic's privileged dims (23) are episode-constant, so both are appended once
+    # from the current frame rather than duplicated across the history.
     observation_space = 44
     state_space = 67
 
@@ -299,6 +306,8 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             self.debug_vis = env.debug_vis
         if env.get("debug_vis_path_samples", None) is not None:
             self.debug_vis_path_samples = env.debug_vis_path_samples
+        if env.get("log_perstep_error_episodes", None) is not None:
+            self.log_perstep_error_episodes = int(env.log_perstep_error_episodes)
 
         ctrl = env.get("ctrl", OmegaConf.create({}))
         for key in [
@@ -390,8 +399,8 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
         proprio_dim = 20
         future_dim = 6 * self.tracking.num_future_steps
         privileged_dim = 23
-        single_obs_dim = proprio_dim + future_dim
-        single_state_dim = single_obs_dim + privileged_dim
         history = max(1, int(self.obs_history_length))
-        self.observation_space = single_obs_dim * history
-        self.state_space = single_state_dim * history
+        # Only proprio is stacked over history; future errors (policy+critic) and
+        # privileged dims (critic) are appended once from the current frame.
+        self.observation_space = proprio_dim * history + future_dim
+        self.state_space = proprio_dim * history + future_dim + privileged_dim
