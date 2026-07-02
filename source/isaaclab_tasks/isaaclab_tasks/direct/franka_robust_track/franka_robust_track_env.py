@@ -479,6 +479,9 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         return torch.zeros_like(time_out), time_out
 
     def _reset_idx(self, env_ids: torch.Tensor | None):
+        import time
+
+        reset_start = time.perf_counter()
         if env_ids is None or len(env_ids) == self.num_envs:
             env_ids = self._robot._ALL_INDICES
 
@@ -498,7 +501,9 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self.prev_actions[env_ids] = 0.0
         self._randomize_dynamics(env_ids)
         self._randomize_controller(env_ids)
-        self._sample_reachable_start_and_trajectory(env_ids)
+        sample_start = time.perf_counter()
+        sample_stats = self._sample_reachable_start_and_trajectory(env_ids)
+        sample_time = time.perf_counter() - sample_start
         self._update_command()
 
         # Seed the proprio history for the reset envs with their current frame so
@@ -507,6 +512,22 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         if self.obs_history_length > 1:
             proprio, _, _ = self._compute_obs_parts()
             self.proprio_history[env_ids] = proprio[env_ids].unsqueeze(1)
+
+        # Wall-clock cost of the reset, dominated by the cuRobo reachability search.
+        reset_time = time.perf_counter() - reset_start
+        self.extras["log"]["Timing/reset_time_s"] = torch.tensor(reset_time, device=self.device)
+        self.extras["log"]["Timing/reachability_sample_time_s"] = torch.tensor(
+            sample_time, device=self.device
+        )
+        avg_jump_str = "[" + ", ".join(f"{v:.3f}" for v in sample_stats["avg_joint_jump"]) + "]"
+        print(
+            f"[FrankaRobustTrack] reset {len(env_ids)} envs in {reset_time:.3f}s "
+            f"(reachability sample {sample_time:.3f}s) | "
+            f"candidates sampled {sample_stats['sampled']}, good {sample_stats['good']} "
+            f"(unreachable {sample_stats['unreachable']}, discontinuous {sample_stats['discontinuous']}), "
+            f"envs filled {sample_stats['filled']}/{sample_stats['total']} "
+            f"in {sample_stats['attempts']} attempt(s) | avg joint jump {avg_jump_str}"
+        )
 
     def _set_franka_to_reset_pose(self, env_ids: torch.Tensor):
         """Teleport the arm to the nominal `ctrl.reset_joints` configuration."""
@@ -690,18 +711,37 @@ class FrankaRobustTrackEnv(DirectRLEnv):
 
         bad_envs = env_ids.clone()
         attempt = 0
+        total_sampled = 0
+        total_good = 0
+        total_reach_fail = 0
+        total_cont_fail = 0
+        # Per-joint |Δq| accumulated over waypoint transitions where both endpoints
+        # were reachable, to report the average continuity of the sampled chains.
+        joint_jump_sum = torch.zeros(7, device=self.device)
+        joint_jump_count = 0
+        # Accepted (reachable + continuous) candidates accumulated across attempts.
+        # Any envs still pending after the last attempt are backfilled by resampling
+        # (with replacement) from these known-good trajectories rather than arbitrary
+        # ones; per-env domain randomization still differentiates repeated trajectories.
+        accepted_store = {key: [] for key in self._TRAJ_PARAM_BUFFERS}
+        accepted_start_q = []
         while True:
             n_bad = len(bad_envs)
-            # Draw `k` candidate trajectories per pending env (env-major flatten:
-            # candidate index c = b * k + j maps to env bad_envs[b]).
+            total_sampled += n_bad * k
+            # Draw a pool of n_bad*k candidate trajectories. `cand_env_ids` only
+            # feeds the IK frame conversion, which is identical across envs, so the
+            # candidates are not actually bound to specific envs.
             params = self._sample_candidate_params(bad_envs, k)
             cand_env_ids = bad_envs.repeat_interleave(k)
 
             # Walk the waypoints in order, seeding each solve with the previous
-            # solution and rejecting candidates whose joints jump between waypoints.
-            accept = torch.ones(n_bad * k, dtype=torch.bool, device=self.device)
+            # solution. Track reachability and continuity separately so we can report
+            # which one is rejecting candidates.
+            reach_ok = torch.ones(n_bad * k, dtype=torch.bool, device=self.device)
+            cont_ok = torch.ones(n_bad * k, dtype=torch.bool, device=self.device)
             cand_start_q = torch.zeros((n_bad * k, 7), device=self.device)
             prev_q = None
+            prev_success = None
             for i in range(num_wp):
                 elapsed_time = torch.full((n_bad * k, 1), waypoint_times[i].item(), device=self.device)
                 pos_i, quat_i = self._eval_pose_from_params(params, elapsed_time)
@@ -711,26 +751,58 @@ class FrankaRobustTrackEnv(DirectRLEnv):
                 )
                 success = success[:, 0]
                 arm_q = arm_q[:, 0]
-                accept &= success
+                reach_ok &= success
                 if prev_q is not None:
-                    joint_diff = (arm_q - prev_q).abs().amax(dim=-1)
-                    accept &= joint_diff <= cfg.reach_joint_diff_threshold
+                    joint_diff = (arm_q - prev_q).abs()  # (n*k, 7)
+                    cont_ok &= joint_diff.amax(dim=-1) <= cfg.reach_joint_diff_threshold
+                    # Only count transitions where both endpoints were reachable.
+                    both_ok = prev_success & success
+                    joint_jump_sum += joint_diff[both_ok].sum(dim=0)
+                    joint_jump_count += int(both_ok.sum().item())
                 if i == 0:
                     cand_start_q = arm_q.clone()
                 prev_q = arm_q
+                prev_success = success
 
-            # Pick the first accepted candidate per env (fallback to candidate 0 so
-            # envs that never pass still get a fresh, if invalid, trajectory).
-            accept_bk = accept.view(n_bad, k)
-            any_ok = accept_bk.any(dim=1)
-            sel_j = torch.argmax(accept_bk.int(), dim=1)
-            sel_flat = torch.arange(n_bad, device=self.device) * k + sel_j
-            self._assign_params_to_envs(bad_envs, params, sel_flat)
-            start_arm_q[bad_envs] = cand_start_q[sel_flat]
+            accept = reach_ok & cont_ok
+            total_good += int(accept.sum().item())
+            total_reach_fail += int((~reach_ok).sum().item())
+            total_cont_fail += int((reach_ok & ~cont_ok).sum().item())
 
-            bad_envs = bad_envs[(~any_ok).nonzero(as_tuple=False).squeeze(-1)]
+            # The whole pool of n_bad*k candidates is fungible: the start pose and
+            # trajectory are env-independent and the IK is solved in the (shared)
+            # base frame, so any accepted candidate is valid for any env. Randomly
+            # draw accepted candidates from the pool and assign them to the pending
+            # envs rather than tying each env to its own k candidates.
+            accepted_idx = accept.nonzero(as_tuple=False).squeeze(-1)
+            if accepted_idx.numel() > 0:
+                for key in self._TRAJ_PARAM_BUFFERS:
+                    accepted_store[key].append(params[key][accepted_idx])
+                accepted_start_q.append(cand_start_q[accepted_idx])
+                perm = accepted_idx[torch.randperm(accepted_idx.numel(), device=self.device)]
+                take = perm[: len(bad_envs)]
+                fill_envs = bad_envs[: take.numel()]
+                self._assign_params_to_envs(fill_envs, params, take)
+                start_arm_q[fill_envs] = cand_start_q[take]
+                bad_envs = bad_envs[take.numel() :]
+
             attempt += 1
             if bad_envs.shape[0] == 0 or attempt >= cfg.max_reach_attempts:
+                # Backfill: envs that never got their own accepted candidate reuse a
+                # randomly drawn accepted (reachable + continuous) trajectory. Repeats
+                # are fine since domain randomization still differs per env. If nothing
+                # was ever accepted, fall back to an arbitrary candidate from the pool.
+                if bad_envs.shape[0] > 0:
+                    if len(accepted_start_q) > 0:
+                        store = {key: torch.cat(vals, dim=0) for key, vals in accepted_store.items()}
+                        store_q = torch.cat(accepted_start_q, dim=0)
+                        pick = torch.randint(store_q.shape[0], (bad_envs.shape[0],), device=self.device)
+                        self._assign_params_to_envs(bad_envs, store, pick)
+                        start_arm_q[bad_envs] = store_q[pick]
+                    else:
+                        fb = torch.arange(bad_envs.shape[0], device=self.device)
+                        self._assign_params_to_envs(bad_envs, params, fb)
+                        start_arm_q[bad_envs] = cand_start_q[fb]
                 break
 
         # Discretize the (now-final) analytic trajectory onto the per-step grid.
@@ -746,7 +818,25 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self._robot.set_joint_position_target(self.ctrl_target_joint_pos)
         self._robot.set_joint_effort_target(torch.zeros_like(self.joint_pos))
         self.step_sim_no_action()
+        num_filled = int(len(env_ids) - bad_envs.shape[0])
         self.extras["log"]["Init/unreachable_envs"] = torch.tensor(float(bad_envs.shape[0]), device=self.device)
+        self.extras["log"]["Init/candidates_sampled"] = torch.tensor(float(total_sampled), device=self.device)
+        self.extras["log"]["Init/candidates_good"] = torch.tensor(float(total_good), device=self.device)
+        self.extras["log"]["Init/candidates_unreachable"] = torch.tensor(float(total_reach_fail), device=self.device)
+        self.extras["log"]["Init/candidates_discontinuous"] = torch.tensor(float(total_cont_fail), device=self.device)
+        avg_joint_jump = joint_jump_sum / max(joint_jump_count, 1)
+        for j in range(7):
+            self.extras["log"][f"Init/avg_joint_jump_{j}"] = avg_joint_jump[j]
+        return {
+            "sampled": total_sampled,
+            "good": total_good,
+            "unreachable": total_reach_fail,
+            "discontinuous": total_cont_fail,
+            "filled": num_filled,
+            "total": int(len(env_ids)),
+            "attempts": attempt,
+            "avg_joint_jump": avg_joint_jump.tolist(),
+        }
 
     def _sample_candidate_params(self, env_ids: torch.Tensor, num_candidates: int) -> dict:
         """Sample `num_candidates` start-pose + trajectory param sets per env.
@@ -794,14 +884,24 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         params["u"][:, 0] = 1.0
         params["v"][:, 1] = 1.0
 
-        if tcfg.mode == "line":
-            direction = torch.randn((m, 3), device=device)
-            direction = direction / torch.clamp(torch.linalg.norm(direction, dim=-1, keepdim=True), min=1.0e-6)
+        if tcfg.mode in ("line", "line_fixed"):
+            if tcfg.mode == "line_fixed":
+                # Fixed direction: same unit vector for every env / candidate.
+                direction = torch.tensor(tcfg.line_dir, device=device, dtype=torch.float32)
+                direction = direction / torch.clamp(torch.linalg.norm(direction), min=1.0e-6)
+                direction = direction.unsqueeze(0).expand(m, 3).contiguous()
+            else:
+                direction = torch.randn((m, 3), device=device)
+                direction = direction / torch.clamp(torch.linalg.norm(direction, dim=-1, keepdim=True), min=1.0e-6)
             params["dir"] = direction
-            speed_lo, speed_hi = tcfg.line_speed_range
-            params["speed"] = speed_lo + (speed_hi - speed_lo) * torch.rand((m, 1), device=device)
             length_lo, length_hi = tcfg.line_length_range
-            params["length"] = length_lo + (length_hi - length_lo) * torch.rand((m, 1), device=device)
+            length = length_lo + (length_hi - length_lo) * torch.rand((m, 1), device=device)
+            params["length"] = length
+            # Speed is not sampled independently: the line is traversed exactly
+            # once over the full episode, so speed = length / episode_length. This
+            # keeps the reference moving for the whole episode (no early saturation)
+            # regardless of the sampled length.
+            params["speed"] = length / self.max_episode_length_s
         elif tcfg.mode == "circle":
             # Random orthonormal plane basis (u, v) via Gram-Schmidt.
             u = torch.randn((m, 3), device=device)
@@ -863,7 +963,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         mode = self.cfg.tracking.mode
         start_pos = params["start_pos"]
         start_quat = params["start_quat"]
-        if mode == "line":
+        if mode in ("line", "line_fixed"):
             displacement = torch.minimum(params["speed"] * elapsed_time, params["length"])
             pos = start_pos + params["dir"] * displacement
         elif mode == "circle":

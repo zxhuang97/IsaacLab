@@ -64,8 +64,10 @@ class EventCfg:
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("held_asset"),
-            "static_friction_range": (0.75, 0.75),
-            "dynamic_friction_range": (0.75, 0.75),
+            # "static_friction_range": (0.75, 0.75),
+            # "dynamic_friction_range": (0.75, 0.75),
+            "static_friction_range": (0.3, 0.3),
+            "dynamic_friction_range": (0.3, 0.3),
             "restitution_range": (0.0, 0.0),
             "num_buckets": 1,
         },
@@ -76,7 +78,8 @@ class EventCfg:
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("fixed_asset"),
-            "static_friction_range": (0.25, 1.25),  # TODO: Set these values based on asset type.
+            # "static_friction_range": (0.25, 1.25),  # TODO: Set these values based on asset type.
+            "static_friction_range": (0.25, 0.25),  # TODO: Set these values based on asset type.
             "dynamic_friction_range": (0.25, 0.25),
             "restitution_range": (0.0, 0.0),
             "num_buckets": 128,

@@ -27,7 +27,7 @@ class CtrlCfg:
     """Low-level controller configuration."""
 
     backend: str = "factory_osc"  # factory_osc, dls_ik
-    ema_factor: float = 0.2
+    ema_factor: float = 1.0
 
     pos_action_threshold = [0.02, 0.02, 0.02]
     rot_action_threshold = [0.15, 0.15, 0.15]
@@ -54,12 +54,21 @@ class TrackingCfg:
     continuously-evaluated function of time.
     """
 
-    mode: str = "line"  # line, circle
+    mode: str = "line"  # line, line_fixed, circle
 
     # Straight-line trajectory: EE moves from its reset pose along a randomized
-    # 3D direction at constant speed, capped at a randomized path length.
-    line_speed_range = [0.03, 0.10]  # m/s
-    line_length_range = [0.10, 0.30]  # m, max displacement along the line
+    # 3D direction, covering a randomized path length. Speed is not sampled
+    # independently; the line is traversed exactly once over the full episode
+    # (speed = length / episode_length), so the reference keeps moving the whole
+    # episode regardless of the sampled length.
+    line_length_range = [0.10, 0.30]  # m, total displacement along the line
+
+    # "line_fixed" mode: identical to "line" but the direction is this fixed
+    # vector (base frame, normalized internally) instead of a random one. Combined
+    # with a fixed start pose (init.start_pos_box collapsed to a point,
+    # start_rot_noise=0) and a collapsed line_length_range this yields the exact
+    # same straight-line reference every reset.
+    line_dir = [1.0, 0.0, 0.0]
 
     # Circle trajectory: EE traces a circle in a randomized plane, anchored so
     # that t=0 coincides with the reset pose. Direction (cw/ccw) is randomized.
@@ -99,29 +108,29 @@ class InitCfg:
     start_rot_noise = 0.5  # rad, max random rotation angle about a random axis
 
     reach_check_waypoints: int = 8  # trajectory waypoints checked for reachability (incl. start)
-    reach_pos_tol: float = 0.01  # m, cuRobo IK position tolerance for success
-    reach_rot_tol: float = 0.05  # rad, cuRobo IK orientation tolerance for success
+    reach_pos_tol: float = 0.002  # m, cuRobo IK position tolerance for success
+    reach_rot_tol: float = 0.01  # rad, cuRobo IK orientation tolerance for success
     # Max allowed per-joint jump (rad) between consecutive waypoint IK solutions.
     # Each waypoint is solved seeded with the previous solution; an env is rejected
     # if any joint moves more than this between neighboring waypoints, so the whole
     # trajectory stays on a single continuous IK branch (no elbow flips / wrist
     # wraps) that the policy can actually track.
-    reach_joint_diff_threshold: float = 0.5
+    reach_joint_diff_threshold: float = 1
     # Candidate trajectories drawn per env each resample attempt. The reachability
     # + continuity check rejects many samples, so oversampling evaluates this many
     # independent candidates per env in one batched IK pass and keeps the first
     # accepted one, drastically cutting the number of sequential resample attempts.
-    reach_oversample: int = 8
-    ik_num_seeds: int = 16  # cuRobo IK seeds per waypoint
+    reach_oversample: int = 4
+    ik_num_seeds: int = 4  # cuRobo IK seeds per waypoint
     # Max IK queries solved per cuRobo call. A reset sends num_envs *
     # reach_check_waypoints queries; the worker splits larger requests into
     # chunks of this size to bound GPU memory (avoids OOM at high num_envs).
-    ik_batch_size: int = 1024
+    ik_batch_size: int = 2048
     ik_robot_cfg: str = "franka.yml"  # cuRobo robot config (base=panda_link0, tool=panda_hand)
     # CUDA-graph replay in the cuRobo worker triggers an illegal memory access at
     # large batch sizes; keep it off (a few tenths of a second slower per solve).
     ik_use_cuda_graph: bool = False
-    max_reach_attempts: int = 20  # resampling attempts before accepting the current sample
+    max_reach_attempts: int = 5  # resampling attempts before accepting the current sample
 
 
 @configclass
@@ -338,8 +347,8 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
         tracking = env.get("tracking", OmegaConf.create({}))
         for key in [
             "mode",
-            "line_speed_range",
             "line_length_range",
+            "line_dir",
             "circle_radius_range",
             "circle_speed_range",
             "rot_speed_range",

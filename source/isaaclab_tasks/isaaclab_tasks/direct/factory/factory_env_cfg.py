@@ -230,7 +230,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
             rot=[0.18913, -0.25231, -0.70188, 0.6387],
             convention="ros",
         ),
-        data_types=["distance_to_image_plane", "rgb"],
+        data_types=["rgb"],
         spawn=sim_utils.PinholeCameraCfg(clipping_range=(0.0001, 0.5)),
         width=224,
         height=224,
