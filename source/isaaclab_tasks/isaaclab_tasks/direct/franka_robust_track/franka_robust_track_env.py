@@ -1271,6 +1271,10 @@ class FrankaRobustTrackEnv(DirectRLEnv):
                 self.future_target_visualizer.set_visibility(False)
 
     def _debug_vis_callback(self, event):
+        # This callback is driven by a timeline event and can fire during
+        # shutdown, after the scene has already been torn down.
+        if not hasattr(self, "scene") or not hasattr(self, "command_pose_visualizer"):
+            return
         env_origins = self.scene.env_origins
 
         # Current reference pose (frame marker).
