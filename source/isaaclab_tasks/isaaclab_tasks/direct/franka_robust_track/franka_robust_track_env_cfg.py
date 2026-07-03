@@ -36,6 +36,12 @@ class CtrlCfg:
     # (payload merge + link-mass scaling included), i.e. a perfectly-modeled controller.
     use_gt_mass_matrix: bool = False
 
+    # Use the full operational-space control law: premultiply the task-space PD wrench
+    # by the task inertia Λ = (J M⁻¹ Jᵀ)⁻¹ so the closed-loop task dynamics are unit
+    # mass and the critical-damping gains (Kd = 2·√Kp) actually hold. Off gives the
+    # legacy Jacobian-transpose PD, which is under-damped and oscillates in free space.
+    use_task_space_inertia: bool = True
+
     pos_action_threshold = [0.02, 0.02, 0.02]
     rot_action_threshold = [0.15, 0.15, 0.15]
 
@@ -166,9 +172,11 @@ class RewardCfg:
     # matched to the error magnitude the policy actually operates at, otherwise the
     # kernel saturates to ~0 and provides no gradient (rot error runs ~1 rad, so a
     # tight temp like 0.1 leaves it in a flat dead zone).
-    pos_error_temp: float = 0.05  # m
-    rot_error_temp: float = 0.5  # rad
+    pos_error_temp: float = 0.01  # m
+    rot_error_temp: float = 0.1  # rad
     ee_vel_scale: float = -0.01
+    # Penalize step-to-step change in EE velocity (acceleration) for smoother motion.
+    ee_accel_scale: float = -0.01
     action_rate_scale: float = -0.02
     joint_vel_scale: float = -0.002
     joint_limit_scale: float = -0.05
@@ -341,6 +349,7 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "backend",
             "ema_factor",
             "use_gt_mass_matrix",
+            "use_task_space_inertia",
             "pos_action_threshold",
             "rot_action_threshold",
             "default_task_prop_gains",
@@ -407,6 +416,7 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "pos_error_temp",
             "rot_error_temp",
             "ee_vel_scale",
+            "ee_accel_scale",
             "action_rate_scale",
             "joint_vel_scale",
             "joint_limit_scale",

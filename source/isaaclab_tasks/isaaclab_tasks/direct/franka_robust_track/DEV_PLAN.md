@@ -5,7 +5,8 @@ Task: `Isaac-Franka-Robust-Track-v0`
 - Registration: `franka_robust_track/__init__.py`
 - Config: `franka_robust_track_env_cfg.py`
 - Env logic: `franka_robust_track_env.py`
-- Controller: `../factory/factory_control.py`
+- Controller: `osc_control.py` (own OSC; see Feature 7. `../factory/factory_control.py`
+  is still imported only for the pure `get_pose_error` math)
 - Launcher: `launchers/launch_rlgames_train_franka_robust_track.py`
 
 This document tracks planned feature changes. Each item lists the current
@@ -148,6 +149,47 @@ proxy.
 
 **Status:** [ ] not started — friction model refactor; motor-delay + sysid
 centering are follow-ups gated on actuator type and real FR3 data.
+
+---
+
+## Feature 7: Fix the OSC controller (missing task-space inertia)
+
+**Motivation:** A feed-forward diagnostic (`launchers/launch_franka_robust_track_feedforward.py`,
+which commands the next reference waypoint directly and plots target vs actual EE
+pose) showed the end-effector oscillating heavily — ~100 mm even holding a
+near-static target, and diverging to ~350 mm while tracking a moving reference.
+
+**Root cause**
+- The controller torque was a plain Jacobian-transpose PD:
+  `τ = Jᵀ (Kp·e − Kd·ẋ)`. The task-space inertia matrix `Λ = (J M⁻¹ Jᵀ)⁻¹` was
+  computed but only used for the nullspace term, never applied to the motion wrench.
+- With `Λ` omitted, the closed-loop task dynamics are `Λ·ẍ = Kp·e − Kd·ẋ`, so the
+  damping ratio is `ζ = Kd / (2√(Kp·Λ)) = 1/√Λ` (with `Kd = 2√Kp`). Since the
+  Franka's task inertia `Λ` is several kg (>1), the loop is always under-damped;
+  the critical-damping gains only hold if `Λ = 1`.
+- Factory/forge use the same law but hide the problem (lower Kp=100, 120 Hz
+  control, `ema_factor=0.2`, target clipped to a ±5 cm box, quasi-static contact,
+  and a trained policy as an outer loop). Robust-track's high Kp=300, 60 Hz, no
+  smoothing, fast free-space reference, evaluated open-loop, exposes it.
+
+**Fix (isolated to this env)**
+- New `osc_control.py`: full operational-space control law — premultiply the PD
+  wrench by `Λ` (`τ = Jᵀ · Λ · (Kp·e − Kd·ẋ)`) so the task dynamics reduce to a
+  unit mass (`ẍ = Kp·e − Kd·ẋ`) and `Kd = 2√Kp` is actually critical. Reuses only
+  the pure `get_pose_error` math from `factory_control`.
+- `CtrlCfg.use_task_space_inertia: bool = True` (`franka_robust_track_env_cfg.py`),
+  added to the `update_env_params` allow-list; passed through as `apply_task_inertia`.
+  `False` reproduces the legacy Jacobian-transpose PD.
+- `franka_robust_track_env._apply_factory_osc` now calls `osc_control.compute_dof_torque`
+  instead of `factory_control.compute_dof_torque`.
+- `../factory/factory_control.py` was reverted to upstream so factory/forge/automate
+  are unaffected.
+
+**Result:** open-loop feed-forward tracking went from ~100–350 mm oscillation to a
+steady ~1–2 mm lag (the expected small lag of a critically-damped follower), with
+orientation error decaying to ~0.
+
+**Status:** [x] done
 
 ---
 

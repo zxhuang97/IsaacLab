@@ -21,6 +21,7 @@ import isaacsim.core.utils.torch as torch_utils
 
 from isaaclab_tasks.direct.factory import factory_control, factory_utils
 
+from . import osc_control
 from .franka_robust_track_env_cfg import FrankaRobustTrackEnvCfg
 
 
@@ -111,6 +112,10 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self.fingertip_midpoint_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1)
         self.fingertip_midpoint_linvel = torch.zeros((self.num_envs, 3), device=self.device)
         self.fingertip_midpoint_angvel = torch.zeros((self.num_envs, 3), device=self.device)
+        # Previous-step fingertip velocity, used to penalize the step-to-step
+        # velocity change (acceleration) as a smoothness regularizer.
+        self.prev_fingertip_midpoint_linvel = torch.zeros((self.num_envs, 3), device=self.device)
+        self.prev_fingertip_midpoint_angvel = torch.zeros((self.num_envs, 3), device=self.device)
         self.fingertip_midpoint_jacobian = torch.zeros((self.num_envs, 6, 7), device=self.device)
         self.arm_mass_matrix = torch.eye(7, device=self.device).repeat(self.num_envs, 1, 1)
         self.joint_pos = torch.zeros((self.num_envs, self._robot.num_joints), device=self.device)
@@ -147,7 +152,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
 
         self._episode_sums = {
             key: torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
-            for key in ["pos_track", "rot_track", "ee_vel", "action_rate", "joint_vel", "joint_limit"]
+            for key in ["pos_track", "rot_track", "ee_vel", "ee_accel", "action_rate", "joint_vel", "joint_limit"]
         }
 
         # Per-episode-step tracking-error profile: bin the pos/rot tracking error
@@ -357,7 +362,9 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         return target_pos, target_quat
 
     def _apply_factory_osc(self, target_pos: torch.Tensor, target_quat: torch.Tensor):
-        self.joint_torque, self.applied_wrench = factory_control.compute_dof_torque(
+        # Use this env's own operational-space controller (see `osc_control`) rather
+        # than the shared factory/forge one, so the task-inertia fix stays isolated.
+        self.joint_torque, self.applied_wrench = osc_control.compute_dof_torque(
             cfg=self.cfg,
             dof_pos=self.joint_pos,
             dof_vel=self.joint_vel,
@@ -373,6 +380,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             task_deriv_gains=self.task_deriv_gains,
             device=self.device,
             nullspace_joint_target=self.nominal_start_joint_pos,
+            apply_task_inertia=self.cfg.ctrl.use_task_space_inertia,
         )
         self.ctrl_target_joint_pos[:, 7:] = 0.04
         self.joint_torque[:, 7:] = 0.0
@@ -451,6 +459,25 @@ class FrankaRobustTrackEnv(DirectRLEnv):
 
         policy_obs = torch.cat([proprio_stacked, future_errors], dim=-1)
         critic_obs = torch.cat([proprio_stacked, future_errors, privileged], dim=-1)
+
+        # Fail loud if a NaN/Inf reaches the policy/critic input. If this fires, the
+        # crash is env-side (controller / sim state) rather than the policy std
+        # diverging on its own; the named part tells you where the NaN entered.
+        parts = {
+            "fingertip_midpoint_pos": self.fingertip_midpoint_pos,
+            "fingertip_midpoint_quat": self.fingertip_midpoint_quat,
+            "joint_pos": self.joint_pos[:, 0:7],
+            "actions": self.actions,
+            "future_errors": future_errors,
+            "privileged": privileged,
+        }
+        bad = {k: int((~torch.isfinite(v)).any(dim=-1).sum()) for k, v in parts.items()}
+        if any(bad.values()):
+            raise RuntimeError(
+                f"Non-finite values in observation before feeding the policy: "
+                f"{ {k: n for k, n in bad.items() if n} } (per-part env counts). "
+                f"NaN originates in the env/controller, not the policy std."
+            )
         return {"policy": policy_obs, "critic": critic_obs}
 
     def _get_rewards(self) -> torch.Tensor:
@@ -462,6 +489,11 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         ee_vel_norm = torch.linalg.norm(self.fingertip_midpoint_linvel, dim=-1) + 0.1 * torch.linalg.norm(
             self.fingertip_midpoint_angvel, dim=-1
         )
+        ee_accel_norm = torch.linalg.norm(
+            self.fingertip_midpoint_linvel - self.prev_fingertip_midpoint_linvel, dim=-1
+        ) + 0.1 * torch.linalg.norm(self.fingertip_midpoint_angvel - self.prev_fingertip_midpoint_angvel, dim=-1)
+        self.prev_fingertip_midpoint_linvel = self.fingertip_midpoint_linvel.clone()
+        self.prev_fingertip_midpoint_angvel = self.fingertip_midpoint_angvel.clone()
         action_rate = torch.linalg.norm(self.actions - self.prev_actions, dim=-1)
         joint_vel_norm = torch.linalg.norm(self.joint_vel[:, 0:7], dim=-1)
         joint_limit_penalty = self._joint_limit_penalty()
@@ -470,6 +502,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             "pos_track": torch.exp(-pos_error_norm / self.cfg.reward.pos_error_temp) * self.cfg.reward.pos_error_scale,
             "rot_track": torch.exp(-rot_error_norm / self.cfg.reward.rot_error_temp) * self.cfg.reward.rot_error_scale,
             "ee_vel": ee_vel_norm * self.cfg.reward.ee_vel_scale,
+            "ee_accel": ee_accel_norm * self.cfg.reward.ee_accel_scale,
             "action_rate": action_rate * self.cfg.reward.action_rate_scale,
             "joint_vel": joint_vel_norm * self.cfg.reward.joint_vel_scale,
             "joint_limit": joint_limit_penalty * self.cfg.reward.joint_limit_scale,
@@ -515,6 +548,10 @@ class FrankaRobustTrackEnv(DirectRLEnv):
 
         self.actions[env_ids] = 0.0
         self.prev_actions[env_ids] = 0.0
+        # Seed prev velocity with the current (post-reset) velocity so the first
+        # step after reset sees zero velocity change instead of a spurious spike.
+        self.prev_fingertip_midpoint_linvel[env_ids] = self.fingertip_midpoint_linvel[env_ids]
+        self.prev_fingertip_midpoint_angvel[env_ids] = self.fingertip_midpoint_angvel[env_ids]
         self._randomize_dynamics(env_ids)
         self._randomize_controller(env_ids)
         sample_start = time.perf_counter()
@@ -616,6 +653,15 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         gpu_index = device.index if device.index is not None else 0
         worker_env = os.environ.copy()
         worker_env["CUDA_VISIBLE_DEVICES"] = str(gpu_index)
+        # The worker shares the GPU with the training/sim process, whose footprint
+        # grows over training. expandable_segments lets the worker's allocator
+        # return freed memory and fragment less, reducing collisions that OOM'd
+        # mid-solve; the worker also adaptively shrinks its batch on OOM.
+        alloc_conf = worker_env.get("PYTORCH_CUDA_ALLOC_CONF", "")
+        if "expandable_segments" not in alloc_conf:
+            worker_env["PYTORCH_CUDA_ALLOC_CONF"] = (
+                f"{alloc_conf},expandable_segments:True".lstrip(",")
+            )
         worker_cfg = {
             "robot_cfg": cfg.ik_robot_cfg,
             "num_seeds": cfg.ik_num_seeds,
