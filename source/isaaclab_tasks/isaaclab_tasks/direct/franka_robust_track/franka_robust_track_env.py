@@ -170,6 +170,17 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self._perstep_log_every = int(self.cfg.log_perstep_error_episodes) * self._perstep_num_bins
         self._perstep_step_counter = 0
 
+        # Running rollout mean of the batch tracking error. The rl_games observer
+        # only logs the *last* step's `tracking_*_error` per epoch; with synchronized
+        # fixed-length episodes that samples a single episode phase and aliases the
+        # per-episode reference transient into a sawtooth. Averaging over a full
+        # episode-length window (aligned with the synchronized resets) removes the
+        # phase dependence so the logged scalar is smooth.
+        self._track_err_window = int(self.max_episode_length)
+        self._track_err_pos_sum = torch.zeros((), device=self.device)
+        self._track_err_rot_sum = torch.zeros((), device=self.device)
+        self._track_err_count = 0
+
         # Latest per-step tracking error of env 0, cached for the video overlay.
         self._vis_pos_error_norm = None
         self._vis_rot_error_norm = None
@@ -516,8 +527,18 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             rot_error_norm < self.cfg.reward.success_rot_threshold,
         )
         self.extras["curr_successes"] = successes.float().mean()
-        self.extras["tracking_pos_error"] = pos_error_norm.mean()
-        self.extras["tracking_rot_error"] = rot_error_norm.mean()
+        # Start a fresh window once the previous one filled a full episode length.
+        # Reset happens at the top so the window mean is *complete* on the final
+        # episode step (the phase the rl_games observer actually logs).
+        if self._track_err_count >= self._track_err_window:
+            self._track_err_pos_sum.zero_()
+            self._track_err_rot_sum.zero_()
+            self._track_err_count = 0
+        self._track_err_pos_sum += pos_error_norm.mean()
+        self._track_err_rot_sum += rot_error_norm.mean()
+        self._track_err_count += 1
+        self.extras["tracking_pos_error"] = self._track_err_pos_sum / self._track_err_count
+        self.extras["tracking_rot_error"] = self._track_err_rot_sum / self._track_err_count
         self._accumulate_perstep_error(pos_error_norm.detach(), rot_error_norm.detach())
         self._vis_pos_error_norm = pos_error_norm.detach()
         self._vis_rot_error_norm = rot_error_norm.detach()
