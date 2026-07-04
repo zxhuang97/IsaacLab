@@ -128,7 +128,7 @@ class InitCfg:
     # if any joint moves more than this between neighboring waypoints, so the whole
     # trajectory stays on a single continuous IK branch (no elbow flips / wrist
     # wraps) that the policy can actually track.
-    reach_joint_diff_threshold: float = 1
+    reach_joint_diff_threshold: float = 0.5
     # Candidate trajectories drawn per env each resample attempt. The reachability
     # + continuity check rejects many samples, so oversampling evaluates this many
     # independent candidates per env in one batched IK pass and keeps the first
@@ -176,12 +176,12 @@ class RewardCfg:
     rot_error_temp: float = 0.1  # rad
     ee_vel_scale: float = -0.01
     # Penalize step-to-step change in EE velocity (acceleration) for smoother motion.
-    ee_accel_scale: float = -0.01
+    ee_accel_scale: float = -0.05
     action_rate_scale: float = -0.02
     joint_vel_scale: float = -0.002
     joint_limit_scale: float = -0.05
-    success_pos_threshold: float = 0.01
-    success_rot_threshold: float = 0.10
+    success_pos_threshold: float = 0.003
+    success_rot_threshold: float = 0.1
 
 
 @configclass
