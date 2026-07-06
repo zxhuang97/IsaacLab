@@ -44,8 +44,16 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         # they are appended once from the current frame rather than duplicated across
         # the history. H = 1 keeps the single-step observation.
         self.obs_history_length = max(1, int(self.cfg.obs_history_length))
-        self.proprio_dim = 20
+        # ee_pos(3)+ee_quat(4)+joint_pos(7) = 14, plus the (possibly gain-augmented)
+        # action vector fed back into the proprio observation.
+        self.action_dim = self.actions.shape[-1]
+        self.proprio_dim = 14 + self.action_dim
         self.future_dim = 6 * self.cfg.tracking.num_future_steps
+        # Force-tracking add-on: (current + lookahead) target-wrench block appended
+        # to the policy/critic observation when enabled.
+        self.enable_force = bool(self.cfg.tracking.enable_force)
+        self.force_dim = 3 * self.cfg.tracking.num_future_steps if self.enable_force else 0
+        self._force_mag_max = max(float(self.cfg.tracking.force_mag_range[1]), 1.0e-6)
         self.privileged_dim = 23
         self.proprio_history = torch.zeros(
             (self.num_envs, self.obs_history_length, self.proprio_dim), device=self.device
@@ -106,6 +114,17 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self.traj_pos_buf = torch.zeros((self.num_envs, self._traj_len, 3), device=self.device)
         self.traj_quat_buf = torch.zeros((self.num_envs, self._traj_len, 4), device=self.device)
         self.traj_quat_buf[..., 0] = 1.0
+        # Discretized target-wrench sequence (world/base-frame 3D force per step),
+        # sampled per env at reset when force tracking is enabled.
+        self.traj_wrench_buf = torch.zeros((self.num_envs, self._traj_len, 3), device=self.device)
+        # Per-step contact flag (True where a contact band is active), used to split
+        # tracking metrics into free-space vs contact phases.
+        self.traj_contact_buf = torch.zeros((self.num_envs, self._traj_len), dtype=torch.bool, device=self.device)
+        # Current-step target wrench (world frame), used for the applied external
+        # force and the debug visualization.
+        self.target_wrench = torch.zeros((self.num_envs, 3), device=self.device)
+        # Whether a contact band is active this step (for free/contact metric split).
+        self.current_contact = torch.zeros((self.num_envs,), dtype=torch.bool, device=self.device)
         self._env_arange = torch.arange(self.num_envs, device=self.device)
 
         self.fingertip_midpoint_pos = torch.zeros((self.num_envs, 3), device=self.device)
@@ -130,6 +149,10 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         )
         self.task_prop_gains = self.default_gains.clone()
         self.task_deriv_gains = factory_utils.get_deriv_gains(self.task_prop_gains)
+        # Bounds the policy-scheduled proportional gains are mapped into when
+        # ctrl.control_gains is enabled (normalized action [-1, 1] -> [min, max]).
+        self.gain_min = torch.tensor(self.cfg.ctrl.task_prop_gains_min, device=self.device).repeat(self.num_envs, 1)
+        self.gain_max = torch.tensor(self.cfg.ctrl.task_prop_gains_max, device=self.device).repeat(self.num_envs, 1)
 
         self.payload_mass = torch.zeros((self.num_envs, 1), device=self.device)
         self.payload_com = torch.zeros((self.num_envs, 3), device=self.device)
@@ -152,7 +175,16 @@ class FrankaRobustTrackEnv(DirectRLEnv):
 
         self._episode_sums = {
             key: torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
-            for key in ["pos_track", "rot_track", "ee_vel", "ee_accel", "action_rate", "joint_vel", "joint_limit"]
+            for key in [
+                "pos_track",
+                "rot_track",
+                "ee_vel",
+                "ee_accel",
+                "action_rate",
+                "gain_rate",
+                "joint_vel",
+                "joint_limit",
+            ]
         }
 
         # Per-episode-step tracking-error profile: bin the pos/rot tracking error
@@ -170,6 +202,21 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self._perstep_log_every = int(self.cfg.log_perstep_error_episodes) * self._perstep_num_bins
         self._perstep_step_counter = 0
 
+        # Policy-scheduled PD gain statistics: when the policy controls the gains,
+        # accumulate the per-step task_prop_gains (num_envs x 6) into running
+        # sum/sqsum (for mean/std) and per-dim histogram bins over [gain_min,
+        # gain_max], then periodically emit scalars + a histogram figure to wandb.
+        # Reuses the per-step-error logging cadence and is a no-op otherwise.
+        self._gain_stats_num_dims = 6
+        self._gain_hist_num_bins = 40
+        self._gain_sum = torch.zeros(self._gain_stats_num_dims, device=self.device)
+        self._gain_sqsum = torch.zeros(self._gain_stats_num_dims, device=self.device)
+        self._gain_count = torch.zeros((), device=self.device)
+        self._gain_hist = torch.zeros(
+            (self._gain_stats_num_dims, self._gain_hist_num_bins), device=self.device
+        )
+        self._gain_step_counter = 0
+
         # Running rollout mean of the batch tracking error. The rl_games observer
         # only logs the *last* step's `tracking_*_error` per epoch; with synchronized
         # fixed-length episodes that samples a single episode phase and aliases the
@@ -180,6 +227,20 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self._track_err_pos_sum = torch.zeros((), device=self.device)
         self._track_err_rot_sum = torch.zeros((), device=self.device)
         self._track_err_count = 0
+
+        # Same running-window mean, but split by whether a contact band is active
+        # this step (free-space vs contact phase). Sums accumulate per-env errors
+        # and successes with per-category counts so the logged scalar is the mean
+        # over all (env, step) samples of that category in the window. Reset in
+        # lockstep with the aggregate window above.
+        self._track_free_pos_sum = torch.zeros((), device=self.device)
+        self._track_free_rot_sum = torch.zeros((), device=self.device)
+        self._track_free_succ_sum = torch.zeros((), device=self.device)
+        self._track_free_count = torch.zeros((), device=self.device)
+        self._track_contact_pos_sum = torch.zeros((), device=self.device)
+        self._track_contact_rot_sum = torch.zeros((), device=self.device)
+        self._track_contact_succ_sum = torch.zeros((), device=self.device)
+        self._track_contact_count = torch.zeros((), device=self.device)
 
         # Latest per-step tracking error of env 0, cached for the video overlay.
         self._vis_pos_error_norm = None
@@ -218,6 +279,17 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         # body indices so reset targets (defined at the fingertip) can be converted.
         self.hand_body_idx = body_names.index("panda_hand")
         self.base_body_idx = body_names.index("panda_link0")
+
+        # Wrist force-sensor body: the target tracking wrench is applied here. Only
+        # required when force tracking is enabled (fail loudly if the asset lacks it).
+        if "force_sensor" in body_names:
+            self.force_sensor_body_idx = body_names.index("force_sensor")
+        elif self.enable_force:
+            raise RuntimeError(
+                f"tracking.enable_force is set but no 'force_sensor' body exists in {body_names}."
+            )
+        else:
+            self.force_sensor_body_idx = self.fingertip_body_idx
 
         self.arm_joint_ids = list(range(7))
         joint_names = list(self._robot.joint_names)
@@ -331,7 +403,12 @@ class FrankaRobustTrackEnv(DirectRLEnv):
 
     def _apply_action(self):
         self._compute_intermediate_values()
-        self._apply_payload_gravity()
+        self._update_gains_from_action()
+        if self.enable_force:
+            # Current step's target wrench (pre-increment episode index), applied
+            # as the external disturbance for this physics step.
+            self.target_wrench[:] = self._traj_wrench_at_index(self.episode_length_buf)
+        self._apply_external_wrenches()
         target_pos, target_quat = self._get_action_target_pose()
 
         if self.cfg.ctrl.backend == "factory_osc":
@@ -341,22 +418,56 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         else:
             raise ValueError(f"Unsupported Franka robust track controller backend: {self.cfg.ctrl.backend}")
 
-    def _apply_payload_gravity(self):
-        """Apply the payload weight as an external wrench on the payload body.
+    def _apply_external_wrenches(self):
+        """Apply the payload weight (and optional target tracking wrench) as external forces.
 
         Robot gravity is disabled (nominal gravity compensation is assumed perfect), so the payload
-        shows up exactly as its uncompensated weight `m * g`, acting at the payload CoM. The force is
-        rotated into the link frame each step since the wrench buffers are consumed in that frame.
+        shows up exactly as its uncompensated weight `m * g`, acting at the payload CoM. When force
+        tracking is enabled, the sampled target wrench (world-frame 3D force) is additionally applied
+        at the wrist `force_sensor` body's origin. Both forces are rotated into their respective link
+        frames since the wrench buffers are consumed in that frame, and are set in a single call so
+        the two bodies' external wrenches coexist within the step.
         """
         payload_quat_w = self._robot.data.body_quat_w[:, self.payload_body_idx]
-        force_w = self.payload_mass * self.gravity_vec
-        force_b = math_utils.quat_apply_inverse(payload_quat_w, force_w)
-        self._robot.set_external_force_and_torque(
-            forces=force_b.unsqueeze(1),
-            torques=torch.zeros((self.num_envs, 1, 3), device=self.device),
-            positions=self.payload_com.unsqueeze(1),
-            body_ids=[self.payload_body_idx],
+        payload_force_b = math_utils.quat_apply_inverse(payload_quat_w, self.payload_mass * self.gravity_vec)
+
+        if not self.enable_force:
+            self._robot.set_external_force_and_torque(
+                forces=payload_force_b.unsqueeze(1),
+                torques=torch.zeros((self.num_envs, 1, 3), device=self.device),
+                positions=self.payload_com.unsqueeze(1),
+                body_ids=[self.payload_body_idx],
+            )
+            return
+
+        fs_quat_w = self._robot.data.body_quat_w[:, self.force_sensor_body_idx]
+        fs_force_b = math_utils.quat_apply_inverse(fs_quat_w, self.target_wrench)
+
+        forces = torch.stack([payload_force_b, fs_force_b], dim=1)
+        torques = torch.zeros((self.num_envs, 2, 3), device=self.device)
+        positions = torch.stack(
+            [self.payload_com, torch.zeros((self.num_envs, 3), device=self.device)], dim=1
         )
+        self._robot.set_external_force_and_torque(
+            forces=forces,
+            torques=torques,
+            positions=positions,
+            body_ids=[self.payload_body_idx, self.force_sensor_body_idx],
+        )
+
+    def _update_gains_from_action(self):
+        """Map the gain action dims (6:12) to task PD gains when gain control is on.
+
+        The 6 gain actions are clamped to [-1, 1] and affinely mapped onto
+        [gain_min, gain_max]; the derivative gains are recomputed for critical
+        damping. No-op when `ctrl.control_gains` is False.
+        """
+        if not self.cfg.ctrl.control_gains:
+            return
+        gain_actions = self.actions[:, 6:12].clamp(-1.0, 1.0)
+        normalized = 0.5 * (gain_actions + 1.0)
+        self.task_prop_gains = self.gain_min + (self.gain_max - self.gain_min) * normalized
+        self.task_deriv_gains = factory_utils.get_deriv_gains(self.task_prop_gains)
 
     def _get_action_target_pose(self):
         pos_actions = self.actions[:, 0:3] * self.pos_threshold
@@ -468,8 +579,14 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             self.proprio_history[:, -1] = proprio
             proprio_stacked = self.proprio_history.reshape(self.num_envs, -1)
 
-        policy_obs = torch.cat([proprio_stacked, future_errors], dim=-1)
-        critic_obs = torch.cat([proprio_stacked, future_errors, privileged], dim=-1)
+        if self.enable_force:
+            future_wrench = self._future_wrench()
+            policy_obs = torch.cat([proprio_stacked, future_errors, future_wrench], dim=-1)
+            critic_obs = torch.cat([proprio_stacked, future_errors, future_wrench, privileged], dim=-1)
+        else:
+            future_wrench = None
+            policy_obs = torch.cat([proprio_stacked, future_errors], dim=-1)
+            critic_obs = torch.cat([proprio_stacked, future_errors, privileged], dim=-1)
 
         # Fail loud if a NaN/Inf reaches the policy/critic input. If this fires, the
         # crash is env-side (controller / sim state) rather than the policy std
@@ -482,6 +599,8 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             "future_errors": future_errors,
             "privileged": privileged,
         }
+        if future_wrench is not None:
+            parts["future_wrench"] = future_wrench
         bad = {k: int((~torch.isfinite(v)).any(dim=-1).sum()) for k, v in parts.items()}
         if any(bad.values()):
             raise RuntimeError(
@@ -505,7 +624,13 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         ) + 0.1 * torch.linalg.norm(self.fingertip_midpoint_angvel - self.prev_fingertip_midpoint_angvel, dim=-1)
         self.prev_fingertip_midpoint_linvel = self.fingertip_midpoint_linvel.clone()
         self.prev_fingertip_midpoint_angvel = self.fingertip_midpoint_angvel.clone()
-        action_rate = torch.linalg.norm(self.actions - self.prev_actions, dim=-1)
+        # Cartesian delta-pose action rate uses only the first 6 dims so it is
+        # unaffected by the optional gain dims, which get their own penalty.
+        action_rate = torch.linalg.norm(self.actions[:, 0:6] - self.prev_actions[:, 0:6], dim=-1)
+        if self.cfg.ctrl.control_gains:
+            gain_rate = torch.linalg.norm(self.actions[:, 6:12] - self.prev_actions[:, 6:12], dim=-1)
+        else:
+            gain_rate = torch.zeros(self.num_envs, device=self.device)
         joint_vel_norm = torch.linalg.norm(self.joint_vel[:, 0:7], dim=-1)
         joint_limit_penalty = self._joint_limit_penalty()
 
@@ -515,6 +640,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             "ee_vel": ee_vel_norm * self.cfg.reward.ee_vel_scale,
             "ee_accel": ee_accel_norm * self.cfg.reward.ee_accel_scale,
             "action_rate": action_rate * self.cfg.reward.action_rate_scale,
+            "gain_rate": gain_rate * self.cfg.reward.gain_rate_scale,
             "joint_vel": joint_vel_norm * self.cfg.reward.joint_vel_scale,
             "joint_limit": joint_limit_penalty * self.cfg.reward.joint_limit_scale,
         }
@@ -534,12 +660,21 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             self._track_err_pos_sum.zero_()
             self._track_err_rot_sum.zero_()
             self._track_err_count = 0
+            for buf in (
+                self._track_free_pos_sum, self._track_free_rot_sum, self._track_free_succ_sum,
+                self._track_free_count, self._track_contact_pos_sum, self._track_contact_rot_sum,
+                self._track_contact_succ_sum, self._track_contact_count,
+            ):
+                buf.zero_()
         self._track_err_pos_sum += pos_error_norm.mean()
         self._track_err_rot_sum += rot_error_norm.mean()
         self._track_err_count += 1
         self.extras["tracking_pos_error"] = self._track_err_pos_sum / self._track_err_count
         self.extras["tracking_rot_error"] = self._track_err_rot_sum / self._track_err_count
+        if self.enable_force:
+            self._accumulate_contact_split_metrics(pos_error_norm, rot_error_norm, successes)
         self._accumulate_perstep_error(pos_error_norm.detach(), rot_error_norm.detach())
+        self._accumulate_gain_stats()
         self._vis_pos_error_norm = pos_error_norm.detach()
         self._vis_rot_error_norm = rot_error_norm.detach()
         return reward
@@ -578,6 +713,8 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         sample_start = time.perf_counter()
         sample_stats = self._sample_reachable_start_and_trajectory(env_ids)
         sample_time = time.perf_counter() - sample_start
+        if self.enable_force:
+            self._sample_force_trajectory(env_ids)
         self._update_command()
 
         # Seed the proprio history for the reset envs with their current frame so
@@ -1088,9 +1225,136 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         idx = idx.clamp(0, self._traj_len - 1)
         return self.traj_pos_buf[self._env_arange, idx], self.traj_quat_buf[self._env_arange, idx]
 
+    def _traj_wrench_at_index(self, idx: torch.Tensor):
+        """Gather the discretized target wrench (world-frame 3D force) at step index `idx`."""
+        idx = idx.clamp(0, self._traj_len - 1)
+        return self.traj_wrench_buf[self._env_arange, idx]
+
+    def _smooth_osc(self, tau: torch.Tensor, num_components: int = 3) -> torch.Tensor:
+        """A smooth per-step signal in [-1, 1] built from a few random sinusoids.
+
+        `tau` is (n, L) time-since-onset in seconds. Frequencies are drawn in
+        `tracking.force_osc_freq_range`, phases uniformly, and the components are
+        combined with weights that sum to 1 so the weighted sum of unit sines stays
+        within [-1, 1]. The result varies continuously in time (no jumps).
+        """
+        n = tau.shape[0]
+        device = tau.device
+        freq_lo, freq_hi = self.cfg.tracking.force_osc_freq_range
+        freq = freq_lo + (freq_hi - freq_lo) * torch.rand((n, num_components), device=device)
+        phase = 2.0 * math.pi * torch.rand((n, num_components), device=device)
+        weights = torch.rand((n, num_components), device=device)
+        weights = weights / weights.sum(dim=-1, keepdim=True).clamp(min=1.0e-6)
+        ang = 2.0 * math.pi * freq.unsqueeze(-1) * tau.unsqueeze(1) + phase.unsqueeze(-1)  # (n, K, L)
+        return (weights.unsqueeze(-1) * torch.sin(ang)).sum(dim=1)  # (n, L)
+
+    def _sample_force_trajectory(self, env_ids: torch.Tensor):
+        """Sample a per-step target-wrench sequence for `env_ids` into `traj_wrench_buf`.
+
+        Models a handful of contact events: the force is zero for most of the
+        episode, punctuated by `force_num_bands_range` bands. The episode is split
+        into that many equal segments (per env), and each segment holds one band
+        placed at a random onset with a sampled duration, so bands never overlap and
+        stay spread out. Each band switches on suddenly (step, no ramp) and, while
+        active, varies smoothly: its magnitude oscillates continuously in
+        ``[0.5, 1.0] * peak`` (peak sampled per band in `force_mag_range`) and its
+        direction drifts smoothly around a random base direction by
+        ``force_dir_drift``. With probability ``1 - force_prob`` the env sees no
+        contact at all. Independent of the pose-reachability sampling since a wrist
+        force does not change IK reachability.
+        """
+        tcfg = self.cfg.tracking
+        device = self.device
+        n = len(env_ids)
+
+        band_lo, band_hi = tcfg.force_num_bands_range
+        max_bands = int(band_hi)
+        num_bands = torch.randint(int(band_lo), max_bands + 1, (n, 1), device=device)  # (n, 1)
+        seg_len = float(self.max_episode_length) / num_bands.float()  # (n, 1) steps per segment
+
+        steps = torch.arange(self._traj_len, device=device).unsqueeze(0)  # (1, L)
+        wrench = torch.zeros((n, self._traj_len, 3), device=device)
+        contact = torch.zeros((n, self._traj_len), dtype=torch.bool, device=device)
+
+        dur_lo, dur_hi = tcfg.force_duration_range
+        for b in range(max_bands):
+            use_b = b < num_bands  # (n, 1) bool: this env actually has a b-th band
+
+            # Duration (steps), capped so the band fits within its own segment.
+            duration_s = dur_lo + (dur_hi - dur_lo) * torch.rand((n, 1), device=device)
+            duration_steps = (duration_s / self.step_dt).round().clamp(min=1.0)
+            duration_steps = torch.minimum(duration_steps, seg_len.clamp(min=1.0))  # (n, 1)
+
+            # Random onset inside segment b: [b * seg_len, (b + 1) * seg_len - duration].
+            seg_start = b * seg_len
+            onset = seg_start + torch.rand((n, 1), device=device) * (seg_len - duration_steps).clamp(min=0.0)
+
+            active = (steps >= onset) & (steps < onset + duration_steps) & use_b  # (n, L)
+
+            # Smooth time-varying profile within this band (time measured from onset).
+            tau = (steps - onset).float() * self.step_dt  # (n, L)
+            mag_lo, mag_hi = tcfg.force_mag_range
+            peak = (mag_lo + (mag_hi - mag_lo) * torch.rand((n, 1), device=device)).clamp(max=20.0)
+            mag = peak * (0.75 + 0.25 * self._smooth_osc(tau))  # (n, L)
+
+            base_dir = torch.randn((n, 3), device=device)
+            base_dir = base_dir / torch.clamp(torch.linalg.norm(base_dir, dim=-1, keepdim=True), min=1.0e-6)
+            perp1, perp2 = self._orthonormal_basis(base_dir)
+            s1 = self._smooth_osc(tau).unsqueeze(-1)
+            s2 = self._smooth_osc(tau).unsqueeze(-1)
+            dir_raw = base_dir.unsqueeze(1) + tcfg.force_dir_drift * (
+                perp1.unsqueeze(1) * s1 + perp2.unsqueeze(1) * s2
+            )  # (n, L, 3)
+            direction = dir_raw / torch.clamp(torch.linalg.norm(dir_raw, dim=-1, keepdim=True), min=1.0e-6)
+
+            active_f = active.float()
+            # Segments are disjoint, so bands never overlap: accumulate is safe.
+            wrench = wrench + direction * (mag * active_f).unsqueeze(-1)
+            contact = contact | active
+
+        if tcfg.force_prob < 1.0:
+            keep = torch.rand((n, 1), device=device) < tcfg.force_prob  # (n, 1)
+            wrench = wrench * keep.unsqueeze(-1)
+            contact = contact & keep
+
+        self.traj_wrench_buf[env_ids] = wrench
+        self.traj_contact_buf[env_ids] = contact
+
+    @staticmethod
+    def _orthonormal_basis(axis: torch.Tensor):
+        """Return two unit vectors spanning the plane orthogonal to `axis` (n, 3)."""
+        helper = torch.zeros_like(axis)
+        helper[:, 0] = 1.0
+        # Swap the helper axis where `axis` is nearly parallel to x to avoid a zero cross product.
+        near_x = axis[:, 0].abs() > 0.9
+        helper[near_x, 0] = 0.0
+        helper[near_x, 1] = 1.0
+        perp1 = torch.linalg.cross(axis, helper)
+        perp1 = perp1 / torch.clamp(torch.linalg.norm(perp1, dim=-1, keepdim=True), min=1.0e-6)
+        perp2 = torch.linalg.cross(axis, perp1)
+        return perp1, perp2
+
+    def _future_wrench(self) -> torch.Tensor:
+        """Current + `num_future_steps` lookahead target wrenches, normalized by peak.
+
+        Returns a (num_envs, 3 * num_future_steps) tensor of world-frame forces
+        scaled by 1 / force_mag_range[1] so the policy sees a roughly unit-range
+        signal (index 0 = current target, one per trajectory step).
+        """
+        num_steps = self.cfg.tracking.num_future_steps
+        base_idx = self.episode_length_buf
+        scale = 1.0 / self._force_mag_max
+        return torch.cat(
+            [self._traj_wrench_at_index(base_idx + i) * scale for i in range(num_steps)], dim=-1
+        )
+
     def _update_command(self):
-        """Set the current reference pose to the discretized waypoint at the current step."""
+        """Set the current reference pose (and target wrench) to the current step's waypoint."""
         self.command_pos[:], self.command_quat[:] = self._traj_pose_at_index(self.episode_length_buf)
+        if self.enable_force:
+            idx = self.episode_length_buf.clamp(0, self._traj_len - 1)
+            self.target_wrench[:] = self.traj_wrench_buf[self._env_arange, idx]
+            self.current_contact[:] = self.traj_contact_buf[self._env_arange, idx]
 
     def _future_command_errors(self) -> torch.Tensor:
         """Errors to `num_future_steps` lookahead reference poses (index 0 = now).
@@ -1151,7 +1415,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         # The payload is merged into the payload body as a rigid point mass: combined mass, mass-weighted
         # CoM, and parallel-axis inertia update. The simulated dynamics are then exactly "nominal robot +
         # point mass", while its weight is applied separately as an external wrench (robot gravity is
-        # disabled, see `_apply_payload_gravity`). The controller stays blind to all of this because it
+        # disabled, see `_apply_external_wrenches`). The controller stays blind to all of this because it
         # receives the reconstructed nominal mass matrix (see `_compute_arm_mass_matrix`).
         if rand_cfg.enable_payload:
             payload_mass_lower, payload_mass_upper = rand_cfg.payload_mass_range
@@ -1332,6 +1596,39 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         )
         return pos_error, rot_error
 
+    def _accumulate_contact_split_metrics(
+        self, pos_error_norm: torch.Tensor, rot_error_norm: torch.Tensor, successes: torch.Tensor
+    ):
+        """Accumulate tracking error/success split by free-space vs contact steps.
+
+        `self.current_contact` (num_envs,) flags which envs have a contact band
+        active this step. Per-env errors/successes are summed into free and contact
+        accumulators with their own counts, so the logged scalar is the mean over
+        all (env, step) samples of that category in the running window.
+        """
+        contact = self.current_contact
+        free = ~contact
+        succ_f = successes.float()
+
+        self._track_free_pos_sum += pos_error_norm[free].sum()
+        self._track_free_rot_sum += rot_error_norm[free].sum()
+        self._track_free_succ_sum += succ_f[free].sum()
+        self._track_free_count += free.sum()
+        self._track_contact_pos_sum += pos_error_norm[contact].sum()
+        self._track_contact_rot_sum += rot_error_norm[contact].sum()
+        self._track_contact_succ_sum += succ_f[contact].sum()
+        self._track_contact_count += contact.sum()
+
+        free_n = self._track_free_count.clamp(min=1.0)
+        contact_n = self._track_contact_count.clamp(min=1.0)
+        self.extras["tracking_pos_error_free"] = self._track_free_pos_sum / free_n
+        self.extras["tracking_rot_error_free"] = self._track_free_rot_sum / free_n
+        self.extras["success_free"] = self._track_free_succ_sum / free_n
+        self.extras["tracking_pos_error_contact"] = self._track_contact_pos_sum / contact_n
+        self.extras["tracking_rot_error_contact"] = self._track_contact_rot_sum / contact_n
+        self.extras["success_contact"] = self._track_contact_succ_sum / contact_n
+        self.extras["contact_fraction"] = contact.float().mean()
+
     def _accumulate_perstep_error(self, pos_error_norm: torch.Tensor, rot_error_norm: torch.Tensor):
         """Bin the per-step tracking error by episode step and log a profile periodically."""
         if self._perstep_log_every <= 0:
@@ -1406,6 +1703,82 @@ class FrankaRobustTrackEnv(DirectRLEnv):
 
         fig.tight_layout()
         wandb.log({"tracking/perstep_error_profile": wandb.Image(fig)})
+        plt.close(fig)
+
+    def _accumulate_gain_stats(self):
+        """Accumulate per-step policy-scheduled PD gains and log stats periodically."""
+        if not self.cfg.ctrl.control_gains or self._perstep_log_every <= 0:
+            return
+        gains = self.task_prop_gains.detach()
+        self._gain_sum += gains.sum(dim=0)
+        self._gain_sqsum += gains.square().sum(dim=0)
+        self._gain_count += gains.shape[0]
+
+        gain_min = self.gain_min[0]
+        gain_max = self.gain_max[0]
+        span = (gain_max - gain_min).clamp(min=1.0e-6)
+        normalized = (gains - gain_min) / span
+        bin_idx = (normalized * self._gain_hist_num_bins).long().clamp(0, self._gain_hist_num_bins - 1)
+        for d in range(self._gain_stats_num_dims):
+            self._gain_hist[d].index_add_(0, bin_idx[:, d], torch.ones_like(bin_idx[:, d], dtype=torch.float))
+
+        self._gain_step_counter += 1
+        if self._gain_step_counter >= self._perstep_log_every:
+            self._log_gain_stats()
+            self._reset_gain_stats()
+
+    def _reset_gain_stats(self):
+        self._gain_sum.zero_()
+        self._gain_sqsum.zero_()
+        self._gain_count.zero_()
+        self._gain_hist.zero_()
+        self._gain_step_counter = 0
+
+    def _log_gain_stats(self):
+        """Log mean/std scalars and a per-dim histogram of the scheduled PD gains to wandb."""
+        import wandb
+
+        if wandb.run is None or float(self._gain_count) <= 0:
+            return
+
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        mean = self._gain_sum / self._gain_count
+        std = (self._gain_sqsum / self._gain_count - mean.square()).clamp(min=0.0).sqrt()
+
+        # Axis labels: first 3 dims are translational stiffness, last 3 rotational.
+        axis_names = ["x", "y", "z", "rx", "ry", "rz"]
+        log_dict = {}
+        for d, name in enumerate(axis_names):
+            log_dict[f"gains/mean_{name}"] = float(mean[d])
+            log_dict[f"gains/std_{name}"] = float(std[d])
+
+        gain_min = self.gain_min[0].cpu().numpy()
+        gain_max = self.gain_max[0].cpu().numpy()
+        hist = self._gain_hist.cpu().numpy()
+
+        fig, axes = plt.subplots(2, 3, figsize=(14, 7))
+        axes = axes.flatten()
+        for d, name in enumerate(axis_names):
+            edges = torch.linspace(0.0, 1.0, self._gain_hist_num_bins + 1).cpu().numpy()
+            centers = 0.5 * (edges[:-1] + edges[1:])
+            centers = gain_min[d] + centers * (gain_max[d] - gain_min[d])
+            width = (gain_max[d] - gain_min[d]) / self._gain_hist_num_bins
+            axes[d].bar(centers, hist[d], width=width, color="C0", alpha=0.8)
+            axes[d].axvline(float(mean[d]), color="C3", linestyle="--", label=f"mean={float(mean[d]):.1f}")
+            axes[d].set_xlim(gain_min[d], gain_max[d])
+            axes[d].set_xlabel(f"prop gain [{name}]")
+            axes[d].set_ylabel("count")
+            axes[d].set_title(f"gain[{name}] (std={float(std[d]):.1f})")
+            axes[d].legend()
+            axes[d].grid(True, alpha=0.3)
+
+        fig.tight_layout()
+        log_dict["gains/histogram"] = wandb.Image(fig)
+        wandb.log(log_dict)
         plt.close(fig)
 
     def _joint_limit_penalty(self):

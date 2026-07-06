@@ -48,6 +48,16 @@ class CtrlCfg:
     reset_joints = [0.00871, -0.10368, -0.00794, -1.49139, -0.00083, 1.38774, 0.0]
     default_task_prop_gains = [300.0, 300.0, 300.0, 28.0, 28.0, 28.0]
     task_prop_gains_noise_level = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+    # If True, the policy also outputs the 6 task-space proportional gains
+    # (3 translational, 3 rotational) as extra action dims, mapped from the
+    # normalized [-1, 1] range onto [task_prop_gains_min, task_prop_gains_max].
+    # The derivative gains are recomputed from the commanded proportional gains
+    # each step. If False, gains stay at `default_task_prop_gains` (plus optional
+    # reset-time noise). This grows the action space by 6.
+    control_gains: bool = False
+    task_prop_gains_min = [100.0, 100.0, 100.0, 10.0, 10.0, 10.0]
+    task_prop_gains_max = [600.0, 600.0, 600.0, 60.0, 60.0, 60.0]
     joint_pos_kp: float = 80.0
     joint_pos_kd: float = 8.0
 
@@ -97,6 +107,35 @@ class TrackingCfg:
     # waypoints (index 0 = current target, one per trajectory step), so it can
     # infer the reference velocity from the future pose sequence.
     num_future_steps: int = 4
+
+    # Force-tracking add-on (independent of `mode`). When enabled, a per-step
+    # target-wrench sequence is sampled at reset alongside the pose trajectory,
+    # applied as an external force at the wrist `force_sensor` body during the
+    # episode, and fed to the policy (current + lookahead) so it can anticipate
+    # and compensate the disturbance. The force models *contact events*: it is zero
+    # for most of the episode, punctuated by a few contact bands. Each band switches
+    # on suddenly at a random onset and, while active, varies smoothly (continuous
+    # magnitude oscillation plus a gentle direction drift) rather than staying
+    # constant, then switches back off at the end of a sampled duration window.
+    enable_force: bool = False
+    force_mag_range = [5.0, 20.0]  # N, sampled peak contact magnitude (spec-capped at 20 N)
+    # Number of contact bands per episode, sampled per env (inclusive range). The
+    # episode is split into that many equal segments, each holding one band, so the
+    # bands never overlap and stay spread across the episode.
+    force_num_bands_range = [2, 3]
+    # Duration (s) each contact band stays active, sampled per band (capped so the
+    # band fits inside its segment).
+    force_duration_range = [0.3, 1.5]
+    # Probability that a contact event occurs at all in an episode; with the
+    # complementary probability the force stays zero for the whole episode.
+    force_prob: float = 1.0
+    # Frequency band (Hz) of the smooth oscillation of the force during contact.
+    # The magnitude and the direction drift are built from a few sinusoids drawn
+    # in this band, so the active force wobbles continuously instead of being flat.
+    force_osc_freq_range = [0.5, 3.0]
+    # Direction wobble amplitude (0 = fixed direction). The force direction drifts
+    # smoothly around its sampled base direction by roughly this fraction.
+    force_dir_drift: float = 0.3
 
 
 @configclass
@@ -178,6 +217,10 @@ class RewardCfg:
     # Penalize step-to-step change in EE velocity (acceleration) for smoother motion.
     ee_accel_scale: float = -0.05
     action_rate_scale: float = -0.02
+    # Penalize step-to-step change in the commanded controller gains (only active
+    # when ctrl.control_gains is True) to encourage smooth gain scheduling instead
+    # of chattering stiffness. Computed on the normalized [-1, 1] gain actions.
+    gain_rate_scale: float = -0.02
     joint_vel_scale: float = -0.002
     joint_limit_scale: float = -0.05
     success_pos_threshold: float = 0.003
@@ -354,6 +397,9 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "rot_action_threshold",
             "default_task_prop_gains",
             "task_prop_gains_noise_level",
+            "control_gains",
+            "task_prop_gains_min",
+            "task_prop_gains_max",
             "reset_joints",
             "joint_pos_kp",
             "joint_pos_kd",
@@ -371,6 +417,13 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "rot_speed_range",
             "rot_angle_range",
             "num_future_steps",
+            "enable_force",
+            "force_mag_range",
+            "force_num_bands_range",
+            "force_duration_range",
+            "force_prob",
+            "force_osc_freq_range",
+            "force_dir_drift",
         ]:
             if tracking.get(key, None) is not None:
                 setattr(self.tracking, key, _to_plain(tracking[key]))
@@ -420,6 +473,7 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "action_rate_scale",
             "joint_vel_scale",
             "joint_limit_scale",
+            "gain_rate_scale",
             "success_pos_threshold",
             "success_rot_threshold",
         ]:
@@ -431,16 +485,25 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
         self.robot.spawn.usd_path = f"{ASSET_DIR}/{self.robot_usd_path}"
         self.sim.render_interval = self.decimation
 
-        # Proprio obs: ee_pos(3)+ee_quat(4)+joint_pos(7)+actions(6) = 20 (velocity
+        # Action space: 6 Cartesian delta-pose dims (pos3 + rot3), plus 6 gain dims
+        # when ctrl.control_gains is enabled (policy schedules its own PD gains).
+        action_dim = 6 + (6 if self.ctrl.control_gains else 0)
+        self.action_space = action_dim
+
+        # Proprio obs: ee_pos(3)+ee_quat(4)+joint_pos(7)+actions(action_dim) (velocity
         # terms are omitted; the LSTM infers them from history). Each lookahead
         # pose contributes a (pos_error, axis_angle_error) pair = 6 dims. Critic
         # adds 23 privileged dims: payload_mass(1)+payload_com(3)+joint_friction(7)
         # +task_gains(6)+pos_threshold(3)+rot_threshold(3).
-        proprio_dim = 20
+        proprio_dim = 14 + action_dim
         future_dim = 6 * self.tracking.num_future_steps
         privileged_dim = 23
+        # Force-tracking add-on contributes a (current + lookahead) target-wrench
+        # block of 3 dims per step to both the policy and the critic observation.
+        force_dim = 3 * self.tracking.num_future_steps if self.tracking.enable_force else 0
         history = max(1, int(self.obs_history_length))
-        # Only proprio is stacked over history; future errors (policy+critic) and
-        # privileged dims (critic) are appended once from the current frame.
-        self.observation_space = proprio_dim * history + future_dim
-        self.state_space = proprio_dim * history + future_dim + privileged_dim
+        # Only proprio is stacked over history; future errors + target wrench
+        # (policy+critic) and privileged dims (critic) are appended once from the
+        # current frame.
+        self.observation_space = proprio_dim * history + future_dim + force_dim
+        self.state_space = proprio_dim * history + future_dim + force_dim + privileged_dim
