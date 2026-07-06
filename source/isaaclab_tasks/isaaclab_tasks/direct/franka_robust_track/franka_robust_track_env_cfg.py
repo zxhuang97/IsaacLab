@@ -184,6 +184,19 @@ class InitCfg:
     ik_use_cuda_graph: bool = False
     max_reach_attempts: int = 5  # resampling attempts before accepting the current sample
 
+    # Singularity filter. On top of reachability + continuity, reject any candidate
+    # trajectory whose per-waypoint arm configuration is too close to a kinematic
+    # singularity. Near-singular configs are where the OSC task-space inertia
+    # (J M⁻¹ Jᵀ)⁻¹ blows up, so small tracking errors explode into the rare
+    # fully-diverged episodes that dominate the tracking-error tail. The metric is
+    # computed analytically (modified-DH geometric Jacobian of the 7-DoF arm at
+    # panda_link8, base frame) from each cuRobo IK joint solution, so it adds no IK
+    # cost. A waypoint fails if manipulability sqrt(det(J Jᵀ)) < `min_manipulability`
+    # or condition number sigma_max/sigma_min > `max_jac_cond`.
+    singularity_check: bool = True
+    min_manipulability: float = 0.02
+    max_jac_cond: float = 50.0
+
 
 @configclass
 class RandomizationCfg:
@@ -443,6 +456,9 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "ik_robot_cfg",
             "ik_use_cuda_graph",
             "max_reach_attempts",
+            "singularity_check",
+            "min_manipulability",
+            "max_jac_cond",
         ]:
             if init.get(key, None) is not None:
                 setattr(self.init, key, _to_plain(init[key]))

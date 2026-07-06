@@ -216,6 +216,15 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             (self._gain_stats_num_dims, self._gain_hist_num_bins), device=self.device
         )
         self._gain_step_counter = 0
+        # Same gain sum/sqsum, but split by whether a contact band is active this
+        # step, so the scheduled-gain mean/std can be compared between free-space
+        # and contact phases (only populated when force tracking is enabled).
+        self._gain_free_sum = torch.zeros(self._gain_stats_num_dims, device=self.device)
+        self._gain_free_sqsum = torch.zeros(self._gain_stats_num_dims, device=self.device)
+        self._gain_free_count = torch.zeros((), device=self.device)
+        self._gain_contact_sum = torch.zeros(self._gain_stats_num_dims, device=self.device)
+        self._gain_contact_sqsum = torch.zeros(self._gain_stats_num_dims, device=self.device)
+        self._gain_contact_count = torch.zeros((), device=self.device)
 
         # Running rollout mean of the batch tracking error. The rl_games observer
         # only logs the *last* step's `tracking_*_error` per epoch; with synchronized
@@ -735,7 +744,8 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             f"[FrankaRobustTrack] reset {len(env_ids)} envs in {reset_time:.3f}s "
             f"(reachability sample {sample_time:.3f}s) | "
             f"candidates sampled {sample_stats['sampled']}, good {sample_stats['good']} "
-            f"(unreachable {sample_stats['unreachable']}, discontinuous {sample_stats['discontinuous']}), "
+            f"(unreachable {sample_stats['unreachable']}, discontinuous {sample_stats['discontinuous']}, "
+            f"singular {sample_stats['singular']}), "
             f"envs filled {sample_stats['filled']}/{sample_stats['total']} "
             f"in {sample_stats['attempts']} attempt(s) | avg joint jump {avg_jump_str}"
         )
@@ -850,10 +860,13 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         `fingertip_pos`/`fingertip_quat` are (n, W, ...) env-local targets for the
         envs in `env_ids`. Targets are converted fingertip->hand->base frame here,
         sent to the worker as a flat batch of n*W problems, and the returned
-        per-target success and arm joints are reshaped back. `seed_arm_q`, if given,
+        per-target success and arm joints are reshaped back.         `seed_arm_q`, if given,
         is a (n, W, 7) tensor of initial joint seeds (panda_joint1..7 order) passed
         to the solver so the returned solution stays near it. Returns
-        (success (n, W) bool, arm_q (n, W, 7)).
+        (success (n, W) bool, arm_q (n, W, 7), manip (n, W), cond (n, W)) where
+        `manip`/`cond` are the manipulability and Jacobian condition number of each
+        solved config (from cuRobo's geometric tool Jacobian), used to filter
+        near-singular samples.
         """
         self._ensure_ik_worker()
         n_envs, num_wp = fingertip_pos.shape[0], fingertip_pos.shape[1]
@@ -885,11 +898,13 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             raise RuntimeError(
                 f"cuRobo IK worker exited unexpectedly (return code {self._ik_proc.poll()}); see its stderr above."
             )
-        success_np, arm_q_np = response
+        success_np, arm_q_np, manip_np, cond_np = response
 
         success = torch.as_tensor(success_np, device=self.device).view(n_envs, num_wp)
         arm_q = torch.as_tensor(arm_q_np, device=self.device, dtype=torch.float32).view(n_envs, num_wp, 7)
-        return success, arm_q
+        manip = torch.as_tensor(manip_np, device=self.device, dtype=torch.float32).view(n_envs, num_wp)
+        cond = torch.as_tensor(cond_np, device=self.device, dtype=torch.float32).view(n_envs, num_wp)
+        return success, arm_q, manip, cond
 
     def close(self):
         """Tear down the cuRobo IK worker before closing the sim."""
@@ -925,6 +940,12 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         cfg = self.cfg.init
         num_wp = cfg.reach_check_waypoints
         k = max(1, int(cfg.reach_oversample))
+        # Singularity filter (getattr keeps old restored env.pkl configs working:
+        # absent -> disabled). A waypoint config is rejected when its geometric-
+        # Jacobian manipulability is too low or its condition number too high.
+        sing_check = bool(getattr(cfg, "singularity_check", False))
+        min_manip = float(getattr(cfg, "min_manipulability", 0.0))
+        max_cond = float(getattr(cfg, "max_jac_cond", float("inf")))
         # cuRobo arm-joint solution for each env's start pose; filled during the check.
         start_arm_q = self.joint_pos[:, 0:7].clone()
         waypoint_times = torch.linspace(0.0, self.max_episode_length_s, num_wp, device=self.device)
@@ -935,6 +956,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         total_good = 0
         total_reach_fail = 0
         total_cont_fail = 0
+        total_sing_fail = 0
         # Per-joint |Δq| accumulated over waypoint transitions where both endpoints
         # were reachable, to report the average continuity of the sampled chains.
         joint_jump_sum = torch.zeros(7, device=self.device)
@@ -959,6 +981,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             # which one is rejecting candidates.
             reach_ok = torch.ones(n_bad * k, dtype=torch.bool, device=self.device)
             cont_ok = torch.ones(n_bad * k, dtype=torch.bool, device=self.device)
+            sing_ok = torch.ones(n_bad * k, dtype=torch.bool, device=self.device)
             cand_start_q = torch.zeros((n_bad * k, 7), device=self.device)
             prev_q = None
             prev_success = None
@@ -966,12 +989,17 @@ class FrankaRobustTrackEnv(DirectRLEnv):
                 elapsed_time = torch.full((n_bad * k, 1), waypoint_times[i].item(), device=self.device)
                 pos_i, quat_i = self._eval_pose_from_params(params, elapsed_time)
                 seed = None if prev_q is None else prev_q.unsqueeze(1)
-                success, arm_q = self._solve_curobo_ik(
+                success, arm_q, manip, cond = self._solve_curobo_ik(
                     pos_i.unsqueeze(1), quat_i.unsqueeze(1), cand_env_ids, seed_arm_q=seed
                 )
                 success = success[:, 0]
                 arm_q = arm_q[:, 0]
                 reach_ok &= success
+                if sing_check:
+                    # Only gate reachable waypoints (unreachable ones already reject
+                    # the candidate and carry meaningless IK solutions).
+                    wp_sing_ok = (manip[:, 0] >= min_manip) & (cond[:, 0] <= max_cond)
+                    sing_ok &= wp_sing_ok | ~success
                 if prev_q is not None:
                     joint_diff = (arm_q - prev_q).abs()  # (n*k, 7)
                     cont_ok &= joint_diff.amax(dim=-1) <= cfg.reach_joint_diff_threshold
@@ -984,10 +1012,11 @@ class FrankaRobustTrackEnv(DirectRLEnv):
                 prev_q = arm_q
                 prev_success = success
 
-            accept = reach_ok & cont_ok
+            accept = reach_ok & cont_ok & sing_ok
             total_good += int(accept.sum().item())
             total_reach_fail += int((~reach_ok).sum().item())
             total_cont_fail += int((reach_ok & ~cont_ok).sum().item())
+            total_sing_fail += int((reach_ok & cont_ok & ~sing_ok).sum().item())
 
             # The whole pool of n_bad*k candidates is fungible: the start pose and
             # trajectory are env-independent and the IK is solved in the (shared)
@@ -1046,6 +1075,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self.extras["log"]["Init/candidates_good"] = torch.tensor(float(total_good), device=self.device)
         self.extras["log"]["Init/candidates_unreachable"] = torch.tensor(float(total_reach_fail), device=self.device)
         self.extras["log"]["Init/candidates_discontinuous"] = torch.tensor(float(total_cont_fail), device=self.device)
+        self.extras["log"]["Init/candidates_singular"] = torch.tensor(float(total_sing_fail), device=self.device)
         avg_joint_jump = joint_jump_sum / max(joint_jump_count, 1)
         for j in range(7):
             self.extras["log"][f"Init/avg_joint_jump_{j}"] = avg_joint_jump[j]
@@ -1054,6 +1084,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             "good": total_good,
             "unreachable": total_reach_fail,
             "discontinuous": total_cont_fail,
+            "singular": total_sing_fail,
             "filled": num_filled,
             "total": int(len(env_ids)),
             "attempts": attempt,
@@ -1714,6 +1745,16 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self._gain_sqsum += gains.square().sum(dim=0)
         self._gain_count += gains.shape[0]
 
+        if self.enable_force:
+            contact = self.current_contact
+            free = ~contact
+            self._gain_free_sum += gains[free].sum(dim=0)
+            self._gain_free_sqsum += gains[free].square().sum(dim=0)
+            self._gain_free_count += free.sum()
+            self._gain_contact_sum += gains[contact].sum(dim=0)
+            self._gain_contact_sqsum += gains[contact].square().sum(dim=0)
+            self._gain_contact_count += contact.sum()
+
         gain_min = self.gain_min[0]
         gain_max = self.gain_max[0]
         span = (gain_max - gain_min).clamp(min=1.0e-6)
@@ -1733,6 +1774,11 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self._gain_count.zero_()
         self._gain_hist.zero_()
         self._gain_step_counter = 0
+        for buf in (
+            self._gain_free_sum, self._gain_free_sqsum, self._gain_free_count,
+            self._gain_contact_sum, self._gain_contact_sqsum, self._gain_contact_count,
+        ):
+            buf.zero_()
 
     def _log_gain_stats(self):
         """Log mean/std scalars and a per-dim histogram of the scheduled PD gains to wandb."""
@@ -1755,6 +1801,20 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         for d, name in enumerate(axis_names):
             log_dict[f"gains/mean_{name}"] = float(mean[d])
             log_dict[f"gains/std_{name}"] = float(std[d])
+
+        # Free-space vs contact split of the scheduled-gain mean/std.
+        if self.enable_force:
+            for phase, gsum, gsqsum, gcount in (
+                ("free", self._gain_free_sum, self._gain_free_sqsum, self._gain_free_count),
+                ("contact", self._gain_contact_sum, self._gain_contact_sqsum, self._gain_contact_count),
+            ):
+                if float(gcount) <= 0:
+                    continue
+                phase_mean = gsum / gcount
+                phase_std = (gsqsum / gcount - phase_mean.square()).clamp(min=0.0).sqrt()
+                for d, name in enumerate(axis_names):
+                    log_dict[f"gains/mean_{name}_{phase}"] = float(phase_mean[d])
+                    log_dict[f"gains/std_{name}_{phase}"] = float(phase_std[d])
 
         gain_min = self.gain_min[0].cpu().numpy()
         gain_max = self.gain_max[0].cpu().numpy()
