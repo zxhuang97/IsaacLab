@@ -54,7 +54,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self.enable_force = bool(self.cfg.tracking.enable_force)
         self.force_dim = 3 * self.cfg.tracking.num_future_steps if self.enable_force else 0
         self._force_mag_max = max(float(self.cfg.tracking.force_mag_range[1]), 1.0e-6)
-        self.privileged_dim = 23
+        self.privileged_dim = 30
         self.proprio_history = torch.zeros(
             (self.num_envs, self.obs_history_length, self.proprio_dim), device=self.device
         )
@@ -159,6 +159,10 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self.gravity_vec = torch.tensor(self.cfg.sim.gravity, device=self.device).repeat(self.num_envs, 1)
         self.link_mass_scales = torch.ones((self.num_envs, self._robot.num_bodies), device=self.device)
         self.joint_friction = torch.zeros((self.num_envs, 7), device=self.device)
+        # Per-joint reflected rotor inertia written to PhysX (domain randomization).
+        # Cached for the critic's privileged observation and logging; the OSC
+        # controller stays blind to it (see `arm_armature`).
+        self.joint_armature = torch.zeros((self.num_envs, 7), device=self.device)
 
         # Validate the mass-matrix reconstruction against PhysX once at startup (nominal parameters)
         # and once more after the first dynamics randomization (payload merged, link masses scaled).
@@ -318,6 +322,9 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         # Link-frame offset from the current link CoM (the PhysX jacobian reference point) to the
         # nominal link CoM. Nonzero only for the payload body after a payload merge.
         self.nominal_com_offsets = torch.zeros((self.num_envs, num_links, 3), device=self.device)
+        # Nominal (config-default) armature the controller's reconstructed mass matrix uses. Cached
+        # once so the controller stays blind to the per-env armature randomization written to PhysX
+        # in `_randomize_dynamics` (that mismatch is a disturbance the policy must reject).
         self.arm_armature = self._robot.root_physx_view.get_dof_armatures().to(self.device)[:, 0:7]
 
     def _compute_intermediate_values(self):
@@ -352,6 +359,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         link_masses: torch.Tensor,
         link_inertias: torch.Tensor,
         com_offsets: torch.Tensor,
+        armature: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Rebuild the 7x7 arm mass matrix from per-link jacobians and inertial parameters.
 
@@ -363,7 +371,14 @@ class FrankaRobustTrackEnv(DirectRLEnv):
 
         Evaluated with the cached nominal parameters this gives the mass matrix of the unrandomized
         robot, independent of the payload and link-mass randomization in PhysX.
+
+        `armature` is the per-joint reflected rotor inertia added to the diagonal; it defaults to the
+        nominal `self.arm_armature` (what the controller uses, keeping it blind to the sim-side armature
+        randomization). The validation path passes the *actual* PhysX armature so the reconstruction can
+        be checked against PhysX's randomized generalized mass matrix.
         """
+        if armature is None:
+            armature = self.arm_armature
         num_links = self._robot.num_bodies - 1
         J_v = jacobians[:, :, 0:3, 0:7]
         J_w = jacobians[:, :, 3:6, 0:7]
@@ -379,7 +394,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         inertia_w = R @ link_inertias @ R.transpose(-1, -2)
         mass_term = torch.einsum("nl,nlai,nlaj->nij", link_masses, J_vc, J_vc)
         rot_term = torch.einsum("nlai,nlab,nlbj->nij", J_w, inertia_w, J_w)
-        return mass_term + rot_term + torch.diag_embed(self.arm_armature)
+        return mass_term + rot_term + torch.diag_embed(armature)
 
     def _validate_arm_mass_matrix(self, jacobians: torch.Tensor):
         """Check the jacobian-based reconstruction against PhysX using the current inertial parameters.
@@ -395,7 +410,12 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             self._robot.root_physx_view.get_inertias().to(self.device)[:, 1:].view(self.num_envs, num_links, 3, 3)
         )
         zero_offsets = torch.zeros((self.num_envs, num_links, 3), device=self.device)
-        reconstructed = self._compute_arm_mass_matrix(jacobians, masses, inertias, zero_offsets)
+        # Use the current (possibly randomized) PhysX armature so the diagonal matches
+        # PhysX's generalized mass matrix, which includes it.
+        physx_armature = self._robot.root_physx_view.get_dof_armatures().to(self.device)[:, 0:7]
+        reconstructed = self._compute_arm_mass_matrix(
+            jacobians, masses, inertias, zero_offsets, armature=physx_armature
+        )
         physx_matrix = self._robot.root_physx_view.get_generalized_mass_matrices()[:, 0:7, 0:7]
         error = (reconstructed - physx_matrix).abs().max().item()
         assert error < 0.01, (
@@ -569,6 +589,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
                 self.payload_mass,
                 self.payload_com,
                 self.joint_friction,
+                self.joint_armature,
                 self.task_prop_gains,
                 self.pos_threshold,
                 self.rot_threshold,
@@ -1511,6 +1532,18 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             env_ids=env_ids,
         )
 
+        if rand_cfg.enable_joint_armature:
+            lower, upper = rand_cfg.joint_armature_range
+            joint_armature = lower + (upper - lower) * torch.rand((len(env_ids), 7), device=self.device)
+        else:
+            joint_armature = torch.zeros((len(env_ids), 7), device=self.device)
+        self.joint_armature[env_ids] = joint_armature
+        self._robot.write_joint_armature_to_sim(
+            joint_armature,
+            joint_ids=self.arm_joint_ids,
+            env_ids=env_ids,
+        )
+
     def render(self, recompute: bool = False):
         """Render and overlay env-0 per-step tracking error on the top-right corner."""
         frame = super().render(recompute)
@@ -1855,3 +1888,4 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             episodic_sum[env_ids] = 0.0
         self.extras["log"]["Dynamics/payload_mass"] = self.payload_mass[env_ids].mean()
         self.extras["log"]["Dynamics/joint_friction"] = self.joint_friction[env_ids].mean()
+        self.extras["log"]["Dynamics/joint_armature"] = self.joint_armature[env_ids].mean()

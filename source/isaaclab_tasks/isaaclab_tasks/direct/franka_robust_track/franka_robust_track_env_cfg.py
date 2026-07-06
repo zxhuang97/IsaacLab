@@ -213,6 +213,16 @@ class RandomizationCfg:
     enable_joint_friction: bool = True
     joint_friction_range = [0.0, 5.0]
 
+    # Per-joint reflected rotor inertia (kg·m²) added to the diagonal of the arm's
+    # joint-space mass matrix in PhysX. Franka harmonic-drive joints have reflected
+    # inertias on the order of ~0.1 kg·m² (the real OSC controller lumps ~0.15 onto
+    # the wrist joints), so this range brackets the physical value with margin. The
+    # OSC controller stays blind to it — its nominal mass matrix keeps the
+    # config-default armature — so the sampled armature is a modeled-vs-real inertia
+    # mismatch the policy must be robust to.
+    enable_joint_armature: bool = True
+    joint_armature_range = [0.0, 0.3]
+
 
 @configclass
 class RewardCfg:
@@ -473,6 +483,8 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "payload_body_name",
             "enable_joint_friction",
             "joint_friction_range",
+            "enable_joint_armature",
+            "joint_armature_range",
         ]:
             if randomization.get(key, None) is not None:
                 value = randomization[key]
@@ -509,11 +521,11 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
         # Proprio obs: ee_pos(3)+ee_quat(4)+joint_pos(7)+actions(action_dim) (velocity
         # terms are omitted; the LSTM infers them from history). Each lookahead
         # pose contributes a (pos_error, axis_angle_error) pair = 6 dims. Critic
-        # adds 23 privileged dims: payload_mass(1)+payload_com(3)+joint_friction(7)
-        # +task_gains(6)+pos_threshold(3)+rot_threshold(3).
+        # adds 30 privileged dims: payload_mass(1)+payload_com(3)+joint_friction(7)
+        # +joint_armature(7)+task_gains(6)+pos_threshold(3)+rot_threshold(3).
         proprio_dim = 14 + action_dim
         future_dim = 6 * self.tracking.num_future_steps
-        privileged_dim = 23
+        privileged_dim = 30
         # Force-tracking add-on contributes a (current + lookahead) target-wrench
         # block of 3 dims per step to both the policy and the critic observation.
         force_dim = 3 * self.tracking.num_future_steps if self.tracking.enable_force else 0
