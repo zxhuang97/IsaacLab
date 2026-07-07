@@ -374,8 +374,9 @@ class FrankaRobustTrackEnv(DirectRLEnv):
 
         `armature` is the per-joint reflected rotor inertia added to the diagonal; it defaults to the
         nominal `self.arm_armature` (what the controller uses, keeping it blind to the sim-side armature
-        randomization). The validation path passes the *actual* PhysX armature so the reconstruction can
-        be checked against PhysX's randomized generalized mass matrix.
+        randomization). This is a controller-side modeling term only: PhysX's `get_generalized_mass_matrices`
+        is the pure rigid-body inertia and excludes the DOF armature, so the validation path passes a zero
+        armature to compare the reconstruction against PhysX on equal footing.
         """
         if armature is None:
             armature = self.arm_armature
@@ -410,11 +411,13 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             self._robot.root_physx_view.get_inertias().to(self.device)[:, 1:].view(self.num_envs, num_links, 3, 3)
         )
         zero_offsets = torch.zeros((self.num_envs, num_links, 3), device=self.device)
-        # Use the current (possibly randomized) PhysX armature so the diagonal matches
-        # PhysX's generalized mass matrix, which includes it.
-        physx_armature = self._robot.root_physx_view.get_dof_armatures().to(self.device)[:, 0:7]
+        # PhysX's generalized mass matrix is the pure rigid-body joint-space inertia and does NOT
+        # include the DOF armature written via `write_joint_armature_to_sim` (armature is applied
+        # separately by the solver). Reconstruct without any armature so the comparison isolates the
+        # jacobian/inertia conventions rather than tripping on the randomized armature diagonal.
+        zero_armature = torch.zeros((self.num_envs, 7), device=self.device)
         reconstructed = self._compute_arm_mass_matrix(
-            jacobians, masses, inertias, zero_offsets, armature=physx_armature
+            jacobians, masses, inertias, zero_offsets, armature=zero_armature
         )
         physx_matrix = self._robot.root_physx_view.get_generalized_mass_matrices()[:, 0:7, 0:7]
         error = (reconstructed - physx_matrix).abs().max().item()

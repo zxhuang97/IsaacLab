@@ -35,6 +35,15 @@ class ForgeCtrlCfg(CtrlCfg):
 
     default_dead_zone = [5.0, 5.0, 5.0, 1.0, 1.0, 1.0]
     use_delta_pose = False
+
+    # Optionally use the self-contained operational-space controller adapted from
+    # the franka_robust_track env (`osc_control`) instead of the legacy factory
+    # Jacobian-transpose PD torque law. When `use_osc` is True the task-space PD
+    # wrench is premultiplied by the task-space inertia Λ = (J M⁻¹ Jᵀ)⁻¹ if
+    # `use_task_space_inertia` is also True (full Khatib OSC); otherwise it falls
+    # back to the raw Jᵀ mapping.
+    use_osc: bool = False
+    use_task_space_inertia: bool = True
     
 
 
@@ -64,10 +73,10 @@ class EventCfg:
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("held_asset"),
-            # "static_friction_range": (0.75, 0.75),
-            # "dynamic_friction_range": (0.75, 0.75),
-            "static_friction_range": (0.3, 0.3),
-            "dynamic_friction_range": (0.3, 0.3),
+            "static_friction_range": (0.75, 0.75),
+            "dynamic_friction_range": (0.75, 0.75),
+            # "static_friction_range": (0.3, 0.3),
+            # "dynamic_friction_range": (0.3, 0.3),
             "restitution_range": (0.0, 0.0),
             "num_buckets": 1,
         },
@@ -78,8 +87,8 @@ class EventCfg:
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("fixed_asset"),
-            # "static_friction_range": (0.25, 1.25),  # TODO: Set these values based on asset type.
-            "static_friction_range": (0.25, 0.25),  # TODO: Set these values based on asset type.
+            "static_friction_range": (0.25, 1.25),  # TODO: Set these values based on asset type.
+            # "static_friction_range": (0.25, 0.25),  # TODO: Set these values based on asset type.
             "dynamic_friction_range": (0.25, 0.25),
             "restitution_range": (0.0, 0.0),
             "num_buckets": 128,
@@ -166,6 +175,12 @@ class ForgeEnvCfg(FactoryEnvCfg):
         if ctrl.get("use_delta_pose", None) is not None:
             self.ctrl.use_delta_pose = ctrl.use_delta_pose
 
+        if ctrl.get("use_osc", None) is not None:
+            self.ctrl.use_osc = ctrl.use_osc
+
+        if ctrl.get("use_task_space_inertia", None) is not None:
+            self.ctrl.use_task_space_inertia = ctrl.use_task_space_inertia
+
         if ctrl.get("randomize_controller", None) is not None:
             self.ctrl.randomize_controller = ctrl.randomize_controller
             if not self.ctrl.randomize_controller:
@@ -175,6 +190,12 @@ class ForgeEnvCfg(FactoryEnvCfg):
 
         if ctrl.get("default_task_prop_gains", None) is not None:
             self.ctrl.default_task_prop_gains = OmegaConf.to_container(ctrl.default_task_prop_gains, resolve=True)
+
+        if ctrl.get("pos_action_threshold", None) is not None:
+            self.ctrl.pos_action_threshold = OmegaConf.to_container(ctrl.pos_action_threshold, resolve=True)
+
+        if ctrl.get("rot_action_threshold", None) is not None:
+            self.ctrl.rot_action_threshold = OmegaConf.to_container(ctrl.rot_action_threshold, resolve=True)
         task = env.get("task", OmegaConf.create({}))
         if task.get("contact_penalty_threshold_range", None) is not None:
             self.task.contact_penalty_threshold_range = OmegaConf.to_container(task.contact_penalty_threshold_range, resolve=True)

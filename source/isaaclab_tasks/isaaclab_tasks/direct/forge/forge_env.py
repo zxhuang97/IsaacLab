@@ -11,6 +11,7 @@ from isaaclab.utils.math import axis_angle_from_quat, quat_apply
 
 from isaaclab_tasks.direct.factory import factory_utils
 from isaaclab_tasks.direct.factory.factory_env import FactoryEnv
+from isaaclab_tasks.direct.franka_robust_track import osc_control
 
 from . import forge_utils
 from .forge_env_cfg import ForgeEnvCfg
@@ -328,6 +329,64 @@ class ForgeEnv(FactoryEnv):
             ctrl_target_fingertip_midpoint_quat=ctrl_target_fingertip_midpoint_quat,
             ctrl_target_gripper_dof_pos=0.0,
         )
+
+    def generate_ctrl_signals(
+        self, ctrl_target_fingertip_midpoint_pos, ctrl_target_fingertip_midpoint_quat, ctrl_target_gripper_dof_pos
+    ):
+        """Optionally use the franka_robust_track operational-space controller.
+
+        When ``cfg.ctrl.use_osc`` is False (default), defer to the inherited
+        factory/forge torque law (``FactoryEnv.generate_ctrl_signals``, which maps
+        a raw ``Jᵀ(Kp·e − Kd·ẋ)`` wrench and supports the dead zone / matrix-gain
+        channels). When True, route the standard per-axis-gain path through the
+        self-contained OSC in ``osc_control``, which premultiplies the task-space
+        PD wrench by the task-space inertia ``Λ = (J M⁻¹ Jᵀ)⁻¹`` when
+        ``cfg.ctrl.use_task_space_inertia`` is set (full Khatib OSC).
+
+        The OSC law does not implement the dead zone or matrix-valued (anisotropic)
+        gains, so the compliance-eval matrix-gain channel falls back to the factory
+        controller.
+        """
+        if not getattr(self.cfg.ctrl, "use_osc", False):
+            super().generate_ctrl_signals(
+                ctrl_target_fingertip_midpoint_pos,
+                ctrl_target_fingertip_midpoint_quat,
+                ctrl_target_gripper_dof_pos,
+            )
+            return
+
+        # Directional (matrix-valued) compliance gains are unsupported by the OSC
+        # law; keep the factory controller for that eval-only path.
+        if getattr(self, "task_prop_gains_matrix", None) is not None:
+            super().generate_ctrl_signals(
+                ctrl_target_fingertip_midpoint_pos,
+                ctrl_target_fingertip_midpoint_quat,
+                ctrl_target_gripper_dof_pos,
+            )
+            return
+
+        self.joint_torque, self.applied_wrench = osc_control.compute_dof_torque(
+            cfg=self.cfg,
+            dof_pos=self.joint_pos,
+            dof_vel=self.joint_vel,
+            fingertip_midpoint_pos=self.fingertip_midpoint_pos,
+            fingertip_midpoint_quat=self.fingertip_midpoint_quat,
+            fingertip_midpoint_linvel=self.fingertip_midpoint_linvel,
+            fingertip_midpoint_angvel=self.fingertip_midpoint_angvel,
+            jacobian=self.fingertip_midpoint_jacobian,
+            arm_mass_matrix=self.arm_mass_matrix,
+            ctrl_target_fingertip_midpoint_pos=ctrl_target_fingertip_midpoint_pos,
+            ctrl_target_fingertip_midpoint_quat=ctrl_target_fingertip_midpoint_quat,
+            task_prop_gains=self.task_prop_gains,
+            task_deriv_gains=self.task_deriv_gains,
+            device=self.device,
+            apply_task_inertia=self.cfg.ctrl.use_task_space_inertia,
+        )
+
+        self.ctrl_target_joint_pos[:, 7:9] = ctrl_target_gripper_dof_pos
+        self.joint_torque[:, 7:9] = 0.0
+        self._robot.set_joint_position_target(self.ctrl_target_joint_pos)
+        self._robot.set_joint_effort_target(self.joint_torque)
 
     def dir_align_reward(self, a: float = 700, b: float = 0, tol: float = 0):
         # penalize if nut is not upright relative to the bolt's orientation
