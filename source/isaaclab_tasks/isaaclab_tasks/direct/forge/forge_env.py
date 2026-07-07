@@ -7,6 +7,7 @@ import torch
 
 import isaacsim.core.utils.torch as torch_utils
 
+import isaaclab.utils.math as math_utils
 from isaaclab.utils.math import axis_angle_from_quat, quat_apply
 
 from isaaclab_tasks.direct.factory import factory_utils
@@ -75,9 +76,83 @@ class ForgeEnv(FactoryEnv):
         self.task_prop_gains_matrix = None
         self.task_deriv_gains_matrix = None
 
+        # Cache the nominal (unrandomized) arm inertial parameters for the
+        # controller-side mass-matrix reconstruction used when
+        # `ctrl.use_gt_mass_matrix` is False. See `_compute_arm_mass_matrix`.
+        if not self.cfg.ctrl.use_gt_mass_matrix:
+            self._cache_nominal_arm_dynamics()
+
+    def _cache_nominal_arm_dynamics(self):
+        """Snapshot the default per-link inertial parameters (base body dropped).
+
+        These are the config-default arm inertials read before any dynamics
+        randomization, mirroring `FrankaRobustTrackEnv._cache_default_dynamics`.
+        """
+        num_links = self._robot.num_bodies - 1
+        default_masses = self._robot.root_physx_view.get_masses().clone()
+        default_inertias = self._robot.root_physx_view.get_inertias().clone()
+        self.nominal_link_masses = default_masses[:, 1:].to(self.device)
+        self.nominal_link_inertias = default_inertias[:, 1:].to(self.device).view(
+            self.num_envs, num_links, 3, 3
+        )
+        # No payload merge into a robot link in forge, so the reconstruction
+        # references each link's current CoM directly (zero offset).
+        self.nominal_com_offsets = torch.zeros((self.num_envs, num_links, 3), device=self.device)
+        # Nominal reflected rotor inertia the controller assumes (blind to any
+        # per-env armature randomization written to PhysX).
+        self.arm_armature = self._robot.root_physx_view.get_dof_armatures().to(self.device)[:, 0:7]
+
+    def _compute_arm_mass_matrix(
+        self,
+        jacobians: torch.Tensor,
+        link_masses: torch.Tensor,
+        link_inertias: torch.Tensor,
+        com_offsets: torch.Tensor,
+        armature: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Rebuild the 7x7 arm mass matrix from per-link jacobians and inertials.
+
+        M(q) = Σ_l m_l J_vc^T J_vc + J_w^T (R I R^T) J_w + diag(armature). PhysX
+        link jacobians are referenced at each link's current CoM (world axes) and
+        inertias are link-frame tensors about the CoM. Evaluated with the cached
+        nominal parameters this yields the unrandomized-robot mass matrix,
+        matching `FrankaRobustTrackEnv._compute_arm_mass_matrix`.
+        """
+        if armature is None:
+            armature = self.arm_armature
+        num_links = self._robot.num_bodies - 1
+        J_v = jacobians[:, :, 0:3, 0:7]
+        J_w = jacobians[:, :, 3:6, 0:7]
+
+        link_quat_w = self._robot.data.body_quat_w[:, 1:]
+        R = math_utils.matrix_from_quat(link_quat_w.reshape(-1, 4)).view(self.num_envs, num_links, 3, 3)
+        offset_w = (R @ com_offsets.unsqueeze(-1)).squeeze(-1)
+        offset_skew = math_utils.skew_symmetric_matrix(offset_w.reshape(-1, 3)).view(
+            self.num_envs, num_links, 3, 3
+        )
+        J_vc = J_v - offset_skew @ J_w
+
+        inertia_w = R @ link_inertias @ R.transpose(-1, -2)
+        mass_term = torch.einsum("nl,nlai,nlaj->nij", link_masses, J_vc, J_vc)
+        rot_term = torch.einsum("nlai,nlab,nlbj->nij", J_w, inertia_w, J_w)
+        return mass_term + rot_term + torch.diag_embed(armature)
+
     def _compute_intermediate_values(self, dt):
         """Add noise to observations for force sensing."""
         super()._compute_intermediate_values(dt)
+
+        # Optionally replace PhysX's ground-truth mass matrix (set by the factory
+        # base) with the nominal reconstruction so the OSC task-space inertia
+        # matches the franka_robust_track tracker trained with
+        # use_gt_mass_matrix=False.
+        if not self.cfg.ctrl.use_gt_mass_matrix:
+            jacobians = self._robot.root_physx_view.get_jacobians()
+            self.arm_mass_matrix = self._compute_arm_mass_matrix(
+                jacobians,
+                self.nominal_link_masses,
+                self.nominal_link_inertias,
+                self.nominal_com_offsets,
+            )
 
         # Add noise to fingertip position.
         pos_noise_level, rot_noise_level_deg = self.cfg.obs_rand.fingertip_pos, self.cfg.obs_rand.fingertip_rot_deg

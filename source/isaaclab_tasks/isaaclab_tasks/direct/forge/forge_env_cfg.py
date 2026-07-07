@@ -44,6 +44,16 @@ class ForgeCtrlCfg(CtrlCfg):
     # back to the raw Jᵀ mapping.
     use_osc: bool = False
     use_task_space_inertia: bool = True
+
+    # Mass-matrix source for the OSC task-space inertia Λ = (J M⁻¹ Jᵀ)⁻¹.
+    # True (default): use PhysX's ground-truth generalized mass matrix, which
+    # reflects any payload/link-mass/armature randomization (perfectly-modeled
+    # controller). False: rebuild the 7x7 arm mass matrix from the nominal
+    # (config-default) inertial parameters via per-link jacobians, keeping the
+    # controller blind to the sim-side dynamics randomization. Set False to match
+    # the franka_robust_track tracker's default (use_gt_mass_matrix=False) so a
+    # policy trained there maps faithfully onto this env.
+    use_gt_mass_matrix: bool = True
     
 
 
@@ -180,6 +190,9 @@ class ForgeEnvCfg(FactoryEnvCfg):
 
         if ctrl.get("use_task_space_inertia", None) is not None:
             self.ctrl.use_task_space_inertia = ctrl.use_task_space_inertia
+
+        if ctrl.get("use_gt_mass_matrix", None) is not None:
+            self.ctrl.use_gt_mass_matrix = ctrl.use_gt_mass_matrix
 
         if ctrl.get("randomize_controller", None) is not None:
             self.ctrl.randomize_controller = ctrl.randomize_controller
