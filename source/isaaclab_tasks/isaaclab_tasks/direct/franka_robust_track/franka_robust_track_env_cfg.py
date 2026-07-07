@@ -66,6 +66,14 @@ class CtrlCfg:
     kd_null: float = 6.3246
     use_full_rotation: bool = True
 
+    # OSC nullspace posture target (the config the redundant DoF is biased toward):
+    #   "start"          -> each env's own cuRobo start-pose IK solution (per-env; default)
+    #   "reset_joints"   -> the fixed `reset_joints` config (collection-branch posture)
+    #   "default_dof_pos"-> the fixed `default_dof_pos_tensor` (matches factory/forge)
+    # Fixed anchors give a consistent arm posture instead of whatever IK branch each
+    # sampled trajectory happens to land on.
+    nullspace_posture: str = "start"
+
 
 @configclass
 class TrackingCfg:
@@ -77,7 +85,7 @@ class TrackingCfg:
     continuously-evaluated function of time.
     """
 
-    mode: str = "line"  # line, line_fixed, circle
+    mode: str = "line"  # line, line_fixed, circle, dataset
 
     # Straight-line trajectory: EE moves from its reset pose along a randomized
     # 3D direction, covering a randomized path length. Speed is not sampled
@@ -107,6 +115,30 @@ class TrackingCfg:
     # waypoints (index 0 = current target, one per trajectory step), so it can
     # infer the reference velocity from the future pose sequence.
     num_future_steps: int = 4
+
+    # "dataset" mode: instead of an analytic line/circle, each env tracks a real
+    # end-effector trajectory sampled from an offline demonstration dataset (e.g.
+    # the peg-insertion `tool_pose` sequences). No frame/representation conversion
+    # is needed: the dataset pose field is already fingertip-midpoint pos + quat
+    # (w, x, y, z) in the robot-base/env-local frame, i.e. the exact format stored
+    # in `traj_pos_buf`/`traj_quat_buf`. At each reset a random episode is drawn,
+    # its poses are resampled onto the per-step control grid, and the usual
+    # cuRobo reachability + singularity filter still applies (episodes that fall
+    # outside the reachable/well-conditioned workspace are resampled/backfilled).
+    dataset_path: str = ""  # HDF5 path; required when mode == "dataset"
+    dataset_pose_key: str = "tool_pose"  # (N, 7) pos(3) + quat(4, wxyz) field
+    dataset_only_success: bool = True  # keep only episodes with trial_success set
+    dataset_max_trajs: int = 0  # cap loaded episodes (0 = all available)
+    # When force tracking is on, source the per-step target wrench from this
+    # dataset field so the applied disturbance matches the demonstration's real
+    # contact force. The field may be (N, 3) or (N, 6) (only the first 3 force
+    # components are used). Empty -> fall back to the synthetic contact-band
+    # sampler. NOTE: in this peg dataset `contact_force` is all zeros; the real
+    # force lives in `wrench[:, :3]` (peaks ~19 N, matching force_mag_range).
+    dataset_force_key: str = "wrench"
+    # A dataset step counts as "contact" (for the free/contact metric split) when
+    # its target-wrench magnitude exceeds this threshold (N).
+    dataset_contact_force_threshold: float = 0.5
 
     # Force-tracking add-on (independent of `mode`). When enabled, a per-step
     # target-wrench sequence is sampled at reset alongside the pose trajectory,
@@ -183,6 +215,12 @@ class InitCfg:
     # large batch sizes; keep it off (a few tenths of a second slower per solve).
     ik_use_cuda_graph: bool = False
     max_reach_attempts: int = 5  # resampling attempts before accepting the current sample
+    # Seed the *first* trajectory-waypoint cuRobo IK solve with `ctrl.reset_joints`
+    # (subsequent waypoints seed from the previous solution). This lands the whole
+    # start config on the reset_joints arm branch instead of an arbitrary cuRobo seed,
+    # matching how factory/forge teleport to reset_joints before their reset IK -- so a
+    # tracked demonstration is followed on the same elbow/wrist branch it was collected on.
+    seed_ik_with_reset_joints: bool = False
 
     # Singularity filter. On top of reachability + continuity, reject any candidate
     # trajectory whose per-waypoint arm configuration is too close to a kinematic
@@ -409,6 +447,15 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             self.debug_vis_path_samples = env.debug_vis_path_samples
         if env.get("log_perstep_error_episodes", None) is not None:
             self.log_perstep_error_episodes = int(env.log_perstep_error_episodes)
+        # Physics-step control: `decimation` sim substeps per control step and the
+        # physics `sim.dt`. step_dt = decimation * sim.dt sets the control rate, so to
+        # match the factory/forge peg-collection env exactly use dt=1/120 + decimation=8
+        # (120 Hz physics, 15 Hz control) instead of the default 1/60 + 4.
+        if env.get("decimation", None) is not None:
+            self.decimation = int(env.decimation)
+        sim = env.get("sim", OmegaConf.create({}))
+        if sim.get("dt", None) is not None:
+            self.sim.dt = float(sim.dt)
 
         ctrl = env.get("ctrl", OmegaConf.create({}))
         for key in [
@@ -426,6 +473,7 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "reset_joints",
             "joint_pos_kp",
             "joint_pos_kd",
+            "nullspace_posture",
         ]:
             if ctrl.get(key, None) is not None:
                 setattr(self.ctrl, key, _to_plain(ctrl[key]))
@@ -440,6 +488,12 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "rot_speed_range",
             "rot_angle_range",
             "num_future_steps",
+            "dataset_path",
+            "dataset_pose_key",
+            "dataset_only_success",
+            "dataset_max_trajs",
+            "dataset_force_key",
+            "dataset_contact_force_threshold",
             "enable_force",
             "force_mag_range",
             "force_num_bands_range",
@@ -466,6 +520,7 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "ik_robot_cfg",
             "ik_use_cuda_graph",
             "max_reach_attempts",
+            "seed_ik_with_reset_joints",
             "singularity_check",
             "min_manipulability",
             "max_jac_cond",

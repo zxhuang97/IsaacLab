@@ -127,6 +127,17 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self.current_contact = torch.zeros((self.num_envs,), dtype=torch.bool, device=self.device)
         self._env_arange = torch.arange(self.num_envs, device=self.device)
 
+        # Dataset-reference mode: per-env index of the demonstration trajectory
+        # currently being tracked (into `self._ds_pos`/`_ds_quat`/`_ds_wrench`).
+        # The trajectory tensors are loaded once below and left as None otherwise.
+        self.traj_ds_idx = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
+        self._ds_pos = None
+        self._ds_quat = None
+        self._ds_wrench = None
+        self._ds_num = 0
+        if self.cfg.tracking.mode == "dataset":
+            self._load_dataset_trajectories()
+
         self.fingertip_midpoint_pos = torch.zeros((self.num_envs, 3), device=self.device)
         self.fingertip_midpoint_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1)
         self.fingertip_midpoint_linvel = torch.zeros((self.num_envs, 3), device=self.device)
@@ -989,8 +1000,14 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         # Any envs still pending after the last attempt are backfilled by resampling
         # (with replacement) from these known-good trajectories rather than arbitrary
         # ones; per-env domain randomization still differentiates repeated trajectories.
-        accepted_store = {key: [] for key in self._TRAJ_PARAM_BUFFERS}
+        accepted_store = {key: [] for key in self._traj_param_buffers()}
         accepted_start_q = []
+        # Optionally seed the first waypoint's IK with reset_joints so the start
+        # config lands on that arm branch (later waypoints seed from the previous
+        # solution and follow it); mirrors factory/forge's teleport-to-reset_joints.
+        reset_seed = None
+        if getattr(cfg, "seed_ik_with_reset_joints", False):
+            reset_seed = torch.tensor(self.cfg.ctrl.reset_joints, device=self.device)
         while True:
             n_bad = len(bad_envs)
             total_sampled += n_bad * k
@@ -1012,7 +1029,14 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             for i in range(num_wp):
                 elapsed_time = torch.full((n_bad * k, 1), waypoint_times[i].item(), device=self.device)
                 pos_i, quat_i = self._eval_pose_from_params(params, elapsed_time)
-                seed = None if prev_q is None else prev_q.unsqueeze(1)
+                if prev_q is not None:
+                    seed = prev_q.unsqueeze(1)
+                elif reset_seed is not None:
+                    # First waypoint: seed from reset_joints (does not set prev_q, so
+                    # the i==0 continuity check stays skipped as before).
+                    seed = reset_seed.unsqueeze(0).expand(n_bad * k, 7).unsqueeze(1)
+                else:
+                    seed = None
                 success, arm_q, manip, cond = self._solve_curobo_ik(
                     pos_i.unsqueeze(1), quat_i.unsqueeze(1), cand_env_ids, seed_arm_q=seed
                 )
@@ -1049,7 +1073,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             # envs rather than tying each env to its own k candidates.
             accepted_idx = accept.nonzero(as_tuple=False).squeeze(-1)
             if accepted_idx.numel() > 0:
-                for key in self._TRAJ_PARAM_BUFFERS:
+                for key in self._traj_param_buffers():
                     accepted_store[key].append(params[key][accepted_idx])
                 accepted_start_q.append(cand_start_q[accepted_idx])
                 perm = accepted_idx[torch.randperm(accepted_idx.numel(), device=self.device)]
@@ -1083,8 +1107,19 @@ class FrankaRobustTrackEnv(DirectRLEnv):
 
         # Place every reset env at the cuRobo joint solution that reaches its start pose.
         self.joint_pos[env_ids, 0:7] = start_arm_q[env_ids]
-        # Anchor the OSC nullspace posture on each env's own start configuration.
-        self.nominal_start_joint_pos[env_ids] = start_arm_q[env_ids]
+        # Anchor the OSC nullspace posture. "start" uses each env's own cuRobo start
+        # config (per-env); "reset_joints"/"default_dof_pos" use a fixed posture so the
+        # redundancy resolution biases toward a consistent config (factory/forge use a
+        # fixed anchor -> "default_dof_pos" matches them exactly).
+        posture = getattr(self.cfg.ctrl, "nullspace_posture", "start")
+        if posture == "reset_joints":
+            self.nominal_start_joint_pos[env_ids] = torch.tensor(self.cfg.ctrl.reset_joints, device=self.device)
+        elif posture == "default_dof_pos":
+            self.nominal_start_joint_pos[env_ids] = torch.tensor(
+                self.cfg.ctrl.default_dof_pos_tensor, device=self.device
+            )
+        else:
+            self.nominal_start_joint_pos[env_ids] = start_arm_q[env_ids]
         if self.joint_pos.shape[1] > 7:
             self.joint_pos[env_ids, 7:] = 0.04
         self.joint_vel[env_ids] = 0.0
@@ -1115,6 +1150,144 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             "avg_joint_jump": avg_joint_jump.tolist(),
         }
 
+    @staticmethod
+    def _quat_slerp(q0: torch.Tensor, q1: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        """Batched shortest-path spherical interpolation of (w, x, y, z) quats.
+
+        `q0`, `q1` are (m, 4) unit quats; `t` is (m,) in [0, 1]. Falls back to a
+        normalized lerp when the two quats are nearly parallel (sin theta ~ 0).
+        """
+        dot = (q0 * q1).sum(dim=-1, keepdim=True)
+        q1 = torch.where(dot < 0.0, -q1, q1)
+        dot = dot.abs().clamp(max=1.0)
+        theta = torch.acos(dot)  # (m, 1)
+        sin_theta = torch.sin(theta)
+        small = sin_theta < 1.0e-6
+        t = t.unsqueeze(-1)
+        w0 = torch.where(small, 1.0 - t, torch.sin((1.0 - t) * theta) / sin_theta.clamp(min=1.0e-6))
+        w1 = torch.where(small, t, torch.sin(t * theta) / sin_theta.clamp(min=1.0e-6))
+        q = w0 * q0 + w1 * q1
+        return q / q.norm(dim=-1, keepdim=True).clamp(min=1.0e-6)
+
+    def _resample_pose_sequence(self, pos: torch.Tensor, quat: torch.Tensor, length: int):
+        """Resample a (n, 3)/(n, 4) pose sequence onto `length` evenly-spaced samples."""
+        n = pos.shape[0]
+        tgt = torch.linspace(0.0, n - 1, length, device=pos.device)
+        i0 = tgt.floor().long().clamp(0, n - 1)
+        i1 = (i0 + 1).clamp(max=n - 1)
+        frac = (tgt - i0.float()).unsqueeze(-1)
+        p = pos[i0] * (1.0 - frac) + pos[i1] * frac
+        q = self._quat_slerp(quat[i0], quat[i1], frac.squeeze(-1))
+        return p, q
+
+    @staticmethod
+    def _resample_vec_sequence(vec: torch.Tensor, length: int) -> torch.Tensor:
+        """Linearly resample a (n, d) sequence onto `length` evenly-spaced samples."""
+        n = vec.shape[0]
+        tgt = torch.linspace(0.0, n - 1, length, device=vec.device)
+        i0 = tgt.floor().long().clamp(0, n - 1)
+        i1 = (i0 + 1).clamp(max=n - 1)
+        frac = (tgt - i0.float()).unsqueeze(-1)
+        return vec[i0] * (1.0 - frac) + vec[i1] * frac
+
+    def _load_dataset_trajectories(self):
+        """Load + resample offline demonstration EE trajectories for `mode='dataset'`.
+
+        Reads the `dataset_pose_key` (N, 7) pose field (fingertip pos + quat, wxyz,
+        env-local frame) from the HDF5 dataset, splits it into episodes via
+        `episode_starts`/`episode_ends`, and resamples every episode onto the
+        `_traj_len`-step control grid so the runtime command/lookahead can index it
+        directly. When force tracking is enabled and `dataset_force_key` is set, the
+        matching per-step force (first 3 components) is resampled the same way.
+        """
+        import h5py
+
+        tcfg = self.cfg.tracking
+        path = tcfg.dataset_path
+        if not path:
+            raise ValueError("tracking.mode='dataset' requires tracking.dataset_path")
+
+        length = self._traj_len
+        want_force = self.enable_force and bool(tcfg.dataset_force_key)
+        with h5py.File(path, "r") as f:
+            pose = torch.as_tensor(f[tcfg.dataset_pose_key][:], dtype=torch.float32)
+            starts = f["episode_starts"][:]
+            ends = f["episode_ends"][:]
+            success = f["trial_success"][:] if "trial_success" in f else None
+            force = torch.as_tensor(f[tcfg.dataset_force_key][:], dtype=torch.float32) if want_force else None
+
+        pos_list, quat_list, wr_list = [], [], []
+        for e in range(len(starts)):
+            if tcfg.dataset_only_success and success is not None and float(success[e]) < 0.5:
+                continue
+            s, en = int(starts[e]), int(ends[e])
+            if en - s < 2:
+                continue
+            seg_pos = pose[s:en, :3].to(self.device)
+            seg_quat = pose[s:en, 3:7].to(self.device)
+            seg_quat = seg_quat / seg_quat.norm(dim=-1, keepdim=True).clamp(min=1.0e-6)
+            p, q = self._resample_pose_sequence(seg_pos, seg_quat, length)
+            pos_list.append(p)
+            quat_list.append(q)
+            if force is not None:
+                wr_list.append(self._resample_vec_sequence(force[s:en, :3].to(self.device), length))
+            if tcfg.dataset_max_trajs and len(pos_list) >= int(tcfg.dataset_max_trajs):
+                break
+
+        if not pos_list:
+            raise RuntimeError(f"No usable episodes loaded from {path}")
+
+        self._ds_pos = torch.stack(pos_list)  # (T, L, 3)
+        self._ds_quat = torch.stack(quat_list)  # (T, L, 4)
+        self._ds_wrench = torch.stack(wr_list) if wr_list else None  # (T, L, 3) or None
+        self._ds_num = self._ds_pos.shape[0]
+
+        pos_flat = self._ds_pos.reshape(-1, 3)
+        box_min = [round(v, 3) for v in pos_flat.min(dim=0).values.tolist()]
+        box_max = [round(v, 3) for v in pos_flat.max(dim=0).values.tolist()]
+        force_str = ""
+        if self._ds_wrench is not None:
+            force_str = f" | force |.| max {self._ds_wrench.norm(dim=-1).max().item():.2f} N"
+        print(
+            f"[FrankaRobustTrack] dataset mode: loaded {self._ds_num} trajectories from {path} "
+            f"(resampled to L={length}) | pos box min {box_min} max {box_max}{force_str}"
+        )
+
+    def _sample_dataset_candidate_params(self, env_ids: torch.Tensor, num_candidates: int) -> dict:
+        """Draw `len(env_ids) * num_candidates` random demonstration trajectory indices."""
+        m = len(env_ids) * num_candidates
+        return {"ds_idx": torch.randint(self._ds_num, (m,), device=self.device)}
+
+    def _eval_dataset_pose(self, params: dict, elapsed_time: torch.Tensor):
+        """Interpolate the selected demonstration trajectories at `elapsed_time`.
+
+        `params["ds_idx"]` is (m,) trajectory indices; `elapsed_time` is (m, 1).
+        The stored sequences already live on the per-step grid, so time maps to a
+        fractional step index and is linearly (pos) / slerp (quat) interpolated.
+        """
+        idx = params["ds_idx"]
+        length = self._ds_pos.shape[1]
+        fidx = (elapsed_time.squeeze(-1) / self.step_dt).clamp(0.0, length - 1)
+        i0 = fidx.floor().long()
+        i1 = (i0 + 1).clamp(max=length - 1)
+        frac = (fidx - i0.float()).unsqueeze(-1)
+        pos = self._ds_pos[idx, i0] * (1.0 - frac) + self._ds_pos[idx, i1] * frac
+        quat = self._quat_slerp(self._ds_quat[idx, i0], self._ds_quat[idx, i1], frac.squeeze(-1))
+        return pos, quat
+
+    def _sample_dataset_force(self, env_ids: torch.Tensor):
+        """Fill the per-step target wrench for `env_ids` from their dataset trajectory."""
+        wr = self._ds_wrench[self.traj_ds_idx[env_ids]]  # (n, L, 3)
+        self.traj_wrench_buf[env_ids] = wr
+        threshold = float(self.cfg.tracking.dataset_contact_force_threshold)
+        self.traj_contact_buf[env_ids] = wr.norm(dim=-1) > threshold
+
+    def _traj_param_buffers(self) -> dict:
+        """Active param-name -> per-env buffer-name map for the current tracking mode."""
+        if self.cfg.tracking.mode == "dataset":
+            return self._DS_TRAJ_PARAM_BUFFERS
+        return self._TRAJ_PARAM_BUFFERS
+
     def _sample_candidate_params(self, env_ids: torch.Tensor, num_candidates: int) -> dict:
         """Sample `num_candidates` start-pose + trajectory param sets per env.
 
@@ -1125,6 +1298,8 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         params for the inactive mode are filled with harmless defaults so
         `_assign_params_to_envs` can copy every key uniformly.
         """
+        if self.cfg.tracking.mode == "dataset":
+            return self._sample_dataset_candidate_params(env_ids, num_candidates)
         cfg = self.cfg.init
         tcfg = self.cfg.tracking
         device = self.device
@@ -1225,9 +1400,13 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         "rot_angle": "traj_rot_angle",
     }
 
+    # Dataset mode carries only the per-env demonstration-trajectory index; the
+    # absolute poses are gathered from `self._ds_pos`/`_ds_quat` on demand.
+    _DS_TRAJ_PARAM_BUFFERS = {"ds_idx": "traj_ds_idx"}
+
     def _assign_params_to_envs(self, env_ids: torch.Tensor, params: dict, cand_idx: torch.Tensor):
         """Copy the selected candidate params (`cand_idx`) into the per-env traj buffers."""
-        for key, buf_name in self._TRAJ_PARAM_BUFFERS.items():
+        for key, buf_name in self._traj_param_buffers().items():
             getattr(self, buf_name)[env_ids] = params[key][cand_idx]
 
     def _eval_pose_from_params(self, params: dict, elapsed_time: torch.Tensor):
@@ -1238,6 +1417,8 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         `start_quat`, so all modes pass through it at ``elapsed_time == 0``.
         """
         mode = self.cfg.tracking.mode
+        if mode == "dataset":
+            return self._eval_dataset_pose(params, elapsed_time)
         start_pos = params["start_pos"]
         start_quat = params["start_quat"]
         if mode in ("line", "line_fixed"):
@@ -1258,7 +1439,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
 
     def _command_pose_at(self, elapsed_time: torch.Tensor):
         """Evaluate the reference pose at `elapsed_time` (shape (num_envs, 1))."""
-        params = {key: getattr(self, buf_name) for key, buf_name in self._TRAJ_PARAM_BUFFERS.items()}
+        params = {key: getattr(self, buf_name) for key, buf_name in self._traj_param_buffers().items()}
         return self._eval_pose_from_params(params, elapsed_time)
 
     def _build_trajectory_buffer(self, env_ids: torch.Tensor):
@@ -1269,6 +1450,11 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         always in-range. After this call the runtime command and lookahead read
         straight out of `traj_pos_buf`/`traj_quat_buf` by integer step index.
         """
+        if self.cfg.tracking.mode == "dataset":
+            # Sequences are already resampled onto the per-step grid: copy directly.
+            self.traj_pos_buf[env_ids] = self._ds_pos[self.traj_ds_idx[env_ids]]
+            self.traj_quat_buf[env_ids] = self._ds_quat[self.traj_ds_idx[env_ids]]
+            return
         for i in range(self._traj_len):
             elapsed_time = torch.full((self.num_envs, 1), i * self.step_dt, device=self.device)
             pos_i, quat_i = self._command_pose_at(elapsed_time)
@@ -1319,6 +1505,10 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         force does not change IK reachability.
         """
         tcfg = self.cfg.tracking
+        if tcfg.mode == "dataset" and tcfg.dataset_force_key and self._ds_wrench is not None:
+            # Dataset mode: replay the demonstration's own per-step contact force.
+            self._sample_dataset_force(env_ids)
+            return
         device = self.device
         n = len(env_ids)
 
