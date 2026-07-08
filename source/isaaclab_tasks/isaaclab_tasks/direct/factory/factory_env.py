@@ -114,6 +114,12 @@ class FactoryEnv(DirectRLEnv):
         self.ep_succeeded = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
         self.ep_success_times = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
 
+        # Per-env accumulators for episode-averaged reward logging. Per-step reward
+        # snapshots alias against the fixed-length synchronized episodes, so instead
+        # we average each term over the whole episode and emit it at reset.
+        self._ep_rew_sums: dict[str, torch.Tensor] = {}
+        self._ep_rew_counts: dict[str, torch.Tensor] = {}
+
     def _setup_scene(self):
         """Initialize simulation scene."""
         spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg(), translation=(0.0, 0.0, -1.05))
@@ -515,8 +521,33 @@ class FactoryEnv(DirectRLEnv):
             success_times = self.ep_success_times[nonzero_success_ids].sum() / len(nonzero_success_ids)
             self.extras["success_times"] = success_times
 
+        self._log_episode_rewards(rew_dict)
+
+    def _log_episode_rewards(self, rew_dict):
+        """Accumulate reward terms per env and log their episode mean at reset.
+
+        Logging the per-step batch mean produces jerky curves: with fixed-length,
+        synchronized episodes the rl_games observer only keeps the latest step, so
+        the value aliases against the episode phase. Instead we time-average each
+        term over the full episode (per env) and write it to ``extras`` at reset,
+        mirroring how ``successes`` is logged. Each term tracks its own count so
+        this is safe to call multiple times per step (e.g. Factory + FORGE dicts).
+        """
         for rew_name, rew in rew_dict.items():
-            self.extras[f"logs_rew_{rew_name}"] = rew.mean()
+            if rew_name not in self._ep_rew_sums:
+                self._ep_rew_sums[rew_name] = torch.zeros(self.num_envs, device=self.device)
+                self._ep_rew_counts[rew_name] = torch.zeros(self.num_envs, device=self.device)
+            self._ep_rew_sums[rew_name] += rew.detach()
+            self._ep_rew_counts[rew_name] += 1.0
+
+        reset_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
+        if len(reset_ids) > 0:
+            for rew_name in rew_dict:
+                counts = self._ep_rew_counts[rew_name][reset_ids].clamp(min=1.0)
+                ep_mean = self._ep_rew_sums[rew_name][reset_ids] / counts
+                self.extras[f"logs_rew_{rew_name}"] = ep_mean.mean()
+                self._ep_rew_sums[rew_name][reset_ids] = 0.0
+                self._ep_rew_counts[rew_name][reset_ids] = 0.0
 
     def _get_rewards(self):
         """Update rewards and compute success statistics."""

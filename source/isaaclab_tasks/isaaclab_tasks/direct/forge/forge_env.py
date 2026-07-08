@@ -38,6 +38,7 @@ class ForgeEnv(FactoryEnv):
         self.force_sensor_body_idx = self._robot.body_names.index("force_sensor")
         self.force_sensor_smooth = torch.zeros((self.num_envs, 6), device=self.device)
         self.force_sensor_world_smooth = torch.zeros((self.num_envs, 6), device=self.device)
+        self.ep_max_ee_speed = torch.zeros((self.num_envs,), device=self.device)
 
         # Set nominal dynamics parameters for randomization.
         self.default_gains = torch.tensor(self.cfg.ctrl.default_task_prop_gains, device=self.device).repeat(
@@ -487,6 +488,18 @@ class ForgeEnv(FactoryEnv):
         # Contact penalty.
         contact_force = torch.norm(self.force_sensor_smooth[:, 0:3], p=2, dim=-1, keepdim=False)
         contact_penalty = torch.nn.functional.relu(contact_force - self.contact_penalty_thresholds)
+        if self.cfg_task.contact_penalty_cap > 0:
+            contact_penalty = torch.clamp(contact_penalty, max=self.cfg_task.contact_penalty_cap)
+        ee_speed_threshold = max(float(self.cfg_task.ee_speed_penalty_threshold), 1e-6)
+        ee_speed = torch.norm(self.fingertip_midpoint_linvel, p=2, dim=-1)
+        self.ep_max_ee_speed = torch.maximum(self.ep_max_ee_speed, ee_speed.detach())
+
+        ee_speed_penalty = torch.nn.functional.relu(ee_speed - self.cfg_task.ee_speed_penalty_threshold)
+        ee_speed_excess_ratio = torch.clamp(
+            ee_speed_penalty / ee_speed_threshold,
+            max=self.cfg_task.ee_speed_exp_penalty_cap,
+        )
+        ee_speed_exp_penalty = torch.exp(self.cfg_task.ee_speed_exp_penalty_k * ee_speed_excess_ratio) - 1.0
         # Add success prediction rewards.
         
         true_successes = self._get_curr_successes(
@@ -502,12 +515,16 @@ class ForgeEnv(FactoryEnv):
         # Add new FORGE reward terms.
         rew_dict = {
             "action_penalty_asset": pos_error + rot_error,
+            "ee_speed_penalty": ee_speed_penalty,
+            "ee_speed_exp_penalty": ee_speed_exp_penalty,
             "contact_penalty": contact_penalty,
             "success_pred_error": success_pred_error,
             "dir_align_rew": dir_align_rew,
         }
         rew_scales = {
             "action_penalty_asset": -self.cfg_task.action_penalty_asset_scale,
+            "ee_speed_penalty": -self.cfg_task.ee_speed_penalty_scale,
+            "ee_speed_exp_penalty": -self.cfg_task.ee_speed_exp_penalty_scale,
             "contact_penalty": -self.cfg_task.contact_penalty_scale,
             "success_pred_error": -self.success_pred_scale,
             "dir_align_rew": 1,
@@ -587,14 +604,19 @@ class ForgeEnv(FactoryEnv):
     def _reset_buffers(self, env_ids):
         """Reset additional logging metrics."""
         super()._reset_buffers(env_ids)
+        self.ep_max_ee_speed[env_ids] = 0.0
         # Reset success pred metrics.
         for thresh in [0.5, 0.6, 0.7, 0.8, 0.9]:
             self.first_pred_success_tx[thresh][env_ids] = 0
 
     def _log_forge_metrics(self, rew_dict, policy_success_pred):
         """Log metrics to evaluate success prediction performance."""
-        for rew_name, rew in rew_dict.items():
-            self.extras[f"logs_rew_{rew_name}"] = rew.mean()
+        self._log_episode_rewards(rew_dict)
+        reset_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
+        if len(reset_ids) > 0:
+            ep_max_ee_speed = self.ep_max_ee_speed[reset_ids]
+            self.extras["max_ee_velocity/mean"] = ep_max_ee_speed.mean()
+            self.extras["max_ee_velocity/max"] = ep_max_ee_speed.max()
 
         for thresh, first_success_tx in self.first_pred_success_tx.items():
             curr_predicted_success = policy_success_pred > thresh

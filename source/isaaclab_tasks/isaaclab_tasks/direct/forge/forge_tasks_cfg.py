@@ -16,7 +16,18 @@ class ForgeTask(FactoryTask):
     action_penalty_ee_scale: float = 0.0
     action_penalty_asset_scale: float = 0.001
     action_grad_penalty_scale: float = 0.1
+    # Penalize measured end-effector speed above this threshold. Disabled by
+    # default through a zero scale.
+    ee_speed_penalty_scale: float = 0.0
+    ee_speed_penalty_threshold: float = 0.01
+    ee_speed_exp_penalty_scale: float = 0.0
+    ee_speed_exp_penalty_k: float = 0.25
+    ee_speed_exp_penalty_cap: float = 10.0
     contact_penalty_scale: float = 0.05
+    # Upper bound on the per-step contact penalty (relu(force - threshold)) before
+    # scaling. <= 0 disables the cap. Caps prevent rare hard-contact force spikes
+    # from producing huge reward outliers that destabilize PPO.
+    contact_penalty_cap: float = -1.0
     delay_until_ratio: float = 0.25
     contact_penalty_threshold_range = [5.0, 10.0]
 

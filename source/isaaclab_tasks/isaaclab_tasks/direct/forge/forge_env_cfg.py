@@ -212,6 +212,28 @@ class ForgeEnvCfg(FactoryEnvCfg):
         task = env.get("task", OmegaConf.create({}))
         if task.get("contact_penalty_threshold_range", None) is not None:
             self.task.contact_penalty_threshold_range = OmegaConf.to_container(task.contact_penalty_threshold_range, resolve=True)
+        if task.get("action_penalty_asset_scale", None) is not None:
+            self.task.action_penalty_asset_scale = task.action_penalty_asset_scale
+        if task.get("action_grad_penalty_scale", None) is not None:
+            self.task.action_grad_penalty_scale = task.action_grad_penalty_scale
+        if task.get("ee_speed_penalty_scale", None) is not None:
+            self.task.ee_speed_penalty_scale = task.ee_speed_penalty_scale
+        if task.get("ee_speed_penalty_threshold", None) is not None:
+            self.task.ee_speed_penalty_threshold = task.ee_speed_penalty_threshold
+        if task.get("ee_speed_exp_penalty_scale", None) is not None:
+            self.task.ee_speed_exp_penalty_scale = task.ee_speed_exp_penalty_scale
+        if task.get("ee_speed_exp_penalty_k", None) is not None:
+            self.task.ee_speed_exp_penalty_k = task.ee_speed_exp_penalty_k
+        if task.get("ee_speed_exp_penalty_cap", None) is not None:
+            self.task.ee_speed_exp_penalty_cap = task.ee_speed_exp_penalty_cap
+        if task.get("contact_penalty_scale", None) is not None:
+            self.task.contact_penalty_scale = task.contact_penalty_scale
+        if task.get("contact_penalty_cap", None) is not None:
+            self.task.contact_penalty_cap = task.contact_penalty_cap
+        # >1.0 => batch success can never reach it, so the success-prediction penalty
+        # never latches on (i.e. success_pred_scale stays 0 / reward term disabled).
+        if task.get("delay_until_ratio", None) is not None:
+            self.task.delay_until_ratio = task.delay_until_ratio
     
 
     def __post_init__(self):
