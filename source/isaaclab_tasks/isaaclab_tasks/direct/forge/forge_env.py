@@ -427,26 +427,9 @@ class ForgeEnv(FactoryEnv):
     def generate_ctrl_signals(
         self, ctrl_target_fingertip_midpoint_pos, ctrl_target_fingertip_midpoint_quat, ctrl_target_gripper_dof_pos
     ):
-        """Optionally use the shared factory operational-space controller.
-
-        When ``cfg.ctrl.use_osc`` is False (default), defer to the inherited
-        factory/forge torque law (``FactoryEnv.generate_ctrl_signals``, which maps
-        a raw ``Jᵀ(Kp·e − Kd·ẋ)`` wrench and supports the dead zone / matrix-gain
-        channels). When True, route through ``factory_control.compute_dof_torque``
-        with ``apply_task_inertia`` enabled by config, which premultiplies the task-space
-        PD wrench by the task-space inertia ``Λ = (J M⁻¹ Jᵀ)⁻¹`` when
-        ``cfg.ctrl.use_task_space_inertia`` is set (full Khatib OSC).
-        """
+        """Use the shared factory controller with optional task-space inertia."""
         self.last_ctrl_target_fingertip_midpoint_pos = ctrl_target_fingertip_midpoint_pos.detach().clone()
         self.last_ctrl_target_fingertip_midpoint_quat = ctrl_target_fingertip_midpoint_quat.detach().clone()
-
-        if not getattr(self.cfg.ctrl, "use_osc", False):
-            super().generate_ctrl_signals(
-                ctrl_target_fingertip_midpoint_pos,
-                ctrl_target_fingertip_midpoint_quat,
-                ctrl_target_gripper_dof_pos,
-            )
-            return
 
         task_prop = getattr(self, "task_prop_gains_matrix", None)
         task_deriv = getattr(self, "task_deriv_gains_matrix", None)
@@ -454,9 +437,11 @@ class ForgeEnv(FactoryEnv):
             task_prop = self.task_prop_gains
             task_deriv = self.task_deriv_gains
 
-        nullspace_joint_target = torch.tensor(
-            self.cfg.ctrl.reset_joints, device=self.device, dtype=self.joint_pos.dtype
-        ).repeat(self.num_envs, 1)
+        nullspace_joint_target = None
+        if self.cfg.ctrl.use_task_space_inertia:
+            nullspace_joint_target = torch.tensor(
+                self.cfg.ctrl.reset_joints, device=self.device, dtype=self.joint_pos.dtype
+            ).repeat(self.num_envs, 1)
 
         self.joint_torque, self.applied_wrench, self.ctrl_debug = factory_control.compute_dof_torque(
             cfg=self.cfg,

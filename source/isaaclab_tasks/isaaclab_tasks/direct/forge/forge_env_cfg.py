@@ -36,12 +36,9 @@ class ForgeCtrlCfg(CtrlCfg):
     default_dead_zone = [5.0, 5.0, 5.0, 1.0, 1.0, 1.0]
     use_delta_pose = False
 
-    # Optionally use the shared factory operational-space inertia path instead of
-    # the legacy factory Jacobian-transpose PD torque law. When `use_osc` is True
-    # the task-space PD wrench is premultiplied by the task-space inertia
-    # Λ = (J M⁻¹ Jᵀ)⁻¹ if `use_task_space_inertia` is also True (full Khatib OSC);
-    # otherwise it falls back to the raw Jᵀ mapping.
-    use_osc: bool = False
+    # Use the full operational-space control law: premultiply the task-space PD
+    # wrench by the task inertia Λ = (J M⁻¹ Jᵀ)⁻¹. False falls back to the legacy
+    # raw Jᵀ mapping while still using the shared factory controller.
     use_task_space_inertia: bool = True
 
     # Mass-matrix source for the OSC task-space inertia Λ = (J M⁻¹ Jᵀ)⁻¹.
@@ -183,9 +180,6 @@ class ForgeEnvCfg(FactoryEnvCfg):
 
         if ctrl.get("use_delta_pose", None) is not None:
             self.ctrl.use_delta_pose = ctrl.use_delta_pose
-
-        if ctrl.get("use_osc", None) is not None:
-            self.ctrl.use_osc = ctrl.use_osc
 
         if ctrl.get("use_task_space_inertia", None) is not None:
             self.ctrl.use_task_space_inertia = ctrl.use_task_space_inertia
