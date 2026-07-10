@@ -34,8 +34,14 @@ def compute_dof_torque(
     dead_zone_thresholds=None,
     nullspace_joint_target=None,
     return_debug=False,
+    apply_task_inertia=False,
 ):
-    """Compute Franka DOF torque to move fingertips towards target pose."""
+    """Compute Franka DOF torque to move fingertips towards target pose.
+
+    When ``apply_task_inertia`` is True, premultiply the task-space PD wrench by
+    the operational-space inertia before mapping it to joint torques. The default
+    False value preserves the legacy Jacobian-transpose PD behavior.
+    """
     # References:
     # 1) https://ethz.ch/content/dam/ethz/special-interest/mavt/robotics-n-intelligent-systems/rsl-dam/documents/RobotDynamics2018/RD_HS2018script.pdf
     # 2) Modern Robotics
@@ -74,21 +80,32 @@ def compute_dof_torque(
             task_wrench.sign() * (task_wrench.abs() - dead_zone_thresholds),
         )
 
-    # Set tau = J^T * tau, i.e., map tau into joint space as desired
+    # Operational-space inertia and dynamically consistent inverse used by both
+    # full OSC and the nullspace projection.
+    arm_mass_matrix_inv = torch.inverse(arm_mass_matrix)
     jacobian_T = torch.transpose(jacobian, dim0=1, dim1=2)
+    task_inertia = jacobian @ arm_mass_matrix_inv @ jacobian_T
+    arm_mass_matrix_task = torch.inverse(task_inertia)  # ETH eq. 3.86; geometric Jacobian is assumed
+    j_eef_inv = arm_mass_matrix_task @ jacobian @ arm_mass_matrix_inv
+
+    if not torch.isfinite(arm_mass_matrix_task).all():
+        bad = ~torch.isfinite(arm_mass_matrix_task).reshape(num_envs, -1).all(dim=-1)
+        det = torch.linalg.det(task_inertia)
+        raise RuntimeError(
+            f"OSC task-inertia inverse (J M^-1 J^T)^-1 is non-finite in {int(bad.sum())}/{num_envs} envs "
+            f"(near-singular arm configuration). min|det(J M^-1 J^T)|={det.abs().min().item():.3e}."
+        )
+
+    if apply_task_inertia:
+        task_wrench = (arm_mass_matrix_task @ task_wrench.unsqueeze(-1)).squeeze(-1)
+
+    # Set tau = J^T * tau, i.e., map tau into joint space as desired
     torque_task = (jacobian_T @ task_wrench.unsqueeze(-1)).squeeze(-1)
     dof_torque[:, 0:7] = torque_task
 
     # adapted from https://gitlab-master.nvidia.com/carbon-gym/carbgym/-/blob/b4bbc66f4e31b1a1bee61dbaafc0766bbfbf0f58/python/examples/franka_cube_ik_osc.py#L70-78
     # roboticsproceedings.org/rss07/p31.pdf
 
-    # useful tensors
-    arm_mass_matrix_inv = torch.inverse(arm_mass_matrix)
-    jacobian_T = torch.transpose(jacobian, dim0=1, dim1=2)
-    arm_mass_matrix_task = torch.inverse(
-        jacobian @ torch.inverse(arm_mass_matrix) @ jacobian_T
-    )  # ETH eq. 3.86; geometric Jacobian is assumed
-    j_eef_inv = arm_mass_matrix_task @ jacobian @ arm_mass_matrix_inv
     # Nullspace posture target: a per-env (num_envs, 7) tensor if provided (e.g. each
     # env's own reset joint configuration), otherwise the single global config from cfg.
     if nullspace_joint_target is not None:
@@ -102,8 +119,14 @@ def compute_dof_torque(
     ) - math.pi  # normalize to [-pi, pi]
     u_null = cfg.ctrl.kd_null * -dof_vel[:, :7] + cfg.ctrl.kp_null * distance_to_default_dof_pos
     u_null = arm_mass_matrix @ u_null.unsqueeze(-1)
-    torque_null = (torch.eye(7, device=device).unsqueeze(0) - torch.transpose(jacobian, 1, 2) @ j_eef_inv) @ u_null
+    torque_null = (torch.eye(7, device=device).unsqueeze(0) - jacobian_T @ j_eef_inv) @ u_null
     dof_torque[:, 0:7] += torque_null.squeeze(-1)
+
+    if not torch.isfinite(dof_torque).all():
+        bad = ~torch.isfinite(dof_torque).all(dim=-1)
+        raise RuntimeError(
+            f"OSC produced non-finite joint torques in {int(bad.sum())}/{num_envs} envs before clamping."
+        )
 
     # TODO: Verify it's okay to no longer do gripper control here.
     dof_torque_pre_clamp = dof_torque.clone()
@@ -119,7 +142,7 @@ def compute_dof_torque(
             "dof_torque_pre_clamp": dof_torque_pre_clamp,
             "dead_zone_thresholds": dead_zone_thresholds,
             "task_inertia_diag": torch.diagonal(arm_mass_matrix_task, dim1=-2, dim2=-1),
-            "task_inertia_det": torch.linalg.det(jacobian @ arm_mass_matrix_inv @ jacobian_T).unsqueeze(-1),
+            "task_inertia_det": torch.linalg.det(task_inertia).unsqueeze(-1),
         }
     return dof_torque, task_wrench
 

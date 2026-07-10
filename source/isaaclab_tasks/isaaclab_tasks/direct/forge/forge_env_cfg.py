@@ -36,12 +36,11 @@ class ForgeCtrlCfg(CtrlCfg):
     default_dead_zone = [5.0, 5.0, 5.0, 1.0, 1.0, 1.0]
     use_delta_pose = False
 
-    # Optionally use the self-contained operational-space controller adapted from
-    # the franka_robust_track env (`osc_control`) instead of the legacy factory
-    # Jacobian-transpose PD torque law. When `use_osc` is True the task-space PD
-    # wrench is premultiplied by the task-space inertia Λ = (J M⁻¹ Jᵀ)⁻¹ if
-    # `use_task_space_inertia` is also True (full Khatib OSC); otherwise it falls
-    # back to the raw Jᵀ mapping.
+    # Optionally use the shared factory operational-space inertia path instead of
+    # the legacy factory Jacobian-transpose PD torque law. When `use_osc` is True
+    # the task-space PD wrench is premultiplied by the task-space inertia
+    # Λ = (J M⁻¹ Jᵀ)⁻¹ if `use_task_space_inertia` is also True (full Khatib OSC);
+    # otherwise it falls back to the raw Jᵀ mapping.
     use_osc: bool = False
     use_task_space_inertia: bool = True
 

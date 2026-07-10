@@ -21,7 +21,6 @@ import isaacsim.core.utils.torch as torch_utils
 
 from isaaclab_tasks.direct.factory import factory_control, factory_utils
 
-from . import osc_control
 from .franka_robust_track_env_cfg import FrankaRobustTrackEnvCfg
 
 
@@ -454,8 +453,8 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self._apply_external_wrenches()
         target_pos, target_quat = self._get_action_target_pose()
 
-        if self.cfg.ctrl.backend == "factory_osc":
-            self._apply_factory_osc(target_pos, target_quat)
+        if self.cfg.ctrl.backend == "factory_control":
+            self._apply_factory_control(target_pos, target_quat)
         elif self.cfg.ctrl.backend == "dls_ik":
             self._apply_dls_ik(target_pos, target_quat)
         else:
@@ -526,10 +525,8 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         target_quat = torch_utils.quat_mul(delta_quat, self.fingertip_midpoint_quat)
         return target_pos, target_quat
 
-    def _apply_factory_osc(self, target_pos: torch.Tensor, target_quat: torch.Tensor):
-        # Use this env's own operational-space controller (see `osc_control`) rather
-        # than the shared factory/forge one, so the task-inertia fix stays isolated.
-        self.joint_torque, self.applied_wrench = osc_control.compute_dof_torque(
+    def _apply_factory_control(self, target_pos: torch.Tensor, target_quat: torch.Tensor):
+        self.joint_torque, self.applied_wrench = factory_control.compute_dof_torque(
             cfg=self.cfg,
             dof_pos=self.joint_pos,
             dof_vel=self.joint_vel,

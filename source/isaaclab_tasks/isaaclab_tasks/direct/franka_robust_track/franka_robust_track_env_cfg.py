@@ -26,7 +26,7 @@ def _to_plain(value):
 class CtrlCfg:
     """Low-level controller configuration."""
 
-    backend: str = "factory_osc"  # factory_osc, dls_ik
+    backend: str = "factory_control"  # factory_control, dls_ik
     ema_factor: float = 1.0
 
     # By default the OSC controller runs on the *nominal* mass matrix, rebuilt from

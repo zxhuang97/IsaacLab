@@ -5,8 +5,7 @@ Task: `Isaac-Franka-Robust-Track-v0`
 - Registration: `franka_robust_track/__init__.py`
 - Config: `franka_robust_track_env_cfg.py`
 - Env logic: `franka_robust_track_env.py`
-- Controller: `osc_control.py` (own OSC; see Feature 7. `../factory/factory_control.py`
-  is still imported only for the pure `get_pose_error` math)
+- Controller: `../factory/factory_control.py` shared OSC/Jacobian-transpose torque path
 - Launcher: `launchers/launch_rlgames_train_franka_robust_track.py`
 
 This document tracks planned feature changes. Each item lists the current
@@ -172,18 +171,16 @@ near-static target, and diverging to ~350 mm while tracking a moving reference.
   and a trained policy as an outer loop). Robust-track's high Kp=300, 60 Hz, no
   smoothing, fast free-space reference, evaluated open-loop, exposes it.
 
-**Fix (isolated to this env)**
-- New `osc_control.py`: full operational-space control law — premultiply the PD
-  wrench by `Λ` (`τ = Jᵀ · Λ · (Kp·e − Kd·ẋ)`) so the task dynamics reduce to a
-  unit mass (`ẍ = Kp·e − Kd·ẋ`) and `Kd = 2√Kp` is actually critical. Reuses only
-  the pure `get_pose_error` math from `factory_control`.
+**Fix**
+- `factory_control.compute_dof_torque` supports the full operational-space control
+  law: premultiply the PD wrench by `Λ` (`τ = Jᵀ · Λ · (Kp·e − Kd·ẋ)`) so the task
+  dynamics reduce to a unit mass (`ẍ = Kp·e − Kd·ẋ`) and `Kd = 2√Kp` is actually
+  critical.
 - `CtrlCfg.use_task_space_inertia: bool = True` (`franka_robust_track_env_cfg.py`),
   added to the `update_env_params` allow-list; passed through as `apply_task_inertia`.
   `False` reproduces the legacy Jacobian-transpose PD.
-- `franka_robust_track_env._apply_factory_osc` now calls `osc_control.compute_dof_torque`
-  instead of `factory_control.compute_dof_torque`.
-- `../factory/factory_control.py` was reverted to upstream so factory/forge/automate
-  are unaffected.
+- `franka_robust_track_env._apply_factory_control` and `ForgeEnv.generate_ctrl_signals`
+  both call `factory_control.compute_dof_torque`.
 
 **Result:** open-loop feed-forward tracking went from ~100–350 mm oscillation to a
 steady ~1–2 mm lag (the expected small lag of a critically-damped follower), with
