@@ -56,20 +56,12 @@ class ForgeEnv(FactoryEnv):
         self.pos_threshold = self.default_pos_threshold.clone()
         self.rot_threshold = self.default_rot_threshold.clone()
 
-        # Compliance-eval execution hooks (set externally during the interact
-        # eval loop; both None => standard behavior, byte-identical to before).
-        #   compliance_stiffness_override: task_prop_gains to use in place of the
-        #       per-episode randomized gains. Either (num_envs, 6) per-axis gains
-        #       or (num_envs, 6, 6) full anisotropic stiffness matrices.
-        #   compliance_deriv_override: optional matching task_deriv_gains, same
-        #       shape as the prop override. If None, deriv is derived from prop
-        #       via critical damping (only valid for the (num_envs, 6) case).
-        #   compliance_pose_target: (num_envs, 7) [pos3, quat4] fingertip target
-        #       fed directly to the controller, bypassing the action->target map.
-        self.compliance_stiffness_override = None
-        self.compliance_deriv_override = None
-        self.compliance_pose_target = None
-        self.compliance_clip_pose_target = True
+        # Per-step action packets can carry action_rep and optional compliance
+        # gains without mutating env hooks from the caller side.
+        self.current_action_rep = str(getattr(self.cfg.ctrl, "action_rep", "rel_ee_pose"))
+        self.packet_stiffness_override = None
+        self.packet_deriv_override = None
+        self.packet_clip_pose_target = True
         self.last_ctrl_target_fingertip_midpoint_pos = None
         self.last_ctrl_target_fingertip_midpoint_quat = None
         # Matrix-valued gain channel for directional (anisotropic) compliance.
@@ -211,6 +203,51 @@ class ForgeEnv(FactoryEnv):
         force_noise *= self.cfg.obs_rand.ft_force
         self.noisy_force = self.force_sensor_smooth[:, 0:3] + force_noise
 
+    def _parse_action_packet(self, action_or_packet):
+        """Return (action, action_rep, compliance) for tensor or dict step input."""
+        if not isinstance(action_or_packet, dict):
+            return action_or_packet, str(getattr(self.cfg.ctrl, "action_rep", "rel_ee_pose")), {}
+        if "action" not in action_or_packet:
+            raise KeyError("Action packet must contain an 'action' tensor.")
+        action = action_or_packet["action"]
+        action_rep = str(action_or_packet.get("action_rep", getattr(self.cfg.ctrl, "action_rep", "rel_ee_pose")))
+        compliance = action_or_packet.get("compliance", None) or {}
+        return action, action_rep, compliance
+
+    def _pre_physics_step(self, action):
+        """Apply policy actions with smoothing, or unpack an action packet."""
+        env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
+        if len(env_ids) > 0:
+            self._reset_buffers(env_ids)
+
+        action, action_rep, compliance = self._parse_action_packet(action)
+        if action_rep not in ("rel_ee_pose", "abs_ee_pose", "delta_ee_pose"):
+            raise ValueError(f"Unsupported Forge action_rep={action_rep!r}")
+
+        self.current_action_rep = action_rep
+        self.packet_stiffness_override = compliance.get("stiffness", None)
+        self.packet_deriv_override = compliance.get("damping", None)
+        self.packet_clip_pose_target = bool(compliance.get("clip_pose_target", True))
+
+        action = action.clone().to(self.device)
+        if action_rep == "abs_ee_pose":
+            if action.shape[-1] < 7:
+                raise ValueError(f"action_rep='abs_ee_pose' requires at least 7 dims, got {tuple(action.shape)}")
+            self.actions[:, 0:7] = action[:, 0:7]
+            return
+
+        if action.shape[-1] < self.actions.shape[-1]:
+            pad = torch.zeros(
+                action.shape[0],
+                self.actions.shape[-1] - action.shape[-1],
+                device=self.device,
+                dtype=action.dtype,
+            )
+            action = torch.cat((action, pad), dim=-1)
+        elif action.shape[-1] > self.actions.shape[-1]:
+            action = action[:, : self.actions.shape[-1]]
+        self.actions = self.ema_factor * action + (1 - self.ema_factor) * self.actions
+
     def _get_observations(self):
         """Add additional FORGE observations."""
         obs_dict, state_dict = self._get_factory_obs_state_dict()
@@ -258,30 +295,28 @@ class ForgeEnv(FactoryEnv):
         # state_order) keeps working.
         self.task_prop_gains_matrix = None
         self.task_deriv_gains_matrix = None
-        if self.compliance_stiffness_override is not None:
-            override = self.compliance_stiffness_override
+        override = self.packet_stiffness_override
+        deriv_override = self.packet_deriv_override
+        if override is not None:
             if override.dim() == 3:
                 # Full (num_envs, 6, 6) anisotropic stiffness: route it (and its
                 # matching damping) to the controller via the matrix channel,
                 # leaving the per-axis task_prop_gains untouched for observations.
                 self.task_prop_gains_matrix = override
-                self.task_deriv_gains_matrix = self.compliance_deriv_override
+                self.task_deriv_gains_matrix = deriv_override
             else:
                 self.task_prop_gains = override
-                if self.compliance_deriv_override is not None:
-                    self.task_deriv_gains = self.compliance_deriv_override
+                if deriv_override is not None:
+                    self.task_deriv_gains = deriv_override
                 else:
                     # Per-axis prop -> critical damping (legacy isotropic path).
                     self.task_deriv_gains = factory_utils.get_deriv_gains(override)
 
-        # Compliance-eval: execute a fingertip pose target directly, bypassing
-        # the action->target mapping (used by the `tool_pose` execution mode).
-        if self.compliance_pose_target is not None:
-            self._apply_compliance_pose_target()
+        if self.current_action_rep == "abs_ee_pose":
+            self._apply_abs_ee_pose_action(self.actions[:, 0:7], self.packet_clip_pose_target)
             return
-
-        if self.cfg.ctrl.use_delta_pose:
-            super()._apply_action()
+        if self.current_action_rep == "delta_ee_pose":
+            self._apply_delta_ee_pose_action()
             return
 
         # Step (0): Scale actions to allowed range.
@@ -364,18 +399,40 @@ class ForgeEnv(FactoryEnv):
             ctrl_target_gripper_dof_pos=0.0,
         )
 
-    def _apply_compliance_pose_target(self):
-        """Drive the controller toward `compliance_pose_target` (fingertip frame).
+    def _apply_delta_ee_pose_action(self):
+        """Apply current-EE delta action with axis-angle rotation, like RobustTrack."""
+        pos_actions = self.actions[:, 0:3] * self.pos_threshold
+        rot_actions = self.actions[:, 3:6] * self.rot_threshold
 
-        `compliance_pose_target` is (num_envs, 7) = [pos(3), quat(4) wxyz] in the
-        same frame as `fingertip_midpoint_pos/quat`. When
-        `compliance_clip_pose_target` is True (default) the position and
-        orientation errors are clipped to `pos_threshold`/`rot_threshold` with
+        ctrl_target_fingertip_midpoint_pos = self.fingertip_midpoint_pos + pos_actions
+        self.delta_pos = pos_actions
+
+        angle = torch.norm(rot_actions, p=2, dim=-1)
+        axis = rot_actions / torch.clamp(angle.unsqueeze(-1), min=1.0e-6)
+        self.delta_yaw = angle
+        delta_quat = torch_utils.quat_from_angle_axis(angle, axis)
+        identity_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1)
+        delta_quat = torch.where(angle.unsqueeze(-1) > 1.0e-6, delta_quat, identity_quat)
+        ctrl_target_fingertip_midpoint_quat = torch_utils.quat_mul(delta_quat, self.fingertip_midpoint_quat)
+
+        self.generate_ctrl_signals(
+            ctrl_target_fingertip_midpoint_pos=ctrl_target_fingertip_midpoint_pos,
+            ctrl_target_fingertip_midpoint_quat=ctrl_target_fingertip_midpoint_quat,
+            ctrl_target_gripper_dof_pos=0.0,
+        )
+
+    def _apply_abs_ee_pose_action(self, target_pose: torch.Tensor, clip_pose_target: bool = True):
+        """Drive the controller toward an absolute fingertip pose target.
+
+        `target_pose` is (num_envs, 7) = [pos(3), quat(4) wxyz] in the same
+        frame as `fingertip_midpoint_pos/quat`. When `clip_pose_target` is True
+        (default) the position and orientation errors are clipped to
+        `pos_threshold`/`rot_threshold` with
         the same Euler + wrap_yaw logic as the standard absolute-pose action
         path, so the per-step target stays bounded.
         """
-        target_pos = self.compliance_pose_target[:, 0:3]
-        target_quat = self.compliance_pose_target[:, 3:7]
+        target_pos = target_pose[:, 0:3]
+        target_quat = target_pose[:, 3:7]
         target_quat = target_quat / torch.linalg.norm(target_quat, dim=-1, keepdim=True).clamp_min(1e-8)
 
         # Position error (used for action_penalty logging too).
@@ -388,7 +445,7 @@ class ForgeEnv(FactoryEnv):
         desired_yaw = factory_utils.wrap_yaw(desired_yaw)
         self.delta_yaw = desired_yaw - curr_yaw
 
-        if self.compliance_clip_pose_target:
+        if clip_pose_target:
             pos_error_clipped = torch.clip(self.delta_pos, -self.pos_threshold, self.pos_threshold)
             ctrl_target_fingertip_midpoint_pos = self.fingertip_midpoint_pos + pos_error_clipped
 
@@ -543,9 +600,13 @@ class ForgeEnv(FactoryEnv):
     def _reset_idx(self, env_ids):
         """Perform additional randomizations."""
         super()._reset_idx(env_ids)
+        self.current_action_rep = str(getattr(self.cfg.ctrl, "action_rep", "rel_ee_pose"))
+        self.packet_stiffness_override = None
+        self.packet_deriv_override = None
+        self.packet_clip_pose_target = True
 
-        # Compute initial action for correct EMA computation.
-        if not self.cfg.ctrl.use_delta_pose:
+        # Compute initial relative action for correct EMA computation.
+        if self.current_action_rep == "rel_ee_pose":
             fixed_pos_action_frame = self.fixed_pos_obs_frame + self.init_fixed_pos_obs_noise
             pos_actions = self.fingertip_midpoint_pos - fixed_pos_action_frame
             pos_action_bounds = torch.tensor(self.cfg.ctrl.pos_action_bounds, device=self.device)

@@ -34,7 +34,7 @@ class ForgeCtrlCfg(CtrlCfg):
     rot_threshold_noise_level = [0.29, 0.29, 0.29]
 
     default_dead_zone = [5.0, 5.0, 5.0, 1.0, 1.0, 1.0]
-    use_delta_pose = False
+    action_rep: str = "rel_ee_pose"
 
     # Use the full operational-space control law: premultiply the task-space PD
     # wrench by the task inertia Λ = (J M⁻¹ Jᵀ)⁻¹. False falls back to the legacy
@@ -178,8 +178,8 @@ class ForgeEnvCfg(FactoryEnvCfg):
         if ctrl.get("ema_factor_range", None) is not None:
             self.ctrl.ema_factor_range = OmegaConf.to_container(ctrl.ema_factor_range, resolve=True)
 
-        if ctrl.get("use_delta_pose", None) is not None:
-            self.ctrl.use_delta_pose = ctrl.use_delta_pose
+        if ctrl.get("action_rep", None) is not None:
+            self.ctrl.action_rep = str(ctrl.action_rep)
 
         if ctrl.get("use_task_space_inertia", None) is not None:
             self.ctrl.use_task_space_inertia = ctrl.use_task_space_inertia

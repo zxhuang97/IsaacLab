@@ -28,6 +28,7 @@ class CtrlCfg:
 
     backend: str = "factory_control"  # factory_control, dls_ik
     ema_factor: float = 1.0
+    action_rep: str = "delta_ee_pose"
 
     # By default the OSC controller runs on the *nominal* mass matrix, rebuilt from
     # the default inertial parameters, so it stays blind to the payload and link-mass
@@ -461,6 +462,7 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
         for key in [
             "backend",
             "ema_factor",
+            "action_rep",
             "use_gt_mass_matrix",
             "use_task_space_inertia",
             "pos_action_threshold",

@@ -34,6 +34,9 @@ class FrankaRobustTrackEnv(DirectRLEnv):
 
         self.actions = torch.zeros(self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device)
         self.prev_actions = torch.zeros_like(self.actions)
+        self.current_action_rep = str(getattr(self.cfg.ctrl, "action_rep", "delta_ee_pose"))
+        self.packet_stiffness_override = None
+        self.packet_deriv_override = None
         self.ctrl_target_joint_pos = torch.zeros((self.num_envs, self._robot.num_joints), device=self.device)
 
         # Observation history: only the proprioceptive part is stacked over the last
@@ -437,15 +440,81 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             "tensors expressed in the link frame about the CoM."
         )
 
+    def _parse_action_packet(self, action_or_packet):
+        """Return (action, action_rep, compliance) for tensor or dict step input."""
+        if not isinstance(action_or_packet, dict):
+            return action_or_packet, str(getattr(self.cfg.ctrl, "action_rep", "delta_ee_pose")), {}
+        if "action" not in action_or_packet:
+            raise KeyError("Action packet must contain an 'action' tensor.")
+        action = action_or_packet["action"]
+        action_rep = str(action_or_packet.get("action_rep", getattr(self.cfg.ctrl, "action_rep", "delta_ee_pose")))
+        compliance = action_or_packet.get("compliance", None) or {}
+        return action, action_rep, compliance
+
+    def _fit_action_dim(self, actions: torch.Tensor) -> torch.Tensor:
+        if actions.shape[-1] < self.actions.shape[-1]:
+            pad = torch.zeros(
+                actions.shape[0],
+                self.actions.shape[-1] - actions.shape[-1],
+                device=self.device,
+                dtype=actions.dtype,
+            )
+            actions = torch.cat((actions, pad), dim=-1)
+        elif actions.shape[-1] > self.actions.shape[-1]:
+            actions = actions[:, : self.actions.shape[-1]]
+        return actions
+
+    def _delta_action_from_abs_ee_pose(self, target_pose: torch.Tensor) -> torch.Tensor:
+        if target_pose.shape[-1] < 7:
+            raise ValueError(f"action_rep='abs_ee_pose' requires at least 7 dims, got {tuple(target_pose.shape)}")
+        target_pos = target_pose[:, 0:3]
+        target_quat = target_pose[:, 3:7]
+        target_quat = target_quat / torch.linalg.norm(target_quat, dim=-1, keepdim=True).clamp_min(1.0e-8)
+        pos_error, axis_angle_error = factory_control.get_pose_error(
+            fingertip_midpoint_pos=self.fingertip_midpoint_pos,
+            fingertip_midpoint_quat=self.fingertip_midpoint_quat,
+            ctrl_target_fingertip_midpoint_pos=target_pos,
+            ctrl_target_fingertip_midpoint_quat=target_quat,
+            jacobian_type="geometric",
+            rot_error_type="axis_angle",
+        )
+        pose_action = torch.cat(
+            (pos_error / self.pos_threshold, axis_angle_error / self.rot_threshold),
+            dim=-1,
+        )
+        if self.cfg.ctrl.control_gains and target_pose.shape[-1] >= 13:
+            pose_action = torch.cat((pose_action, target_pose[:, 7:13]), dim=-1)
+        return self._fit_action_dim(pose_action)
+
     def _pre_physics_step(self, actions: torch.Tensor):
         self.prev_actions[:] = self.actions
-        self.actions = self.cfg.ctrl.ema_factor * actions.clone().to(self.device).clamp(-1.0, 1.0) + (
+        actions, action_rep, compliance = self._parse_action_packet(actions)
+        if action_rep not in ("rel_ee_pose", "abs_ee_pose", "delta_ee_pose"):
+            raise ValueError(f"Unsupported FrankaRobustTrack action_rep={action_rep!r}")
+        if action_rep == "rel_ee_pose":
+            raise ValueError("FrankaRobustTrackEnv does not support action_rep='rel_ee_pose'.")
+        self.current_action_rep = action_rep
+        self.packet_stiffness_override = compliance.get("stiffness", None)
+        self.packet_deriv_override = compliance.get("damping", None)
+
+        actions = actions.clone().to(self.device)
+        if action_rep == "abs_ee_pose":
+            actions = self._delta_action_from_abs_ee_pose(actions)
+        else:
+            actions = self._fit_action_dim(actions)
+        self.actions = self.cfg.ctrl.ema_factor * actions.clamp(-1.0, 1.0) + (
             1.0 - self.cfg.ctrl.ema_factor
         ) * self.actions
 
     def _apply_action(self):
         self._compute_intermediate_values()
         self._update_gains_from_action()
+        if self.packet_stiffness_override is not None:
+            self.task_prop_gains = self.packet_stiffness_override
+            if self.packet_deriv_override is not None:
+                self.task_deriv_gains = self.packet_deriv_override
+            else:
+                self.task_deriv_gains = factory_utils.get_deriv_gains(self.task_prop_gains)
         if self.enable_force:
             # Current step's target wrench (pre-increment episode index), applied
             # as the external disturbance for this physics step.

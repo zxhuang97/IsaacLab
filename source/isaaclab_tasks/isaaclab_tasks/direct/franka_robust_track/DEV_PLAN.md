@@ -13,6 +13,80 @@ behavior, the target behavior, and the concrete implementation touch points.
 
 ---
 
+## Current implementation handoff: action packets and action representations
+
+**Public step input**
+- Tensor actions still work and keep the normal Gym/RL-wrapper path:
+  `env.step(action_tensor)`.
+- Direct eval/replay code can now pass an action packet:
+  `env.step({"action": tensor, "action_rep": rep, "compliance": {...}})`.
+- `action_rep` is one of:
+  - `rel_ee_pose`: Forge fixed-object-relative normalized action.
+  - `abs_ee_pose`: absolute fingertip pose `[x, y, z, qw, qx, qy, qz]`.
+  - `delta_ee_pose`: normalized current-EE delta; rotation is axis-angle.
+- `compliance` is optional and may contain `stiffness`, `damping`, and
+  `clip_pose_target`.
+
+**RobustTrack env behavior**
+- `CtrlCfg.action_rep` defaults to `delta_ee_pose`.
+- Tensor actions are interpreted using `cfg.ctrl.action_rep`.
+- Packet `action_rep="delta_ee_pose"` uses the existing RobustTrack action path:
+  position delta is scaled by `pos_action_threshold`; rotation delta is an
+  axis-angle vector scaled by `rot_action_threshold`; target quat is
+  `delta_quat * current_fingertip_quat`.
+- Packet `action_rep="abs_ee_pose"` converts the absolute pose into the native
+  normalized delta action inside `_pre_physics_step` using
+  `factory_control.get_pose_error(..., rot_error_type="axis_angle")`, then
+  reuses the same target-pose path.
+- Packet `action_rep="rel_ee_pose"` is invalid for RobustTrack and raises.
+- Packet compliance stiffness/damping can override `task_prop_gains` /
+  `task_deriv_gains` for that step.
+
+**Forge env behavior**
+- `ForgeCtrlCfg.action_rep` defaults to `rel_ee_pose`.
+- `use_delta_pose` has been removed from the Forge dispatch path; callers should
+  configure `env.ctrl.action_rep`.
+- `rel_ee_pose` is the old Forge default: normalized target pose relative to the
+  fixed object/action frame.
+- `abs_ee_pose` replaces the old external `compliance_pose_target` hook. The
+  action tensor is the absolute fingertip pose; Forge calls
+  `_apply_abs_ee_pose_action(...)` internally and can clip to
+  `pos_threshold`/`rot_threshold`.
+- `delta_ee_pose` is implemented natively in Forge to match RobustTrack
+  semantics: current EE position plus scaled delta, and axis-angle delta
+  quaternion multiplied by current EE quaternion.
+- The old `compliance_pose_target`, `compliance_clip_pose_target`,
+  `compliance_stiffness_override`, and `compliance_deriv_override` hook path was
+  removed from Forge. Compliance now rides in the action packet.
+
+**Eval/control integration**
+- `ComplianceController.apply(...)` now returns an action packet descriptor
+  instead of mutating env hooks.
+- `HierarchicalTrackerController.apply(...)` returns an `abs_ee_pose` packet with
+  compliance gains.
+- `experiments/exp_planning.py` always calls `env.step(packet)` when compliance
+  or a non-default action representation is needed.
+- `scripts/track_dataset_tool_pose.py` sends dataset tool poses to RobustTrack as
+  `abs_ee_pose` packets; the env converts them to `delta_ee_pose`.
+- `scripts/track_dataset_tool_pose_forge.py` sends dataset tool poses to Forge
+  as `abs_ee_pose` packets for direct replay, or `rel_ee_pose` packets for the
+  Forge action path.
+- `launchers/launch_eval_mdf.py` now emits
+  `+experiment.interact.env.ctrl.action_rep="rel_ee_pose"` for normal Forge
+  evals and uses representation-based compliance labels such as
+  `rel_ee_pose_default`, `tool_abs_ee_pose_adaptive`, and
+  `vt_abs_ee_pose_pred_dir`.
+
+**Known cleanup left**
+- `ComplianceController` still uses the internal name `exec_mode`; it now means
+  "which policy output/source to package" rather than env execution. A future
+  cleanup should replace it with explicit `source` + `action_rep` fields.
+- Some older launcher names/comments may still be semantically tied to historical
+  experiments, but local `use_delta_pose` usage was removed from the Forge eval
+  and collection launchers touched in this refactor.
+
+---
+
 ## Feature 1: Track a trajectory instead of a single pose
 
 **Motivation:** Track a moving, time-parameterized reference instead of a single
