@@ -353,6 +353,9 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         use_full_rotation = ctrl.get("use_full_rotation", None)
         if use_full_rotation is not None:
             self.ctrl.use_full_rotation = use_full_rotation
+        default_dof_pos_tensor = ctrl.get("default_dof_pos_tensor", None)
+        if default_dof_pos_tensor is not None:
+            self.ctrl.default_dof_pos_tensor = OmegaConf.to_container(default_dof_pos_tensor, resolve=True)
         if env.get("robot_usd_path", None) is not None:
             self.robot_usd_path = env.robot_usd_path
 

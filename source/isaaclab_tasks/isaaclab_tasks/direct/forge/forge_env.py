@@ -71,6 +71,8 @@ class ForgeEnv(FactoryEnv):
         self.compliance_deriv_override = None
         self.compliance_pose_target = None
         self.compliance_clip_pose_target = True
+        self.last_ctrl_target_fingertip_midpoint_pos = None
+        self.last_ctrl_target_fingertip_midpoint_quat = None
         # Matrix-valued gain channel for directional (anisotropic) compliance.
         # When set (num_envs, 6, 6), generate_ctrl_signals uses these instead of
         # the per-axis task_prop_gains / task_deriv_gains vectors.
@@ -369,8 +371,9 @@ class ForgeEnv(FactoryEnv):
         `compliance_pose_target` is (num_envs, 7) = [pos(3), quat(4) wxyz] in the
         same frame as `fingertip_midpoint_pos/quat`. When
         `compliance_clip_pose_target` is True (default) the position and
-        orientation errors are clipped to `pos_threshold`/`rot_threshold`, exactly
-        as the standard action path does, so the per-step target stays bounded.
+        orientation errors are clipped to `pos_threshold`/`rot_threshold` with
+        the same Euler + wrap_yaw logic as the standard absolute-pose action
+        path, so the per-step target stays bounded.
         """
         target_pos = self.compliance_pose_target[:, 0:3]
         target_quat = self.compliance_pose_target[:, 3:7]
@@ -379,22 +382,38 @@ class ForgeEnv(FactoryEnv):
         # Position error (used for action_penalty logging too).
         self.delta_pos = target_pos - self.fingertip_midpoint_pos
 
-        # Orientation error as axis-angle of (target * current^-1).
-        quat_err = torch_utils.quat_mul(target_quat, torch_utils.quat_conjugate(self.fingertip_midpoint_quat))
-        quat_err = quat_err * torch.sign(quat_err[:, 0:1])
-        aa_err = axis_angle_from_quat(quat_err)  # (num_envs, 3)
-        self.delta_yaw = aa_err[:, 2]
+        # Orientation error via Euler (same representation as the standard path).
+        curr_roll, curr_pitch, curr_yaw = torch_utils.get_euler_xyz(self.fingertip_midpoint_quat)
+        desired_roll, desired_pitch, desired_yaw = torch_utils.get_euler_xyz(target_quat)
+        curr_yaw = factory_utils.wrap_yaw(curr_yaw)
+        desired_yaw = factory_utils.wrap_yaw(desired_yaw)
+        self.delta_yaw = desired_yaw - curr_yaw
 
         if self.compliance_clip_pose_target:
             pos_error_clipped = torch.clip(self.delta_pos, -self.pos_threshold, self.pos_threshold)
             ctrl_target_fingertip_midpoint_pos = self.fingertip_midpoint_pos + pos_error_clipped
 
-            aa_clipped = torch.clip(aa_err, -self.rot_threshold, self.rot_threshold)
-            angle = torch.linalg.norm(aa_clipped, dim=-1)
-            axis = aa_clipped / angle.unsqueeze(-1).clamp_min(1e-8)
-            clipped_delta_quat = torch_utils.quat_from_angle_axis(angle, axis)
-            ctrl_target_fingertip_midpoint_quat = torch_utils.quat_mul(
-                clipped_delta_quat, self.fingertip_midpoint_quat
+            desired_xyz = torch.stack([desired_roll, desired_pitch, desired_yaw], dim=1)
+
+            clipped_yaw = torch.clip(self.delta_yaw, -self.rot_threshold[:, 2], self.rot_threshold[:, 2])
+            desired_xyz[:, 2] = curr_yaw + clipped_yaw
+
+            desired_roll = torch.where(desired_roll < 0.0, desired_roll + 2 * torch.pi, desired_roll)
+            desired_pitch = torch.where(desired_pitch < 0.0, desired_pitch + 2 * torch.pi, desired_pitch)
+
+            delta_roll = desired_roll - curr_roll
+            clipped_roll = torch.clip(delta_roll, -self.rot_threshold[:, 0], self.rot_threshold[:, 0])
+            desired_xyz[:, 0] = curr_roll + clipped_roll
+
+            curr_pitch = torch.where(curr_pitch > torch.pi, curr_pitch - 2 * torch.pi, curr_pitch)
+            desired_pitch = torch.where(desired_pitch > torch.pi, desired_pitch - 2 * torch.pi, desired_pitch)
+
+            delta_pitch = desired_pitch - curr_pitch
+            clipped_pitch = torch.clip(delta_pitch, -self.rot_threshold[:, 1], self.rot_threshold[:, 1])
+            desired_xyz[:, 1] = curr_pitch + clipped_pitch
+
+            ctrl_target_fingertip_midpoint_quat = torch_utils.quat_from_euler_xyz(
+                roll=desired_xyz[:, 0], pitch=desired_xyz[:, 1], yaw=desired_xyz[:, 2]
             )
         else:
             ctrl_target_fingertip_midpoint_pos = target_pos
@@ -423,6 +442,9 @@ class ForgeEnv(FactoryEnv):
         gains, so the compliance-eval matrix-gain channel falls back to the factory
         controller.
         """
+        self.last_ctrl_target_fingertip_midpoint_pos = ctrl_target_fingertip_midpoint_pos.detach().clone()
+        self.last_ctrl_target_fingertip_midpoint_quat = ctrl_target_fingertip_midpoint_quat.detach().clone()
+
         if not getattr(self.cfg.ctrl, "use_osc", False):
             super().generate_ctrl_signals(
                 ctrl_target_fingertip_midpoint_pos,
@@ -441,6 +463,10 @@ class ForgeEnv(FactoryEnv):
             )
             return
 
+        nullspace_joint_target = torch.tensor(
+            self.cfg.ctrl.reset_joints, device=self.device, dtype=self.joint_pos.dtype
+        ).repeat(self.num_envs, 1)
+
         self.joint_torque, self.applied_wrench, self.ctrl_debug = osc_control.compute_dof_torque(
             cfg=self.cfg,
             dof_pos=self.joint_pos,
@@ -456,6 +482,7 @@ class ForgeEnv(FactoryEnv):
             task_prop_gains=self.task_prop_gains,
             task_deriv_gains=self.task_deriv_gains,
             device=self.device,
+            nullspace_joint_target=nullspace_joint_target,
             apply_task_inertia=self.cfg.ctrl.use_task_space_inertia,
             return_debug=True,
         )
