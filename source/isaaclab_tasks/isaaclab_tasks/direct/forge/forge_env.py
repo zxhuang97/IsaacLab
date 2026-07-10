@@ -441,7 +441,7 @@ class ForgeEnv(FactoryEnv):
             )
             return
 
-        self.joint_torque, self.applied_wrench = osc_control.compute_dof_torque(
+        self.joint_torque, self.applied_wrench, self.ctrl_debug = osc_control.compute_dof_torque(
             cfg=self.cfg,
             dof_pos=self.joint_pos,
             dof_vel=self.joint_vel,
@@ -457,6 +457,7 @@ class ForgeEnv(FactoryEnv):
             task_deriv_gains=self.task_deriv_gains,
             device=self.device,
             apply_task_inertia=self.cfg.ctrl.use_task_space_inertia,
+            return_debug=True,
         )
 
         self.ctrl_target_joint_pos[:, 7:9] = ctrl_target_gripper_dof_pos

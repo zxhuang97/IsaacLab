@@ -425,7 +425,7 @@ class FactoryEnv(DirectRLEnv):
         if task_prop is None:
             task_prop = self.task_prop_gains
             task_deriv = self.task_deriv_gains
-        self.joint_torque, self.applied_wrench = factory_control.compute_dof_torque(
+        self.joint_torque, self.applied_wrench, self.ctrl_debug = factory_control.compute_dof_torque(
             cfg=self.cfg,
             dof_pos=self.joint_pos,
             dof_vel=self.joint_vel,
@@ -441,6 +441,7 @@ class FactoryEnv(DirectRLEnv):
             task_deriv_gains=task_deriv,
             device=self.device,
             dead_zone_thresholds=self.dead_zone_thresholds,
+            return_debug=True,
         )
 
         # set target for gripper joints to use physx's PD controller

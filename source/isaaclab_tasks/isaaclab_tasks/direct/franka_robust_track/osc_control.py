@@ -46,6 +46,7 @@ def compute_dof_torque(
     device,
     nullspace_joint_target=None,
     apply_task_inertia=True,
+    return_debug=False,
 ):
     """Compute Franka arm DOF torque to drive the fingertip toward a target pose.
 
@@ -69,6 +70,7 @@ def compute_dof_torque(
     # Task-space PD wrench: Kp * pose_error - Kd * ee_velocity (per-axis gains).
     ee_vel = torch.cat((fingertip_midpoint_linvel, fingertip_midpoint_angvel), dim=-1)
     task_wrench = task_prop_gains * delta_fingertip_pose - task_deriv_gains * ee_vel
+    task_wrench_raw = task_wrench.clone()
 
     # Operational-space inertia Λ = (J M⁻¹ Jᵀ)⁻¹ (ETH eq. 3.86; geometric Jacobian).
     arm_mass_matrix_inv = torch.inverse(arm_mass_matrix)
@@ -96,7 +98,8 @@ def compute_dof_torque(
         task_wrench = (arm_mass_matrix_task @ task_wrench.unsqueeze(-1)).squeeze(-1)
 
     # Map the task wrench into joint torques: tau = J^T * wrench.
-    dof_torque[:, 0:7] = (jacobian_T @ task_wrench.unsqueeze(-1)).squeeze(-1)
+    torque_task = (jacobian_T @ task_wrench.unsqueeze(-1)).squeeze(-1)
+    dof_torque[:, 0:7] = torque_task
 
     # Nullspace posture control: bias the redundant DoF toward the posture target
     # without disturbing the task-space motion.
@@ -118,5 +121,19 @@ def compute_dof_torque(
             f"before clamping. This is a controller-side NaN, not the policy std."
         )
 
+    dof_torque_pre_clamp = dof_torque.clone()
     dof_torque = torch.clamp(dof_torque, min=-100.0, max=100.0)
+    if return_debug:
+        return dof_torque, task_wrench, {
+            "pose_error": delta_fingertip_pose,
+            "ee_vel": ee_vel,
+            "task_wrench_raw": task_wrench_raw,
+            "task_wrench_cmd": task_wrench,
+            "torque_task": torque_task,
+            "torque_null": torque_null.squeeze(-1),
+            "dof_torque_pre_clamp": dof_torque_pre_clamp,
+            "dead_zone_thresholds": None,
+            "task_inertia_diag": torch.diagonal(arm_mass_matrix_task, dim1=-2, dim2=-1),
+            "task_inertia_det": torch.linalg.det(task_inertia).unsqueeze(-1),
+        }
     return dof_torque, task_wrench

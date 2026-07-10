@@ -10,6 +10,9 @@ from isaaclab.envs import DirectRLEnv
 
 
 def randomize_dead_zone(env: DirectRLEnv, env_ids: torch.Tensor | None):
+    if not getattr(env.cfg, "use_dead_zone", True):
+        env.dead_zone_thresholds = None
+        return
     env.dead_zone_thresholds = (
         torch.rand((env.num_envs, 6), dtype=torch.float32, device=env.device) * env.default_dead_zone
     )

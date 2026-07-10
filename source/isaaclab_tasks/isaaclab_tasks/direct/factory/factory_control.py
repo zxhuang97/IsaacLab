@@ -33,6 +33,7 @@ def compute_dof_torque(
     device,
     dead_zone_thresholds=None,
     nullspace_joint_target=None,
+    return_debug=False,
 ):
     """Compute Franka DOF torque to move fingertips towards target pose."""
     # References:
@@ -62,6 +63,7 @@ def compute_dof_torque(
         task_deriv_gains=task_deriv_gains,
     )
     task_wrench += task_wrench_motion
+    task_wrench_raw = task_wrench.clone()
 
     # Offset task_wrench motion by random amount to simulate unreliability at low forces.
     # Check if absolute value is less than specified amount. If so, 0 out, otherwise, subtract.
@@ -74,7 +76,8 @@ def compute_dof_torque(
 
     # Set tau = J^T * tau, i.e., map tau into joint space as desired
     jacobian_T = torch.transpose(jacobian, dim0=1, dim1=2)
-    dof_torque[:, 0:7] = (jacobian_T @ task_wrench.unsqueeze(-1)).squeeze(-1)
+    torque_task = (jacobian_T @ task_wrench.unsqueeze(-1)).squeeze(-1)
+    dof_torque[:, 0:7] = torque_task
 
     # adapted from https://gitlab-master.nvidia.com/carbon-gym/carbgym/-/blob/b4bbc66f4e31b1a1bee61dbaafc0766bbfbf0f58/python/examples/franka_cube_ik_osc.py#L70-78
     # roboticsproceedings.org/rss07/p31.pdf
@@ -103,7 +106,21 @@ def compute_dof_torque(
     dof_torque[:, 0:7] += torque_null.squeeze(-1)
 
     # TODO: Verify it's okay to no longer do gripper control here.
+    dof_torque_pre_clamp = dof_torque.clone()
     dof_torque = torch.clamp(dof_torque, min=-100.0, max=100.0)
+    if return_debug:
+        return dof_torque, task_wrench, {
+            "pose_error": delta_fingertip_pose,
+            "ee_vel": torch.cat((fingertip_midpoint_linvel, fingertip_midpoint_angvel), dim=-1),
+            "task_wrench_raw": task_wrench_raw,
+            "task_wrench_cmd": task_wrench,
+            "torque_task": torque_task,
+            "torque_null": torque_null.squeeze(-1),
+            "dof_torque_pre_clamp": dof_torque_pre_clamp,
+            "dead_zone_thresholds": dead_zone_thresholds,
+            "task_inertia_diag": torch.diagonal(arm_mass_matrix_task, dim1=-2, dim2=-1),
+            "task_inertia_det": torch.linalg.det(jacobian @ arm_mass_matrix_inv @ jacobian_T).unsqueeze(-1),
+        }
     return dof_torque, task_wrench
 
 
