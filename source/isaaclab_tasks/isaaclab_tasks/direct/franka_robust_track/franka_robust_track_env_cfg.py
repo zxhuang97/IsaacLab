@@ -56,6 +56,11 @@ class CtrlCfg:
     reset_joints = [0.00871, -0.10368, -0.00794, -1.49139, -0.00083, 1.38774, 0.0]
     default_task_prop_gains = [300.0, 300.0, 300.0, 28.0, 28.0, 28.0]
     task_prop_gains_noise_level = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    # Reset-time gain randomization:
+    #   "scalar"   -> draw one gain multiplier per env and share it across all 6 axes
+    #   "per_axis" -> draw an independent gain multiplier for each of the 6 axes
+    # Zero noise keeps the configured default gains in either mode.
+    task_prop_gains_randomization_mode: str = "per_axis"
 
     # If True, the policy also outputs the 6 task-space proportional gains
     # (3 translational, 3 rotational) as extra action dims, mapped from the
@@ -137,13 +142,16 @@ class TrackingCfg:
     dataset_pose_key: str = "tool_pose"  # (N, 7) pos(3) + quat(4, wxyz) field
     dataset_only_success: bool = True  # keep only episodes with trial_success set
     dataset_max_trajs: int = 0  # cap loaded episodes (0 = all available)
-    # Per-reset spatial augmentation for dataset trajectories. With the configured
-    # probability, every pose receives an offset of the same magnitude while its
-    # direction rotates smoothly along a random cone, changing the trajectory shape
-    # without time-dependent noise scale or accumulation. `dataset_warp_shape_fraction`
-    # controls the cone's transverse component (0 = rigid offset, 1 = pure loop),
-    # and `dataset_warp_cycles_range` controls its number of turns. Zero probability
+    # Per-reset spatial augmentation for dataset trajectories. Available strategies:
+    #   "smooth_bump": original quartic warp that preserves both endpoints and
+    #                  reaches the sampled offset at the trajectory midpoint.
+    #   "constant_scale_shape": every pose receives an offset of the same magnitude
+    #                  while its direction rotates smoothly along a random cone.
+    # For the shape strategy, `dataset_warp_shape_fraction` controls the cone's
+    # transverse component (0 = rigid offset, 1 = pure loop), and
+    # `dataset_warp_cycles_range` controls its number of turns. Zero probability
     # leaves the demonstration unchanged. Candidates still pass the cuRobo checks.
+    dataset_warp_strategy: str = "smooth_bump"
     dataset_warp_prob: float = 0.0
     dataset_warp_pos_max: float = 0.0  # m
     dataset_warp_rot_max: float = 0.0  # rad
@@ -335,11 +343,11 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
     # observation_space / state_space are recomputed in __post_init__. Only the
     # proprioceptive part (20 dims) is stacked over obs_history_length frames so
     # the network can infer velocities/dynamics from the past. The lookahead future
-    # errors (6 * num_future_steps) are forward-looking reference info and the
-    # critic's privileged dims (23) are episode-constant, so both are appended once
-    # from the current frame rather than duplicated across the history.
-    observation_space = 44
-    state_space = 67
+    # errors (6 * num_future_steps), controller gains (6), and the critic's
+    # privileged dims are episode-constant/current context, so they are appended
+    # once rather than duplicated across the history.
+    observation_space = 50
+    state_space = 74
 
     ctrl: CtrlCfg = CtrlCfg()
     tracking: TrackingCfg = TrackingCfg()
@@ -489,6 +497,7 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "rot_action_threshold",
             "default_task_prop_gains",
             "task_prop_gains_noise_level",
+            "task_prop_gains_randomization_mode",
             "control_gains",
             "task_prop_gains_min",
             "task_prop_gains_max",
@@ -514,6 +523,7 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "dataset_pose_key",
             "dataset_only_success",
             "dataset_max_trajs",
+            "dataset_warp_strategy",
             "dataset_warp_prob",
             "dataset_warp_pos_max",
             "dataset_warp_rot_max",
@@ -602,18 +612,20 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
 
         # Proprio obs: ee_pos(3)+ee_quat(4)+joint_pos(7)+actions(action_dim) (velocity
         # terms are omitted; the LSTM infers them from history). Each lookahead
-        # pose contributes a (pos_error, axis_angle_error) pair = 6 dims. Critic
-        # adds 30 privileged dims: payload_mass(1)+payload_com(3)+joint_friction(7)
-        # +joint_armature(7)+task_gains(6)+pos_threshold(3)+rot_threshold(3).
+        # pose contributes a (pos_error, axis_angle_error) pair = 6 dims. The 6
+        # current task gains are fed once to both policy and critic. The critic adds
+        # 24 privileged dims: payload_mass(1)+payload_com(3)+joint_friction(7)
+        # +joint_armature(7)+pos_threshold(3)+rot_threshold(3).
         proprio_dim = 14 + action_dim
         future_dim = 6 * self.tracking.num_future_steps
-        privileged_dim = 30
+        controller_context_dim = 6
+        privileged_dim = 24
         # Force-tracking add-on contributes a (current + lookahead) target-wrench
         # block of 3 dims per step to both the policy and the critic observation.
         force_dim = 3 * self.tracking.num_future_steps if self.tracking.enable_force else 0
         history = max(1, int(self.obs_history_length))
-        # Only proprio is stacked over history; future errors + target wrench
-        # (policy+critic) and privileged dims (critic) are appended once from the
-        # current frame.
-        self.observation_space = proprio_dim * history + future_dim + force_dim
-        self.state_space = proprio_dim * history + future_dim + force_dim + privileged_dim
+        # Only proprio is stacked over history; future errors + target wrench +
+        # controller gains (policy+critic) and privileged dims (critic) are appended
+        # once from the current frame.
+        self.observation_space = proprio_dim * history + future_dim + force_dim + controller_context_dim
+        self.state_space = self.observation_space + privileged_dim

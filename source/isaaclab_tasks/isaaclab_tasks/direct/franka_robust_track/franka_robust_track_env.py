@@ -52,9 +52,9 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         # Observation history: only the proprioceptive part is stacked over the last
         # `obs_history_length` frames (concatenated oldest->newest) so the network
         # can infer velocities/dynamics from the past. The lookahead future errors
-        # and the critic's privileged dims are forward-looking / episode-constant, so
-        # they are appended once from the current frame rather than duplicated across
-        # the history. H = 1 keeps the single-step observation.
+        # controller gains, and the critic's privileged dims are forward-looking /
+        # episode-constant, so they are appended once from the current frame rather
+        # than duplicated across the history. H = 1 keeps the single-step observation.
         self.obs_history_length = max(1, int(self.cfg.obs_history_length))
         # ee_pos(3)+ee_quat(4)+joint_pos(7) = 14, plus the (possibly gain-augmented)
         # action vector fed back into the proprio observation.
@@ -66,7 +66,8 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self.enable_force = bool(self.cfg.tracking.enable_force)
         self.force_dim = 3 * self.cfg.tracking.num_future_steps if self.enable_force else 0
         self._force_mag_max = max(float(self.cfg.tracking.force_mag_range[1]), 1.0e-6)
-        self.privileged_dim = 30
+        self.controller_context_dim = 6
+        self.privileged_dim = 24
         self.proprio_history = torch.zeros(
             (self.num_envs, self.obs_history_length, self.proprio_dim), device=self.device
         )
@@ -673,12 +674,12 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self._robot.set_joint_position_target(self.ctrl_target_joint_pos)
         self._robot.set_joint_effort_target(self.joint_torque)
 
-    def _compute_obs_parts(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _compute_obs_parts(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Build the current-frame observation parts.
 
-        Returns (proprio, future_errors, privileged): `proprio` is the part stacked
-        over history, `future_errors` is the lookahead reference (policy + critic),
-        and `privileged` is the critic-only privileged information.
+        Returns (proprio, future_errors, controller_context, privileged): `proprio`
+        is stacked over history; `future_errors` and `controller_context` are fed
+        once to both policy and critic; and `privileged` is critic-only information.
         """
         self._compute_intermediate_values()
         self._update_command()
@@ -692,22 +693,22 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             ],
             dim=-1,
         )
+        controller_context = self.task_prop_gains
         privileged = torch.cat(
             [
                 self.payload_mass,
                 self.payload_com,
                 self.joint_friction,
                 self.joint_armature,
-                self.task_prop_gains,
                 self.pos_threshold,
                 self.rot_threshold,
             ],
             dim=-1,
         )
-        return proprio, future_errors, privileged
+        return proprio, future_errors, controller_context, privileged
 
     def _get_observations(self) -> dict:
-        proprio, future_errors, privileged = self._compute_obs_parts()
+        proprio, future_errors, controller_context, privileged = self._compute_obs_parts()
         if self.obs_history_length == 1:
             proprio_stacked = proprio
         else:
@@ -719,12 +720,16 @@ class FrankaRobustTrackEnv(DirectRLEnv):
 
         if self.enable_force:
             future_wrench = self._future_wrench()
-            policy_obs = torch.cat([proprio_stacked, future_errors, future_wrench], dim=-1)
-            critic_obs = torch.cat([proprio_stacked, future_errors, future_wrench, privileged], dim=-1)
+            policy_obs = torch.cat(
+                [proprio_stacked, future_errors, future_wrench, controller_context], dim=-1
+            )
+            critic_obs = torch.cat(
+                [proprio_stacked, future_errors, future_wrench, controller_context, privileged], dim=-1
+            )
         else:
             future_wrench = None
-            policy_obs = torch.cat([proprio_stacked, future_errors], dim=-1)
-            critic_obs = torch.cat([proprio_stacked, future_errors, privileged], dim=-1)
+            policy_obs = torch.cat([proprio_stacked, future_errors, controller_context], dim=-1)
+            critic_obs = torch.cat([proprio_stacked, future_errors, controller_context, privileged], dim=-1)
 
         # Fail loud if a NaN/Inf reaches the policy/critic input. If this fires, the
         # crash is env-side (controller / sim state) rather than the policy std
@@ -735,6 +740,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             "joint_pos": self.joint_pos[:, 0:7],
             "actions": self.actions,
             "future_errors": future_errors,
+            "controller_context": controller_context,
             "privileged": privileged,
         }
         if future_wrench is not None:
@@ -859,7 +865,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         # the stacked observation does not mix in stale frames from the prior
         # episode. The subsequent `_get_observations` rolls in the same frame again.
         if self.obs_history_length > 1:
-            proprio, _, _ = self._compute_obs_parts()
+            proprio, _, _, _ = self._compute_obs_parts()
             self.proprio_history[env_ids] = proprio[env_ids].unsqueeze(1)
 
         # Wall-clock cost of the reset, dominated by the cuRobo reachability search.
@@ -1303,8 +1309,15 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         warp_prob = float(getattr(tcfg, "dataset_warp_prob", 0.0))
         warp_pos_max = float(getattr(tcfg, "dataset_warp_pos_max", 0.0))
         warp_rot_max = float(getattr(tcfg, "dataset_warp_rot_max", 0.0))
+        warp_strategy = str(getattr(tcfg, "dataset_warp_strategy", "smooth_bump"))
         shape_fraction = float(getattr(tcfg, "dataset_warp_shape_fraction", 0.0))
         cycles_range = getattr(tcfg, "dataset_warp_cycles_range", [0.5, 1.5])
+        valid_warp_strategies = {"smooth_bump", "constant_scale_shape"}
+        if warp_strategy not in valid_warp_strategies:
+            raise ValueError(
+                f"tracking.dataset_warp_strategy must be one of {sorted(valid_warp_strategies)}, "
+                f"got {warp_strategy!r}"
+            )
         if not 0.0 <= warp_prob <= 1.0:
             raise ValueError(f"tracking.dataset_warp_prob must be in [0, 1], got {warp_prob}")
         if warp_pos_max < 0.0 or warp_rot_max < 0.0:
@@ -1358,10 +1371,11 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         warp_str = ""
         if warp_prob > 0.0:
             warp_str = (
-                f" | smooth warp p={warp_prob:.2f}, "
-                f"pos<={warp_pos_max * 1.0e3:.1f} mm, rot<={math.degrees(warp_rot_max):.1f} deg, "
-                f"shape={shape_fraction:.2f}, cycles={list(cycles_range)}"
+                f" | warp={warp_strategy} p={warp_prob:.2f}, "
+                f"pos<={warp_pos_max * 1.0e3:.1f} mm, rot<={math.degrees(warp_rot_max):.1f} deg"
             )
+            if warp_strategy == "constant_scale_shape":
+                warp_str += f", shape={shape_fraction:.2f}, cycles={list(cycles_range)}"
         print(
             f"[FrankaRobustTrack] dataset mode: loaded {self._ds_num} trajectories from {path} "
             f"(resampled to L={length}) | pos box min {box_min} max {box_max}{force_str}{warp_str}"
@@ -1404,12 +1418,33 @@ class FrankaRobustTrackEnv(DirectRLEnv):
     def _apply_dataset_warp(
         self, pos: torch.Tensor, quat: torch.Tensor, params: dict, traj_phase: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Apply a smooth shape warp with constant translation/rotation magnitude.
+        """Apply the configured smooth dataset trajectory warp.
 
-        The offset direction traces a cone while its norm remains fixed. Thus every
-        waypoint has the same perturbation scale, but the trajectory is not merely
-        shifted rigidly. All parameters are sampled once per reset; nothing compounds.
+        ``smooth_bump`` applies the original endpoint-preserving quartic envelope.
+        ``constant_scale_shape`` rotates a fixed-norm offset along a cone, changing
+        path shape without fading or compounding the perturbation.
         """
+        warp_strategy = str(getattr(self.cfg.tracking, "dataset_warp_strategy", "smooth_bump"))
+        if warp_strategy == "smooth_bump":
+            phase = traj_phase.clamp(0.0, 1.0).unsqueeze(-1)
+            blend = 16.0 * phase.square() * (1.0 - phase).square()
+            pos_offset = blend * params["ds_warp_pos"]
+            rot_vec = blend * params["ds_warp_rot"]
+        else:
+            pos_offset, rot_vec = self._constant_scale_shape_offsets(params, traj_phase)
+
+        pos = pos + pos_offset
+        angle = rot_vec.norm(dim=-1)
+        axis = rot_vec / angle.unsqueeze(-1).clamp(min=1.0e-6)
+        delta_quat = torch_utils.quat_from_angle_axis(angle, axis)
+        quat = torch_utils.quat_mul(delta_quat, quat)
+        quat = quat / quat.norm(dim=-1, keepdim=True).clamp(min=1.0e-6)
+        return pos, quat
+
+    def _constant_scale_shape_offsets(
+        self, params: dict, traj_phase: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Build fixed-norm translation/rotation offsets with varying direction."""
         shape_fraction = float(getattr(self.cfg.tracking, "dataset_warp_shape_fraction", 0.0))
         axial_fraction = math.sqrt(max(0.0, 1.0 - shape_fraction**2))
         theta = (
@@ -1426,15 +1461,9 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             )
             return magnitude * direction
 
-        pos = pos + cone_offset(params["ds_warp_pos"], params["ds_warp_pos_u"])
-
+        pos_offset = cone_offset(params["ds_warp_pos"], params["ds_warp_pos_u"])
         rot_vec = cone_offset(params["ds_warp_rot"], params["ds_warp_rot_u"])
-        angle = rot_vec.norm(dim=-1)
-        axis = rot_vec / angle.unsqueeze(-1).clamp(min=1.0e-6)
-        delta_quat = torch_utils.quat_from_angle_axis(angle, axis)
-        quat = torch_utils.quat_mul(delta_quat, quat)
-        quat = quat / quat.norm(dim=-1, keepdim=True).clamp(min=1.0e-6)
-        return pos, quat
+        return pos_offset, rot_vec
 
     def _eval_dataset_pose(self, params: dict, elapsed_time: torch.Tensor):
         """Interpolate the selected demonstration trajectories at `elapsed_time`.
@@ -1854,8 +1883,31 @@ class FrankaRobustTrackEnv(DirectRLEnv):
     def _randomize_controller(self, env_ids: torch.Tensor):
         gains = self.default_gains[env_ids].clone()
         noise = torch.tensor(self.cfg.ctrl.task_prop_gains_noise_level, device=self.device).unsqueeze(0)
+        mode = self.cfg.ctrl.task_prop_gains_randomization_mode
+        if mode not in {"scalar", "per_axis"}:
+            raise ValueError(
+                "ctrl.task_prop_gains_randomization_mode must be 'scalar' or "
+                f"'per_axis', got {mode!r}"
+            )
+        if mode == "scalar":
+            if not torch.allclose(gains, gains[:, :1].expand_as(gains)):
+                raise ValueError(
+                    "Scalar controller-gain randomization requires all entries in "
+                    "ctrl.default_task_prop_gains to be equal."
+                )
+            if not torch.allclose(noise, noise[:, :1].expand_as(noise)):
+                raise ValueError(
+                    "Scalar controller-gain randomization requires all entries in "
+                    "ctrl.task_prop_gains_noise_level to be equal."
+                )
         if torch.any(noise > 0):
-            gains = gains * (1.0 + (2.0 * torch.rand_like(gains) - 1.0) * noise)
+            if mode == "scalar":
+                multiplier = 1.0 + (
+                    2.0 * torch.rand((env_ids.numel(), 1), device=self.device) - 1.0
+                ) * noise[:, :1]
+                gains = (gains[:, :1] * multiplier).expand_as(gains)
+            else:
+                gains = gains * (1.0 + (2.0 * torch.rand_like(gains) - 1.0) * noise)
         self.task_prop_gains[env_ids] = gains
         self.task_deriv_gains[env_ids] = factory_utils.get_deriv_gains(gains)
 
