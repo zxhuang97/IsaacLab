@@ -29,6 +29,13 @@ class CtrlCfg:
     backend: str = "factory_control"  # factory_control, dls_ik
     ema_factor: float = 1.0
     action_rep: str = "delta_ee_pose"
+    # Controls when a delta action is converted to an absolute controller target:
+    #   "per_physics_step" -> re-anchor it to the current EE pose on every
+    #                         decimation substep (legacy behavior)
+    #   "per_control_step" -> anchor it once in _pre_physics_step and hold the
+    #                         resulting pose target throughout decimation
+    # In both modes the policy still outputs the same normalized 6D delta action.
+    delta_target_mode: str = "per_physics_step"
 
     # By default the OSC controller runs on the *nominal* mass matrix, rebuilt from
     # the default inertial parameters, so it stays blind to the payload and link-mass
@@ -130,6 +137,14 @@ class TrackingCfg:
     dataset_pose_key: str = "tool_pose"  # (N, 7) pos(3) + quat(4, wxyz) field
     dataset_only_success: bool = True  # keep only episodes with trial_success set
     dataset_max_trajs: int = 0  # cap loaded episodes (0 = all available)
+    # Per-reset spatial augmentation for dataset trajectories. With the configured
+    # probability, add one smooth endpoint-preserving bend whose peak translation
+    # and rotation are bounded by these values. Zero probability keeps the loaded
+    # demonstrations unchanged. The warped candidate still goes through the normal
+    # cuRobo reachability, continuity, and singularity checks.
+    dataset_warp_prob: float = 0.0
+    dataset_warp_pos_max: float = 0.0  # m
+    dataset_warp_rot_max: float = 0.0  # rad
     # When force tracking is on, source the per-step target wrench from this
     # dataset field so the applied disturbance matches the demonstration's real
     # contact force. The field may be (N, 3) or (N, 6) (only the first 3 force
@@ -463,6 +478,7 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "backend",
             "ema_factor",
             "action_rep",
+            "delta_target_mode",
             "use_gt_mass_matrix",
             "use_task_space_inertia",
             "pos_action_threshold",
@@ -494,6 +510,9 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "dataset_pose_key",
             "dataset_only_success",
             "dataset_max_trajs",
+            "dataset_warp_prob",
+            "dataset_warp_pos_max",
+            "dataset_warp_rot_max",
             "dataset_force_key",
             "dataset_contact_force_threshold",
             "enable_force",
