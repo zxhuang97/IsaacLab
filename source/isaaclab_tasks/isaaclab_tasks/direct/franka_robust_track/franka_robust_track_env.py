@@ -146,6 +146,10 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self.traj_ds_idx = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
         self.traj_ds_warp_pos = torch.zeros((self.num_envs, 3), device=self.device)
         self.traj_ds_warp_rot = torch.zeros((self.num_envs, 3), device=self.device)
+        self.traj_ds_warp_pos_u = torch.zeros((self.num_envs, 3), device=self.device)
+        self.traj_ds_warp_rot_u = torch.zeros((self.num_envs, 3), device=self.device)
+        self.traj_ds_warp_phase = torch.zeros((self.num_envs, 1), device=self.device)
+        self.traj_ds_warp_cycles = torch.zeros((self.num_envs, 1), device=self.device)
         self._ds_pos = None
         self._ds_quat = None
         self._ds_wrench = None
@@ -1299,10 +1303,16 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         warp_prob = float(getattr(tcfg, "dataset_warp_prob", 0.0))
         warp_pos_max = float(getattr(tcfg, "dataset_warp_pos_max", 0.0))
         warp_rot_max = float(getattr(tcfg, "dataset_warp_rot_max", 0.0))
+        shape_fraction = float(getattr(tcfg, "dataset_warp_shape_fraction", 0.0))
+        cycles_range = getattr(tcfg, "dataset_warp_cycles_range", [0.5, 1.5])
         if not 0.0 <= warp_prob <= 1.0:
             raise ValueError(f"tracking.dataset_warp_prob must be in [0, 1], got {warp_prob}")
         if warp_pos_max < 0.0 or warp_rot_max < 0.0:
             raise ValueError("tracking dataset warp magnitudes must be non-negative")
+        if not 0.0 <= shape_fraction <= 1.0:
+            raise ValueError("tracking.dataset_warp_shape_fraction must be in [0, 1]")
+        if len(cycles_range) != 2 or cycles_range[0] < 0.0 or cycles_range[1] < cycles_range[0]:
+            raise ValueError("tracking.dataset_warp_cycles_range must be [min, max] with 0 <= min <= max")
 
         length = self._traj_len
         want_force = self.enable_force and bool(tcfg.dataset_force_key)
@@ -1349,7 +1359,8 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         if warp_prob > 0.0:
             warp_str = (
                 f" | smooth warp p={warp_prob:.2f}, "
-                f"pos<={warp_pos_max * 1.0e3:.1f} mm, rot<={math.degrees(warp_rot_max):.1f} deg"
+                f"pos<={warp_pos_max * 1.0e3:.1f} mm, rot<={math.degrees(warp_rot_max):.1f} deg, "
+                f"shape={shape_fraction:.2f}, cycles={list(cycles_range)}"
             )
         print(
             f"[FrankaRobustTrack] dataset mode: loaded {self._ds_num} trajectories from {path} "
@@ -1363,37 +1374,61 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         warp_prob = float(getattr(tcfg, "dataset_warp_prob", 0.0))
         pos_max = float(getattr(tcfg, "dataset_warp_pos_max", 0.0))
         rot_max = float(getattr(tcfg, "dataset_warp_rot_max", 0.0))
+        cycles_lo, cycles_hi = getattr(tcfg, "dataset_warp_cycles_range", [0.5, 1.5])
         warp_active = (torch.rand((m, 1), device=self.device) < warp_prob).float()
 
-        # Rotation-invariant sampling: choose a random direction and a uniformly
-        # sampled peak magnitude. Inactive candidates get exactly zero vectors.
-        pos_dir = torch.randn((m, 3), device=self.device)
-        pos_dir /= pos_dir.norm(dim=-1, keepdim=True).clamp(min=1.0e-6)
-        rot_dir = torch.randn((m, 3), device=self.device)
-        rot_dir /= rot_dir.norm(dim=-1, keepdim=True).clamp(min=1.0e-6)
+        # Sample the cone axes plus one perpendicular basis vector. The second
+        # perpendicular vector is recovered with a cross product when evaluated.
+        def sample_axis_and_perp():
+            axis = torch.randn((m, 3), device=self.device)
+            axis /= axis.norm(dim=-1, keepdim=True).clamp(min=1.0e-6)
+            perp = torch.randn((m, 3), device=self.device)
+            perp -= (perp * axis).sum(dim=-1, keepdim=True) * axis
+            perp /= perp.norm(dim=-1, keepdim=True).clamp(min=1.0e-6)
+            return axis, perp
+
+        pos_dir, pos_u = sample_axis_and_perp()
+        rot_dir, rot_u = sample_axis_and_perp()
         warp_pos = pos_dir * (torch.rand((m, 1), device=self.device) * pos_max) * warp_active
         warp_rot = rot_dir * (torch.rand((m, 1), device=self.device) * rot_max) * warp_active
         return {
             "ds_idx": torch.randint(self._ds_num, (m,), device=self.device),
             "ds_warp_pos": warp_pos,
             "ds_warp_rot": warp_rot,
+            "ds_warp_pos_u": pos_u,
+            "ds_warp_rot_u": rot_u,
+            "ds_warp_phase": 2.0 * math.pi * torch.rand((m, 1), device=self.device),
+            "ds_warp_cycles": cycles_lo + (cycles_hi - cycles_lo) * torch.rand((m, 1), device=self.device),
         }
 
     def _apply_dataset_warp(
-        self, pos: torch.Tensor, quat: torch.Tensor, params: dict, phase: torch.Tensor
+        self, pos: torch.Tensor, quat: torch.Tensor, params: dict, traj_phase: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Apply a smooth, endpoint-preserving spatial bend to dataset poses.
+        """Apply a smooth shape warp with constant translation/rotation magnitude.
 
-        ``phase`` is normalized trajectory time in [0, 1]. The quartic profile
-        ``16 t^2 (1-t)^2`` is zero with zero slope at both endpoints and reaches
-        one at the midpoint, so adding the perturbation does not create pose or
-        velocity discontinuities at either end of the demonstration.
+        The offset direction traces a cone while its norm remains fixed. Thus every
+        waypoint has the same perturbation scale, but the trajectory is not merely
+        shifted rigidly. All parameters are sampled once per reset; nothing compounds.
         """
-        phase = phase.clamp(0.0, 1.0).unsqueeze(-1)
-        blend = 16.0 * phase.square() * (1.0 - phase).square()
-        pos = pos + blend * params["ds_warp_pos"]
+        shape_fraction = float(getattr(self.cfg.tracking, "dataset_warp_shape_fraction", 0.0))
+        axial_fraction = math.sqrt(max(0.0, 1.0 - shape_fraction**2))
+        theta = (
+            2.0 * math.pi * params["ds_warp_cycles"] * traj_phase.unsqueeze(-1)
+            + params["ds_warp_phase"]
+        )
 
-        rot_vec = blend * params["ds_warp_rot"]
+        def cone_offset(base_vec: torch.Tensor, basis_u: torch.Tensor) -> torch.Tensor:
+            magnitude = base_vec.norm(dim=-1, keepdim=True)
+            axis = base_vec / magnitude.clamp(min=1.0e-6)
+            basis_v = torch.linalg.cross(axis, basis_u, dim=-1)
+            direction = axial_fraction * axis + shape_fraction * (
+                torch.cos(theta) * basis_u + torch.sin(theta) * basis_v
+            )
+            return magnitude * direction
+
+        pos = pos + cone_offset(params["ds_warp_pos"], params["ds_warp_pos_u"])
+
+        rot_vec = cone_offset(params["ds_warp_rot"], params["ds_warp_rot_u"])
         angle = rot_vec.norm(dim=-1)
         axis = rot_vec / angle.unsqueeze(-1).clamp(min=1.0e-6)
         delta_quat = torch_utils.quat_from_angle_axis(angle, axis)
@@ -1416,8 +1451,8 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         frac = (fidx - i0.float()).unsqueeze(-1)
         pos = self._ds_pos[idx, i0] * (1.0 - frac) + self._ds_pos[idx, i1] * frac
         quat = self._quat_slerp(self._ds_quat[idx, i0], self._ds_quat[idx, i1], frac.squeeze(-1))
-        phase = fidx / max(length - 1, 1)
-        return self._apply_dataset_warp(pos, quat, params, phase)
+        traj_phase = fidx / max(length - 1, 1)
+        return self._apply_dataset_warp(pos, quat, params, traj_phase)
 
     def _sample_dataset_force(self, env_ids: torch.Tensor):
         """Fill the per-step target wrench for `env_ids` from their dataset trajectory."""
@@ -1550,6 +1585,10 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         "ds_idx": "traj_ds_idx",
         "ds_warp_pos": "traj_ds_warp_pos",
         "ds_warp_rot": "traj_ds_warp_rot",
+        "ds_warp_pos_u": "traj_ds_warp_pos_u",
+        "ds_warp_rot_u": "traj_ds_warp_rot_u",
+        "ds_warp_phase": "traj_ds_warp_phase",
+        "ds_warp_cycles": "traj_ds_warp_cycles",
     }
 
     def _assign_params_to_envs(self, env_ids: torch.Tensor, params: dict, cand_idx: torch.Tensor):
@@ -1606,8 +1645,8 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             }
             pos = self._ds_pos[params["ds_idx"]]
             quat = self._ds_quat[params["ds_idx"]]
-            phase = torch.linspace(0.0, 1.0, self._traj_len, device=self.device)
-            phase = phase.unsqueeze(0).expand(len(env_ids), -1)
+            traj_phase = torch.linspace(0.0, 1.0, self._traj_len, device=self.device)
+            traj_phase = traj_phase.unsqueeze(0).expand(len(env_ids), -1)
             flat_params = {
                 "ds_warp_pos": params["ds_warp_pos"]
                 .unsqueeze(1)
@@ -1617,9 +1656,25 @@ class FrankaRobustTrackEnv(DirectRLEnv):
                 .unsqueeze(1)
                 .expand(-1, self._traj_len, -1)
                 .reshape(-1, 3),
+                "ds_warp_pos_u": params["ds_warp_pos_u"]
+                .unsqueeze(1)
+                .expand(-1, self._traj_len, -1)
+                .reshape(-1, 3),
+                "ds_warp_rot_u": params["ds_warp_rot_u"]
+                .unsqueeze(1)
+                .expand(-1, self._traj_len, -1)
+                .reshape(-1, 3),
+                "ds_warp_phase": params["ds_warp_phase"]
+                .unsqueeze(1)
+                .expand(-1, self._traj_len, -1)
+                .reshape(-1, 1),
+                "ds_warp_cycles": params["ds_warp_cycles"]
+                .unsqueeze(1)
+                .expand(-1, self._traj_len, -1)
+                .reshape(-1, 1),
             }
             pos, quat = self._apply_dataset_warp(
-                pos.reshape(-1, 3), quat.reshape(-1, 4), flat_params, phase.reshape(-1)
+                pos.reshape(-1, 3), quat.reshape(-1, 4), flat_params, traj_phase.reshape(-1)
             )
             self.traj_pos_buf[env_ids] = pos.view(len(env_ids), self._traj_len, 3)
             self.traj_quat_buf[env_ids] = quat.view(len(env_ids), self._traj_len, 4)

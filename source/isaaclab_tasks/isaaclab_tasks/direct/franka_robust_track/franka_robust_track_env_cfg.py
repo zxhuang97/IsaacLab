@@ -138,13 +138,17 @@ class TrackingCfg:
     dataset_only_success: bool = True  # keep only episodes with trial_success set
     dataset_max_trajs: int = 0  # cap loaded episodes (0 = all available)
     # Per-reset spatial augmentation for dataset trajectories. With the configured
-    # probability, add one smooth endpoint-preserving bend whose peak translation
-    # and rotation are bounded by these values. Zero probability keeps the loaded
-    # demonstrations unchanged. The warped candidate still goes through the normal
-    # cuRobo reachability, continuity, and singularity checks.
+    # probability, every pose receives an offset of the same magnitude while its
+    # direction rotates smoothly along a random cone, changing the trajectory shape
+    # without time-dependent noise scale or accumulation. `dataset_warp_shape_fraction`
+    # controls the cone's transverse component (0 = rigid offset, 1 = pure loop),
+    # and `dataset_warp_cycles_range` controls its number of turns. Zero probability
+    # leaves the demonstration unchanged. Candidates still pass the cuRobo checks.
     dataset_warp_prob: float = 0.0
     dataset_warp_pos_max: float = 0.0  # m
     dataset_warp_rot_max: float = 0.0  # rad
+    dataset_warp_shape_fraction: float = 0.0
+    dataset_warp_cycles_range = [0.5, 1.5]
     # When force tracking is on, source the per-step target wrench from this
     # dataset field so the applied disturbance matches the demonstration's real
     # contact force. The field may be (N, 3) or (N, 6) (only the first 3 force
@@ -513,6 +517,8 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "dataset_warp_prob",
             "dataset_warp_pos_max",
             "dataset_warp_rot_max",
+            "dataset_warp_shape_fraction",
+            "dataset_warp_cycles_range",
             "dataset_force_key",
             "dataset_contact_force_threshold",
             "enable_force",
