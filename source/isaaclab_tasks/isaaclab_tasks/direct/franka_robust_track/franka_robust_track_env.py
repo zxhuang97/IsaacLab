@@ -24,6 +24,21 @@ from isaaclab_tasks.direct.factory import factory_control, factory_utils
 from .franka_robust_track_env_cfg import FrankaRobustTrackEnvCfg
 
 
+_AUTO_TOOL_BODY_CANDIDATES = ("panda_fingertip_centered", "force_sensor", "panda_hand")
+_IDENTITY_TOOL_OFFSET = ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0, 0.0))
+
+# Virtual frames are (parent body, parent->tool position, parent->tool quaternion).
+# From panda_arm_wsg_horizontal.urdf, hand->fr3_wsg_tcp is z=0.271 m,
+# yaw=+45 degrees. These frames are inserted into cuRobo's tree as fixed links.
+_VIRTUAL_TOOL_FRAMES = {
+    "fr3_wsg_tcp": (
+        "panda_hand",
+        (0.0, 0.0, 0.271),
+        (0.9238795325, 0.0, 0.0, 0.3826834324),
+    ),
+}
+
+
 class FrankaRobustTrackEnv(DirectRLEnv):
     """Robot-only Franka direct env for robust Cartesian command tracking."""
 
@@ -93,9 +108,12 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self._ik_proc = None
         self._ik_worker_mod = None
         self._kin_frames_cached = False
-        # Constant transform of `panda_hand` expressed in the fingertip frame.
-        self.hand_in_fingertip_pos = torch.zeros((self.num_envs, 3), device=self.device)
-        self.hand_in_fingertip_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1)
+        # Constant transforms between cuRobo's `panda_hand` IK frame and the
+        # configured controller/dataset tool frame.
+        self.hand_in_tool_pos = torch.zeros((self.num_envs, 3), device=self.device)
+        self.hand_in_tool_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1)
+        self.tool_in_hand_pos = torch.zeros((self.num_envs, 3), device=self.device)
+        self.tool_in_hand_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1)
         # World pose of the `panda_link0` base (fixed per env).
         self.base_pos_w = torch.zeros((self.num_envs, 3), device=self.device)
         self.base_quat_w = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1)
@@ -162,8 +180,9 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self.fingertip_midpoint_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1)
         self.fingertip_midpoint_linvel = torch.zeros((self.num_envs, 3), device=self.device)
         self.fingertip_midpoint_angvel = torch.zeros((self.num_envs, 3), device=self.device)
-        # Previous-step fingertip velocity, used to penalize the step-to-step
-        # velocity change (acceleration) as a smoothness regularizer.
+        # Previous-step selected-tool velocity, used to penalize the step-to-step
+        # velocity change (acceleration) as a smoothness regularizer. Legacy names
+        # are retained because these tensors also feed existing checkpoints/code.
         self.prev_fingertip_midpoint_linvel = torch.zeros((self.num_envs, 3), device=self.device)
         self.prev_fingertip_midpoint_angvel = torch.zeros((self.num_envs, 3), device=self.device)
         self.fingertip_midpoint_jacobian = torch.zeros((self.num_envs, 6, 7), device=self.device)
@@ -305,35 +324,53 @@ class FrankaRobustTrackEnv(DirectRLEnv):
 
     def _resolve_robot_indices(self):
         body_names = self._robot.body_names
-        fingertip_candidates = ["panda_fingertip_centered", "force_sensor", "panda_hand"]
-        for body_name in fingertip_candidates:
-            if body_name in body_names:
-                self.fingertip_body_idx = body_names.index(body_name)
-                break
+        tool_frame_name = str(getattr(self.cfg, "tool_frame", "auto")).strip() or "auto"
+        if tool_frame_name == "auto":
+            tool_frame_name = next(
+                (name for name in _AUTO_TOOL_BODY_CANDIDATES if name in body_names), None
+            )
+        if tool_frame_name is None:
+            raise RuntimeError(f"Could not find a default Franka tool body in: {body_names}")
+
+        virtual_spec = _VIRTUAL_TOOL_FRAMES.get(tool_frame_name)
+        if virtual_spec is None:
+            tool_body_name = tool_frame_name
+            tool_offset_pos, tool_offset_quat = _IDENTITY_TOOL_OFFSET
         else:
-            raise RuntimeError(f"Could not find a Franka EE body in body names: {body_names}")
+            tool_body_name, tool_offset_pos, tool_offset_quat = virtual_spec
+
+        if tool_body_name not in body_names:
+            raise RuntimeError(
+                f"Tool frame {tool_frame_name!r} requires body {tool_body_name!r}; "
+                f"available bodies: {body_names}."
+            )
+
+        self.tool_frame_name = tool_frame_name
+        self.tool_body_name = tool_body_name
+        self.curobo_uses_selected_tool_frame = virtual_spec is not None
+        self.tool_body_idx = body_names.index(tool_body_name)
+        self.tool_pos_in_body = torch.tensor(tool_offset_pos, device=self.device).repeat(self.num_envs, 1)
+        self.tool_quat_in_body = torch.tensor(tool_offset_quat, device=self.device).repeat(self.num_envs, 1)
+        # Backward-compatible alias; for a virtual frame this is its parent body.
+        self.fingertip_body_idx = self.tool_body_idx
 
         payload_body_name = self.cfg.randomization.payload_body_name
-        if payload_body_name in body_names:
-            self.payload_body_idx = body_names.index(payload_body_name)
-        else:
-            self.payload_body_idx = self.fingertip_body_idx
+        self.payload_body_idx = (
+            body_names.index(payload_body_name) if payload_body_name in body_names else self.tool_body_idx
+        )
 
-        # cuRobo IK solves for `panda_hand` in the `panda_link0` base frame; cache both
-        # body indices so reset targets (defined at the fingertip) can be converted.
+        # Needed for base-frame IK and the legacy tool->panda_hand conversion path.
         self.hand_body_idx = body_names.index("panda_hand")
         self.base_body_idx = body_names.index("panda_link0")
+        if self.tool_body_idx == self.base_body_idx:
+            raise RuntimeError("tool_frame must name a non-base rigid body with a PhysX Jacobian.")
 
-        # Wrist force-sensor body: the target tracking wrench is applied here. Only
-        # required when force tracking is enabled (fail loudly if the asset lacks it).
-        if "force_sensor" in body_names:
-            self.force_sensor_body_idx = body_names.index("force_sensor")
-        elif self.enable_force:
+        if self.enable_force and "force_sensor" not in body_names:
             raise RuntimeError(
                 f"tracking.enable_force is set but no 'force_sensor' body exists in {body_names}."
             )
-        else:
-            self.force_sensor_body_idx = self.fingertip_body_idx
+        force_body_name = "force_sensor" if "force_sensor" in body_names else tool_body_name
+        self.force_sensor_body_idx = body_names.index(force_body_name)
 
         self.arm_joint_ids = list(range(7))
         joint_names = list(self._robot.joint_names)
@@ -359,13 +396,33 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self.arm_armature = self._robot.root_physx_view.get_dof_armatures().to(self.device)[:, 0:7]
 
     def _compute_intermediate_values(self):
-        self.fingertip_midpoint_pos = self._robot.data.body_pos_w[:, self.fingertip_body_idx] - self.scene.env_origins
-        self.fingertip_midpoint_quat = self._robot.data.body_quat_w[:, self.fingertip_body_idx]
-        self.fingertip_midpoint_linvel = self._robot.data.body_lin_vel_w[:, self.fingertip_body_idx]
-        self.fingertip_midpoint_angvel = self._robot.data.body_ang_vel_w[:, self.fingertip_body_idx]
+        # Legacy tensor names are retained for checkpoint/downstream compatibility,
+        # but they now contain the configured tool-frame state.
+        body_pos_w = self._robot.data.body_pos_w[:, self.tool_body_idx]
+        body_quat_w = self._robot.data.body_quat_w[:, self.tool_body_idx]
+        tool_pos_w, tool_quat_w = math_utils.combine_frame_transforms(
+            body_pos_w, body_quat_w, self.tool_pos_in_body, self.tool_quat_in_body
+        )
+        body_com_pos_w = self._robot.data.body_com_pos_w[:, self.tool_body_idx]
+        body_com_linvel_w = self._robot.data.body_com_lin_vel_w[:, self.tool_body_idx]
+        body_angvel_w = self._robot.data.body_com_ang_vel_w[:, self.tool_body_idx]
+        com_to_tool_w = tool_pos_w - body_com_pos_w
+
+        self.fingertip_midpoint_pos = tool_pos_w - self.scene.env_origins
+        self.fingertip_midpoint_quat = tool_quat_w
+        self.fingertip_midpoint_linvel = body_com_linvel_w + torch.linalg.cross(
+            body_angvel_w, com_to_tool_w, dim=-1
+        )
+        self.fingertip_midpoint_angvel = body_angvel_w
 
         jacobians = self._robot.root_physx_view.get_jacobians()
-        self.fingertip_midpoint_jacobian = jacobians[:, self.fingertip_body_idx - 1, 0:6, 0:7]
+        tool_jacobian = jacobians[:, self.tool_body_idx - 1, 0:6, 0:7].clone()
+        angular_cols = tool_jacobian[:, 3:6, :].transpose(1, 2)
+        linear_shift = torch.linalg.cross(
+            angular_cols, com_to_tool_w.unsqueeze(1).expand_as(angular_cols), dim=-1
+        ).transpose(1, 2)
+        tool_jacobian[:, 0:3, :] += linear_shift
+        self.fingertip_midpoint_jacobian = tool_jacobian
         if self.cfg.ctrl.use_gt_mass_matrix:
             # Ground-truth controller: use PhysX's own generalized mass matrix, which reflects the
             # payload merge and link-mass scaling (a perfectly-modeled controller).
@@ -875,15 +932,16 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             sample_time, device=self.device
         )
         avg_jump_str = "[" + ", ".join(f"{v:.3f}" for v in sample_stats["avg_joint_jump"]) + "]"
-        print(
-            f"[FrankaRobustTrack] reset {len(env_ids)} envs in {reset_time:.3f}s "
-            f"(reachability sample {sample_time:.3f}s) | "
-            f"candidates sampled {sample_stats['sampled']}, good {sample_stats['good']} "
-            f"(unreachable {sample_stats['unreachable']}, discontinuous {sample_stats['discontinuous']}, "
-            f"singular {sample_stats['singular']}), "
-            f"envs filled {sample_stats['filled']}/{sample_stats['total']} "
-            f"in {sample_stats['attempts']} attempt(s) | avg joint jump {avg_jump_str}"
-        )
+        if sample_stats["filled"] < self.num_envs:
+            print(
+                f"[FrankaRobustTrack] reset {len(env_ids)} envs in {reset_time:.3f}s "
+                f"(reachability sample {sample_time:.3f}s) | "
+                f"candidates sampled {sample_stats['sampled']}, good {sample_stats['good']} "
+                f"(unreachable {sample_stats['unreachable']}, discontinuous {sample_stats['discontinuous']}, "
+                f"singular {sample_stats['singular']}), "
+                f"envs filled {sample_stats['filled']}/{sample_stats['total']} "
+                f"in {sample_stats['attempts']} attempt(s) | avg joint jump {avg_jump_str}"
+            )
 
     def _set_franka_to_reset_pose(self, env_ids: torch.Tensor):
         """Teleport the arm to the nominal `ctrl.reset_joints` configuration."""
@@ -909,21 +967,25 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self._compute_intermediate_values()
 
     def _cache_kinematic_frames(self):
-        """Cache the constant fingertip->hand and world->base transforms once.
+        """Cache the constant selected-tool<->hand and world->base transforms once.
 
         cuRobo IK targets `panda_hand` in the `panda_link0` base frame, while the
-        env's reference poses are defined at the fingertip. Both the fingertip->hand
-        offset and the base pose are fixed, so they are captured a single time after
-        the first reset-pose step.
+        env's reference poses are defined at `tool_frame`. Both directions of the
+        tool/hand offset and the base pose are fixed, so they are captured a single
+        time after the first reset-pose step. tool->hand converts IK targets; the
+        inverse offset shifts cuRobo's hand Jacobian to the controller's tool origin.
         """
         if self._kin_frames_cached:
             return
-        fp_pos_w = self._robot.data.body_pos_w[:, self.fingertip_body_idx]
-        fp_quat_w = self._robot.data.body_quat_w[:, self.fingertip_body_idx]
+        tool_pos_w = self.fingertip_midpoint_pos + self.scene.env_origins
+        tool_quat_w = self.fingertip_midpoint_quat
         hand_pos_w = self._robot.data.body_pos_w[:, self.hand_body_idx]
         hand_quat_w = self._robot.data.body_quat_w[:, self.hand_body_idx]
-        self.hand_in_fingertip_pos[:], self.hand_in_fingertip_quat[:] = math_utils.subtract_frame_transforms(
-            fp_pos_w, fp_quat_w, hand_pos_w, hand_quat_w
+        self.hand_in_tool_pos[:], self.hand_in_tool_quat[:] = math_utils.subtract_frame_transforms(
+            tool_pos_w, tool_quat_w, hand_pos_w, hand_quat_w
+        )
+        self.tool_in_hand_pos[:], self.tool_in_hand_quat[:] = math_utils.subtract_frame_transforms(
+            hand_pos_w, hand_quat_w, tool_pos_w, tool_quat_w
         )
         self.base_pos_w[:] = self._robot.data.body_pos_w[:, self.base_body_idx]
         self.base_quat_w[:] = self._robot.data.body_quat_w[:, self.base_body_idx]
@@ -939,6 +1001,8 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         """
         if self._ik_proc is not None:
             return
+        if not self._kin_frames_cached:
+            raise RuntimeError("Tool/hand transforms must be cached before launching the cuRobo IK worker.")
 
         import json
         import os
@@ -974,6 +1038,28 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             "orientation_tolerance": cfg.reach_rot_tol,
             "use_cuda_graph": cfg.ik_use_cuda_graph,
             "device": "cuda:0",
+            # When present, the worker inserts this fixed child into cuRobo's
+            # kinematic tree and makes it the actual IK optimization frame.
+            "extra_tool_frame": (
+                {
+                    "name": self.tool_frame_name,
+                    "parent_link_name": self.tool_body_name,
+                    "fixed_transform": (
+                        self.tool_pos_in_body[0].detach().cpu().tolist()
+                        + self.tool_quat_in_body[0].detach().cpu().tolist()
+                    ),
+                }
+                if self.curobo_uses_selected_tool_frame
+                else None
+            ),
+            # For legacy body frames cuRobo still solves at panda_hand, so shift
+            # its metric Jacobian to the selected tool origin. A directly modeled
+            # extra tool already has the correct Jacobian and needs zero shift.
+            "metric_tool_offset_pos": (
+                [0.0, 0.0, 0.0]
+                if self.curobo_uses_selected_tool_frame
+                else self.tool_in_hand_pos[0].detach().cpu().tolist()
+            ),
         }
         self._ik_worker_mod = curobo_ik_worker
         self._ik_proc = subprocess.Popen(
@@ -985,48 +1071,53 @@ class FrankaRobustTrackEnv(DirectRLEnv):
 
     def _solve_curobo_ik(
         self,
-        fingertip_pos: torch.Tensor,
-        fingertip_quat: torch.Tensor,
+        tool_pos: torch.Tensor,
+        tool_quat: torch.Tensor,
         env_ids: torch.Tensor,
         seed_arm_q: torch.Tensor | None = None,
     ):
-        """Solve cuRobo IK (in the worker) for fingertip targets.
+        """Solve cuRobo IK (in the worker) for selected-tool targets.
 
-        `fingertip_pos`/`fingertip_quat` are (n, W, ...) env-local targets for the
-        envs in `env_ids`. Targets are converted fingertip->hand->base frame here,
-        sent to the worker as a flat batch of n*W problems, and the returned
-        per-target success and arm joints are reshaped back.         `seed_arm_q`, if given,
-        is a (n, W, 7) tensor of initial joint seeds (panda_joint1..7 order) passed
-        to the solver so the returned solution stays near it. Returns
+        `tool_pos`/`tool_quat` are (n, W, ...) env-local targets for the envs in
+        `env_ids`. A directly modeled virtual tool is sent to cuRobo unchanged in
+        the base frame; legacy body-frame targets are converted tool->hand first.
+        The targets are sent to the worker as a flat batch of n*W problems, and
+        the returned per-target success and arm joints are reshaped back.
+        `seed_arm_q`, if given, is a (n, W, 7) tensor of initial joint seeds
+        (panda_joint1..7 order)
+        passed to the solver so the returned solution stays near it. Returns
         (success (n, W) bool, arm_q (n, W, 7), manip (n, W), cond (n, W)) where
         `manip`/`cond` are the manipulability and Jacobian condition number of each
-        solved config (from cuRobo's geometric tool Jacobian), used to filter
-        near-singular samples.
+        solved config (from the geometric Jacobian at the selected tool), used to
+        filter near-singular samples.
         """
         self._ensure_ik_worker()
-        n_envs, num_wp = fingertip_pos.shape[0], fingertip_pos.shape[1]
+        n_envs, num_wp = tool_pos.shape[0], tool_pos.shape[1]
 
         env_origins = self.scene.env_origins[env_ids].unsqueeze(1)  # (n, 1, 3)
         base_pos = self.base_pos_w[env_ids].unsqueeze(1).expand(-1, num_wp, -1)
         base_quat = self.base_quat_w[env_ids].unsqueeze(1).expand(-1, num_wp, -1)
-        off_pos = self.hand_in_fingertip_pos[env_ids].unsqueeze(1).expand(-1, num_wp, -1)
-        off_quat = self.hand_in_fingertip_quat[env_ids].unsqueeze(1).expand(-1, num_wp, -1)
+        off_pos = self.hand_in_tool_pos[env_ids].unsqueeze(1).expand(-1, num_wp, -1)
+        off_quat = self.hand_in_tool_quat[env_ids].unsqueeze(1).expand(-1, num_wp, -1)
 
-        # Fingertip target: env-local -> world (env frame is a pure translation).
-        fp_pos_w = (fingertip_pos + env_origins).reshape(-1, 3)
-        fp_quat_w = fingertip_quat.reshape(-1, 4)
-        # Fingertip -> hand (constant offset), then world -> base frame.
-        hand_pos_w, hand_quat_w = math_utils.combine_frame_transforms(
-            fp_pos_w, fp_quat_w, off_pos.reshape(-1, 3), off_quat.reshape(-1, 4)
-        )
-        hand_pos_b, hand_quat_b = math_utils.subtract_frame_transforms(
-            base_pos.reshape(-1, 3), base_quat.reshape(-1, 4), hand_pos_w, hand_quat_w
+        # Tool target: env-local -> world (env frame is a pure translation).
+        tool_pos_w = (tool_pos + env_origins).reshape(-1, 3)
+        tool_quat_w = tool_quat.reshape(-1, 4)
+        if self.curobo_uses_selected_tool_frame:
+            goal_pos_w, goal_quat_w = tool_pos_w, tool_quat_w
+        else:
+            # Selected tool -> panda_hand for legacy cuRobo robot configs.
+            goal_pos_w, goal_quat_w = math_utils.combine_frame_transforms(
+                tool_pos_w, tool_quat_w, off_pos.reshape(-1, 3), off_quat.reshape(-1, 4)
+            )
+        goal_pos_b, goal_quat_b = math_utils.subtract_frame_transforms(
+            base_pos.reshape(-1, 3), base_quat.reshape(-1, 4), goal_pos_w, goal_quat_w
         )
 
         seed_np = None if seed_arm_q is None else seed_arm_q.reshape(-1, 7).detach().cpu().numpy()
         self._ik_worker_mod.send_msg(
             self._ik_proc.stdin,
-            (hand_pos_b.detach().cpu().numpy(), hand_quat_b.detach().cpu().numpy(), seed_np),
+            (goal_pos_b.detach().cpu().numpy(), goal_quat_b.detach().cpu().numpy(), seed_np),
         )
         response = self._ik_worker_mod.recv_msg(self._ik_proc.stdout)
         if response is None:
@@ -1293,8 +1384,8 @@ class FrankaRobustTrackEnv(DirectRLEnv):
     def _load_dataset_trajectories(self):
         """Load + resample offline demonstration EE trajectories for `mode='dataset'`.
 
-        Reads the `dataset_pose_key` (N, 7) pose field (fingertip pos + quat, wxyz,
-        env-local frame) from the HDF5 dataset, splits it into episodes via
+        Reads the `dataset_pose_key` (N, 7) pose field (selected-tool pos + quat,
+        wxyz, env-local frame) from the HDF5 dataset, splits it into episodes via
         `episode_starts`/`episode_ends`, and resamples every episode onto the
         `_traj_len`-step control grid so the runtime command/lookahead can index it
         directly. When force tracking is enabled and `dataset_force_key` is set, the
@@ -1883,6 +1974,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
     def _randomize_controller(self, env_ids: torch.Tensor):
         gains = self.default_gains[env_ids].clone()
         noise = torch.tensor(self.cfg.ctrl.task_prop_gains_noise_level, device=self.device).unsqueeze(0)
+        scale_range = self.cfg.ctrl.task_prop_gains_randomization_scale_range
         mode = self.cfg.ctrl.task_prop_gains_randomization_mode
         if mode not in {"scalar", "per_axis"}:
             raise ValueError(
@@ -1890,22 +1982,33 @@ class FrankaRobustTrackEnv(DirectRLEnv):
                 f"'per_axis', got {mode!r}"
             )
         if mode == "scalar":
-            if not torch.allclose(gains, gains[:, :1].expand_as(gains)):
-                raise ValueError(
-                    "Scalar controller-gain randomization requires all entries in "
-                    "ctrl.default_task_prop_gains to be equal."
-                )
-            if not torch.allclose(noise, noise[:, :1].expand_as(noise)):
+            if scale_range is None and not torch.allclose(noise, noise[:, :1].expand_as(noise)):
                 raise ValueError(
                     "Scalar controller-gain randomization requires all entries in "
                     "ctrl.task_prop_gains_noise_level to be equal."
                 )
-        if torch.any(noise > 0):
+        if scale_range is not None:
+            if torch.any(noise > 0):
+                raise ValueError(
+                    "Set either ctrl.task_prop_gains_randomization_scale_range or "
+                    "ctrl.task_prop_gains_noise_level, not both."
+                )
+            if len(scale_range) != 2:
+                raise ValueError("ctrl.task_prop_gains_randomization_scale_range must be [low, high].")
+            low, high = (float(value) for value in scale_range)
+            if not 0.0 < low <= 1.0 <= high:
+                raise ValueError(
+                    "ctrl.task_prop_gains_randomization_scale_range must satisfy 0 < low <= 1 <= high."
+                )
+            sample_shape = (env_ids.numel(), 1) if mode == "scalar" else gains.shape
+            multiplier = low + (high - low) * torch.rand(sample_shape, device=self.device)
+            gains = gains * multiplier
+        elif torch.any(noise > 0):
             if mode == "scalar":
                 multiplier = 1.0 + (
                     2.0 * torch.rand((env_ids.numel(), 1), device=self.device) - 1.0
                 ) * noise[:, :1]
-                gains = (gains[:, :1] * multiplier).expand_as(gains)
+                gains = gains * multiplier
             else:
                 gains = gains * (1.0 + (2.0 * torch.rand_like(gains) - 1.0) * noise)
         self.task_prop_gains[env_ids] = gains

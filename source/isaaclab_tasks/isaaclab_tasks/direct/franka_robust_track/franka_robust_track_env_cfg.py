@@ -56,10 +56,15 @@ class CtrlCfg:
     reset_joints = [0.00871, -0.10368, -0.00794, -1.49139, -0.00083, 1.38774, 0.0]
     default_task_prop_gains = [300.0, 300.0, 300.0, 28.0, 28.0, 28.0]
     task_prop_gains_noise_level = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    # Optional asymmetric reset-time multiplier range [low, high]. For example,
+    # [0.5, 2.0] around a nominal gain of 80 samples gains uniformly in [40, 160].
+    # When set, this replaces the symmetric `task_prop_gains_noise_level` scheme.
+    task_prop_gains_randomization_scale_range = None
     # Reset-time gain randomization:
-    #   "scalar"   -> draw one gain multiplier per env and share it across all 6 axes
+    #   "scalar"   -> draw one multiplier per env and scale all 6 nominal gains,
+    #                 preserving their translation-to-rotation proportions
     #   "per_axis" -> draw an independent gain multiplier for each of the 6 axes
-    # Zero noise keeps the configured default gains in either mode.
+    # With no scale range, zero noise keeps the configured default gains.
     task_prop_gains_randomization_mode: str = "per_axis"
 
     # If True, the policy also outputs the 6 task-space proportional gains
@@ -132,9 +137,10 @@ class TrackingCfg:
     # "dataset" mode: instead of an analytic line/circle, each env tracks a real
     # end-effector trajectory sampled from an offline demonstration dataset (e.g.
     # the peg-insertion `tool_pose` sequences). No frame/representation conversion
-    # is needed: the dataset pose field is already fingertip-midpoint pos + quat
-    # (w, x, y, z) in the robot-base/env-local frame, i.e. the exact format stored
-    # in `traj_pos_buf`/`traj_quat_buf`. At each reset a random episode is drawn,
+    # is performed: the dataset pose must describe the frame selected by the env's
+    # top-level `tool_frame`, as pos + quat (w, x, y, z) in the robot-base/env-local
+    # frame, i.e. the exact format stored in `traj_pos_buf`/`traj_quat_buf`. At reset
+    # a random episode is drawn,
     # its poses are resampled onto the per-step control grid, and the usual
     # cuRobo reachability + singularity filter still applies (episodes that fall
     # outside the reachable/well-conditioned workspace are resampled/backfilled).
@@ -255,9 +261,10 @@ class InitCfg:
     # singularity. Near-singular configs are where the OSC task-space inertia
     # (J M⁻¹ Jᵀ)⁻¹ blows up, so small tracking errors explode into the rare
     # fully-diverged episodes that dominate the tracking-error tail. The metric is
-    # computed analytically (modified-DH geometric Jacobian of the 7-DoF arm at
-    # panda_link8, base frame) from each cuRobo IK joint solution, so it adds no IK
-    # cost. A waypoint fails if manipulability sqrt(det(J Jᵀ)) < `min_manipulability`
+    # computed from cuRobo's geometric Jacobian at the selected `tool_frame` (a
+    # virtual frame is inserted into cuRobo's tree directly) from each IK solution.
+    # A waypoint fails if
+    # manipulability sqrt(det(J Jᵀ)) < `min_manipulability`
     # or condition number sigma_max/sigma_min > `max_jac_cond`.
     singularity_check: bool = True
     min_manipulability: float = 0.02
@@ -458,6 +465,12 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
     )
 
     robot_usd_path: str = "franka_mimic.usd"
+    # Frame whose pose/Jacobian defines the controlled and observed EE. "auto"
+    # preserves the legacy rigid-body priority: panda_fingertip_centered,
+    # force_sensor, then panda_hand. "fr3_wsg_tcp" is a virtual frame computed from
+    # panda_hand using the fixed transform in panda_arm_wsg_horizontal.urdf; it does
+    # not need to exist in the USD.
+    tool_frame: str = "auto"
     params = None
 
     def update_env_params(self):
@@ -467,6 +480,8 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
 
         if env.get("robot_usd_path", None) is not None:
             self.robot_usd_path = env.robot_usd_path
+        if env.get("tool_frame", None) is not None:
+            self.tool_frame = str(env.tool_frame)
         if env.get("obs_history_length", None) is not None:
             self.obs_history_length = int(env.obs_history_length)
         if env.get("debug_vis", None) is not None:
@@ -497,6 +512,7 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "rot_action_threshold",
             "default_task_prop_gains",
             "task_prop_gains_noise_level",
+            "task_prop_gains_randomization_scale_range",
             "task_prop_gains_randomization_mode",
             "control_gains",
             "task_prop_gains_min",
@@ -602,6 +618,7 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
 
     def __post_init__(self):
         self.update_env_params()
+        self.tool_frame = str(self.tool_frame).strip() or "auto"
         self.robot.spawn.usd_path = f"{ASSET_DIR}/{self.robot_usd_path}"
         self.sim.render_interval = self.decimation
 
