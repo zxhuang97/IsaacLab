@@ -149,10 +149,16 @@ class RslRlVecEnvWrapper(VecEnv):
             obs_dict = self.unwrapped._get_observations()
         return TensorDict(obs_dict, batch_size=[self.num_envs])
 
-    def step(self, actions: torch.Tensor) -> tuple[TensorDict, torch.Tensor, torch.Tensor, dict]:
+    def step(self, actions: torch.Tensor | dict) -> tuple[TensorDict, torch.Tensor, torch.Tensor, dict]:
         # clip actions
         if self.clip_actions is not None:
-            actions = torch.clamp(actions, -self.clip_actions, self.clip_actions)
+            if isinstance(actions, dict):
+                if "action" not in actions or not torch.is_tensor(actions["action"]):
+                    raise TypeError("An action packet must contain a tensor-valued 'action' entry.")
+                actions = dict(actions)
+                actions["action"] = torch.clamp(actions["action"], -self.clip_actions, self.clip_actions)
+            else:
+                actions = torch.clamp(actions, -self.clip_actions, self.clip_actions)
         # record step information
         obs_dict, rew, terminated, truncated, extras = self.env.step(actions)
         # compute dones for compatibility with RSL-RL

@@ -59,6 +59,18 @@ class ForgeEnv(FactoryEnv):
         # Per-step action packets can carry action_rep and optional compliance
         # gains without mutating env hooks from the caller side.
         self.current_action_rep = str(getattr(self.cfg.ctrl, "action_rep", "rel_ee_pose"))
+        self.delta_target_mode = str(
+            getattr(self.cfg.ctrl, "delta_target_mode", "per_physics_step")
+        )
+        if self.delta_target_mode not in ("per_physics_step", "per_control_step"):
+            raise ValueError(
+                "ctrl.delta_target_mode must be 'per_physics_step' or "
+                f"'per_control_step', got {self.delta_target_mode!r}."
+            )
+        self._delta_action_target_pos = torch.zeros((self.num_envs, 3), device=self.device)
+        self._delta_action_target_quat = torch.tensor(
+            [1.0, 0.0, 0.0, 0.0], device=self.device
+        ).repeat(self.num_envs, 1)
         self.packet_stiffness_override = None
         self.packet_deriv_override = None
         self.packet_clip_pose_target = True
@@ -247,6 +259,13 @@ class ForgeEnv(FactoryEnv):
         elif action.shape[-1] > self.actions.shape[-1]:
             action = action[:, : self.actions.shape[-1]]
         self.actions = self.ema_factor * action + (1 - self.ema_factor) * self.actions
+        if action_rep == "delta_ee_pose" and self.delta_target_mode == "per_control_step":
+            # Snapshot current_pose + delta once at the control-step boundary.
+            # `_apply_action` is called once per decimation substep, so keeping
+            # this absolute target fixed prevents repeated delta accumulation.
+            target_pos, target_quat = self._get_delta_ee_pose_target()
+            self._delta_action_target_pos.copy_(target_pos)
+            self._delta_action_target_quat.copy_(target_quat)
 
     def _get_observations(self):
         """Add additional FORGE observations."""
@@ -399,25 +418,37 @@ class ForgeEnv(FactoryEnv):
             ctrl_target_gripper_dof_pos=0.0,
         )
 
-    def _apply_delta_ee_pose_action(self):
-        """Apply current-EE delta action with axis-angle rotation, like RobustTrack."""
+    def _get_delta_ee_pose_target(self):
+        """Map the normalized delta action to a target anchored at the current EE."""
         pos_actions = self.actions[:, 0:3] * self.pos_threshold
         rot_actions = self.actions[:, 3:6] * self.rot_threshold
 
-        ctrl_target_fingertip_midpoint_pos = self.fingertip_midpoint_pos + pos_actions
-        self.delta_pos = pos_actions
+        target_pos = self.fingertip_midpoint_pos + pos_actions
 
         angle = torch.norm(rot_actions, p=2, dim=-1)
         axis = rot_actions / torch.clamp(angle.unsqueeze(-1), min=1.0e-6)
-        self.delta_yaw = angle
         delta_quat = torch_utils.quat_from_angle_axis(angle, axis)
         identity_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1)
         delta_quat = torch.where(angle.unsqueeze(-1) > 1.0e-6, delta_quat, identity_quat)
-        ctrl_target_fingertip_midpoint_quat = torch_utils.quat_mul(delta_quat, self.fingertip_midpoint_quat)
+        target_quat = torch_utils.quat_mul(delta_quat, self.fingertip_midpoint_quat)
+        return target_pos, target_quat
+
+    def _apply_delta_ee_pose_action(self):
+        """Apply a current-EE delta using the configured target update rate."""
+        pos_actions = self.actions[:, 0:3] * self.pos_threshold
+        rot_actions = self.actions[:, 3:6] * self.rot_threshold
+        self.delta_pos = pos_actions
+        self.delta_yaw = torch.norm(rot_actions, p=2, dim=-1)
+
+        if self.delta_target_mode == "per_control_step":
+            target_pos = self._delta_action_target_pos
+            target_quat = self._delta_action_target_quat
+        else:
+            target_pos, target_quat = self._get_delta_ee_pose_target()
 
         self.generate_ctrl_signals(
-            ctrl_target_fingertip_midpoint_pos=ctrl_target_fingertip_midpoint_pos,
-            ctrl_target_fingertip_midpoint_quat=ctrl_target_fingertip_midpoint_quat,
+            ctrl_target_fingertip_midpoint_pos=target_pos,
+            ctrl_target_fingertip_midpoint_quat=target_quat,
             ctrl_target_gripper_dof_pos=0.0,
         )
 

@@ -307,6 +307,8 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         
         params.env = params.get("env", OmegaConf.create({}))
         env = params.env
+        if env.get("decimation", None) is not None:
+            self.decimation = int(env.decimation)
         if env.get("enable_tactile_sensor", None) is not None:
             self.enable_tactile_sensor = env.enable_tactile_sensor
         if env.get("read_tactile_sensor", None) is not None:

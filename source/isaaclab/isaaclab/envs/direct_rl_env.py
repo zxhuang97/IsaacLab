@@ -310,7 +310,7 @@ class DirectRLEnv(gym.Env):
         # return observations
         return self._get_observations(), self.extras
 
-    def step(self, action: torch.Tensor) -> VecEnvStepReturn:
+    def step(self, action: torch.Tensor | dict[str, Any]) -> VecEnvStepReturn:
         """Execute one time-step of the environment's dynamics.
 
         The environment steps forward at a fixed time-step, while the physics simulation is decimated at a
@@ -329,15 +329,36 @@ class DirectRLEnv(gym.Env):
         6. Compute observations.
 
         Args:
-            action: The actions to apply on the environment. Shape is (num_envs, action_dim).
+            action: The actions to apply on the environment. This is normally a
+                tensor with shape ``(num_envs, action_dim)``. Direct environments
+                may also accept an action packet dictionary; tensor values in the
+                packet are moved to the environment device before pre-processing.
 
         Returns:
             A tuple containing the observations, rewards, resets (terminated and truncated) and extras.
         """
-        action = action.to(self.device)
+        if isinstance(action, dict):
+            # Action packets carry metadata (for example an action representation)
+            # and may contain nested compliance tensors. Keep non-tensor metadata
+            # untouched while matching the normal tensor action device behavior.
+            def _to_device(value):
+                if torch.is_tensor(value):
+                    return value.to(self.device)
+                if isinstance(value, dict):
+                    return {key: _to_device(item) for key, item in value.items()}
+                return value
+
+            action = {key: _to_device(value) for key, value in action.items()}
+        else:
+            action = action.to(self.device)
         # add action noise
         if self.cfg.action_noise_model:
-            action = self._action_noise_model(action)
+            if isinstance(action, dict):
+                if "action" not in action or not torch.is_tensor(action["action"]):
+                    raise TypeError("An action packet must contain a tensor-valued 'action' entry.")
+                action["action"] = self._action_noise_model(action["action"])
+            else:
+                action = self._action_noise_model(action)
 
         # process actions
         self._pre_physics_step(action)
