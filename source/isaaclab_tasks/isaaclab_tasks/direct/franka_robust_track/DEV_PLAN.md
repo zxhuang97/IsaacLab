@@ -656,11 +656,13 @@ cross-simulator error.
 
 ### P7. Preserve the dataset timebase: replace resampling with tail padding
 
-**Status:** Evaluation path implemented; training path remains highest
-priority. Both evaluation scripts now default to 141 control steps, preserve
-raw samples 0--140, and copy the final pose for future lookahead. The existing
-`0716` and `0717` policies were trained with stretched references and remain
-legacy until the training loader is changed and the policies are retrained.
+**Status:** Evaluation and training paths implemented. Both evaluation scripts
+default to 141 control steps, preserve raw samples 0--140, and copy the final
+pose for future lookahead. New training runs expose `--chunk-length` (default
+150), preserve every raw pose, and copy the final pose through the chunk and
+lookahead tail. Sampling a shorter chunk from within a longer trajectory remains
+unsupported and raises a clear error. The existing `0716` and `0717` policies
+were trained with stretched references and remain legacy until retrained.
 
 **Problem:** The environment currently sets the stored reference length to
 `max_episode_length + num_future_steps - 1`. With the saved configuration this
@@ -696,7 +698,7 @@ moving portion of the demonstration.
 
 **Implementation scope:**
 
-1. In `franka_robust_track_env.py`, replace the dataset pose resampling path in
+1. [x] In `franka_robust_track_env.py`, replace the dataset pose resampling path in
    `_load_dataset_trajectories` with an index-preserving pad-to-capacity helper.
    Rename or document `dataset_reference_length` as buffer capacity, not a
    resampling target. Remove resampling from the default training path.

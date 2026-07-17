@@ -141,14 +141,21 @@ class TrackingCfg:
     # is performed: the dataset pose must describe the frame selected by the env's
     # top-level `tool_frame`, as pos + quat (w, x, y, z) in the robot-base/env-local
     # frame, i.e. the exact format stored in `traj_pos_buf`/`traj_quat_buf`. At reset
-    # a random episode is drawn,
-    # its poses are resampled onto the per-step control grid, and the usual
+    # a random episode is drawn. New training configs preserve its raw per-step
+    # samples and tail-pad them to the configured chunk length; legacy configs may
+    # still resample onto the per-step control grid. The usual
     # cuRobo reachability + singularity filter still applies (episodes that fall
     # outside the reachable/well-conditioned workspace are resampled/backfilled).
     dataset_path: str = ""  # HDF5 path; required when mode == "dataset"
     dataset_pose_key: str = "tool_pose"  # (N, 7) pos(3) + quat(4, wxyz) field
     dataset_only_success: bool = True  # keep only episodes with trial_success set
     dataset_max_trajs: int = 0  # cap loaded episodes (0 = all available)
+    # Training chunk length in control-step poses. When positive, raw dataset
+    # samples retain their original indices and any unused tail is filled by
+    # copying the episode's final pose. Chunking from within a longer episode is
+    # intentionally not implemented yet, so an episode longer than this raises.
+    # Zero keeps the legacy resampling path for old configs/checkpoint replay.
+    dataset_chunk_length: int = 0
     # Optional replay-only resampling length. A runtime timeout may be extended
     # to expose the final post-step state without changing the saved reference
     # grid. If this is shorter than the runtime trajectory buffer, the last
@@ -549,6 +556,7 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "dataset_pose_key",
             "dataset_only_success",
             "dataset_max_trajs",
+            "dataset_chunk_length",
             "dataset_reference_length",
             "dataset_warp_strategy",
             "dataset_warp_prob",

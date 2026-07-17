@@ -1382,14 +1382,15 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         return vec[i0] * (1.0 - frac) + vec[i1] * frac
 
     def _load_dataset_trajectories(self):
-        """Load + resample offline demonstration EE trajectories for `mode='dataset'`.
+        """Load offline demonstration EE trajectories for ``mode='dataset'``.
 
         Reads the `dataset_pose_key` (N, 7) pose field (selected-tool pos + quat,
-        wxyz, env-local frame) from the HDF5 dataset, splits it into episodes via
-        `episode_starts`/`episode_ends`, and resamples every episode onto the
-        `_traj_len`-step control grid so the runtime command/lookahead can index it
-        directly. When force tracking is enabled and `dataset_force_key` is set, the
-        matching per-step force (first 3 components) is resampled the same way.
+        wxyz, env-local frame) from the HDF5 dataset and splits it into episodes via
+        `episode_starts`/`episode_ends`. With `dataset_chunk_length > 0`, samples keep
+        their original indices and the final sample is repeated to fill the chunk
+        and runtime lookahead buffer. Episodes longer than the requested chunk are
+        rejected until within-episode start-offset sampling is implemented. A zero
+        chunk length retains the legacy even resampling behavior for old configs.
         """
         import h5py
 
@@ -1419,8 +1420,20 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             raise ValueError("tracking.dataset_warp_cycles_range must be [min, max] with 0 <= min <= max")
 
         length = self._traj_len
+        chunk_length = int(getattr(tcfg, "dataset_chunk_length", 0))
+        if chunk_length < 0:
+            raise ValueError(
+                f"tracking.dataset_chunk_length must be non-negative, got {chunk_length}"
+            )
+        if chunk_length > length:
+            raise ValueError(
+                "tracking.dataset_chunk_length cannot exceed the runtime trajectory "
+                f"buffer length ({chunk_length} > {length})"
+            )
         reference_length = int(getattr(tcfg, "dataset_reference_length", 0))
-        if reference_length <= 0:
+        if chunk_length > 0:
+            reference_length = chunk_length
+        elif reference_length <= 0:
             reference_length = length
         if reference_length > length:
             raise ValueError(
@@ -1435,7 +1448,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             success = f["trial_success"][:] if "trial_success" in f else None
             force = torch.as_tensor(f[tcfg.dataset_force_key][:], dtype=torch.float32) if want_force else None
 
-        pos_list, quat_list, wr_list = [], [], []
+        pos_list, quat_list, phase_list, wr_list = [], [], [], []
         for e in range(len(starts)):
             if tcfg.dataset_only_success and success is not None and float(success[e]) < 0.5:
                 continue
@@ -1445,19 +1458,50 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             seg_pos = pose[s:en, :3].to(self.device)
             seg_quat = pose[s:en, 3:7].to(self.device)
             seg_quat = seg_quat / seg_quat.norm(dim=-1, keepdim=True).clamp(min=1.0e-6)
-            p, q = self._resample_pose_sequence(
-                seg_pos, seg_quat, reference_length
-            )
+            raw_length = seg_pos.shape[0]
+            if chunk_length > 0:
+                if raw_length > chunk_length:
+                    raise ValueError(
+                        "Dataset episode is longer than tracking.dataset_chunk_length; "
+                        "sampling a shorter chunk from within an episode is not implemented "
+                        f"yet (episode={e}, trajectory_length={raw_length}, "
+                        f"chunk_length={chunk_length}, dataset={path})"
+                    )
+                p, q = seg_pos, seg_quat
+                if raw_length < chunk_length:
+                    chunk_pad = chunk_length - raw_length
+                    p = torch.cat((p, p[-1:].expand(chunk_pad, -1)), dim=0)
+                    q = torch.cat((q, q[-1:].expand(chunk_pad, -1)), dim=0)
+            else:
+                p, q = self._resample_pose_sequence(
+                    seg_pos, seg_quat, reference_length
+                )
             if reference_length < length:
                 pad = length - reference_length
                 p = torch.cat((p, p[-1:].expand(pad, -1)), dim=0)
                 q = torch.cat((q, q[-1:].expand(pad, -1)), dim=0)
             pos_list.append(p)
             quat_list.append(q)
+            if chunk_length > 0:
+                # Finish the augmentation phase at the raw endpoint and hold it
+                # there, so applying a warp cannot turn the padded tail back into
+                # motion. Legacy resampling continues to span the full buffer.
+                phase = torch.arange(length, device=self.device, dtype=torch.float32)
+                phase = (phase / max(raw_length - 1, 1)).clamp(max=1.0)
+            else:
+                phase = torch.linspace(0.0, 1.0, length, device=self.device)
+            phase_list.append(phase)
             if force is not None:
-                wr = self._resample_vec_sequence(
-                    force[s:en, :3].to(self.device), reference_length
-                )
+                seg_force = force[s:en, :3].to(self.device)
+                if chunk_length > 0:
+                    wr = seg_force
+                    if raw_length < chunk_length:
+                        wr = torch.cat(
+                            (wr, wr[-1:].expand(chunk_length - raw_length, -1)),
+                            dim=0,
+                        )
+                else:
+                    wr = self._resample_vec_sequence(seg_force, reference_length)
                 if reference_length < length:
                     wr = torch.cat(
                         (wr, wr[-1:].expand(length - reference_length, -1)),
@@ -1472,6 +1516,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
 
         self._ds_pos = torch.stack(pos_list)  # (T, L, 3)
         self._ds_quat = torch.stack(quat_list)  # (T, L, 4)
+        self._ds_phase = torch.stack(phase_list)  # (T, L), constant through padded tails
         self._ds_wrench = torch.stack(wr_list) if wr_list else None  # (T, L, 3) or None
         self._ds_num = self._ds_pos.shape[0]
 
@@ -1491,7 +1536,8 @@ class FrankaRobustTrackEnv(DirectRLEnv):
                 warp_str += f", shape={shape_fraction:.2f}, cycles={list(cycles_range)}"
         print(
             f"[FrankaRobustTrack] dataset mode: loaded {self._ds_num} trajectories from {path} "
-            f"(reference L={reference_length}, runtime L={length}) | "
+            f"(reference L={reference_length}, runtime L={length}, "
+            f"chunk_mode={'tail_pad' if chunk_length > 0 else 'legacy_resample'}) | "
             f"pos box min {box_min} max {box_max}{force_str}{warp_str}"
         )
 
@@ -1594,7 +1640,11 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         frac = (fidx - i0.float()).unsqueeze(-1)
         pos = self._ds_pos[idx, i0] * (1.0 - frac) + self._ds_pos[idx, i1] * frac
         quat = self._quat_slerp(self._ds_quat[idx, i0], self._ds_quat[idx, i1], frac.squeeze(-1))
-        traj_phase = fidx / max(length - 1, 1)
+        phase_frac = frac.squeeze(-1)
+        traj_phase = (
+            self._ds_phase[idx, i0] * (1.0 - phase_frac)
+            + self._ds_phase[idx, i1] * phase_frac
+        )
         return self._apply_dataset_warp(pos, quat, params, traj_phase)
 
     def _sample_dataset_force(self, env_ids: torch.Tensor):
@@ -1781,15 +1831,14 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         straight out of `traj_pos_buf`/`traj_quat_buf` by integer step index.
         """
         if self.cfg.tracking.mode == "dataset":
-            # Sequences are already resampled onto the per-step grid. Apply the
+            # Sequences are already prepared on the per-step grid. Apply the
             # accepted candidate's warp in one batch so runtime lookup stays cheap.
             params = {
                 key: getattr(self, buf_name)[env_ids] for key, buf_name in self._DS_TRAJ_PARAM_BUFFERS.items()
             }
             pos = self._ds_pos[params["ds_idx"]]
             quat = self._ds_quat[params["ds_idx"]]
-            traj_phase = torch.linspace(0.0, 1.0, self._traj_len, device=self.device)
-            traj_phase = traj_phase.unsqueeze(0).expand(len(env_ids), -1)
+            traj_phase = self._ds_phase[params["ds_idx"]]
             flat_params = {
                 "ds_warp_pos": params["ds_warp_pos"]
                 .unsqueeze(1)
