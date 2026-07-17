@@ -129,10 +129,11 @@ class TrackingCfg:
     rot_speed_range = [0.0, 0.20]  # rad/s
     rot_angle_range = [0.0, 0.30]  # rad, max sweep
 
-    # Lookahead: the policy observes the next `num_future_steps` reference
-    # waypoints (index 0 = current target, one per trajectory step), so it can
-    # infer the reference velocity from the future pose sequence.
+    # Lookahead: the policy observes `num_future_steps` reference waypoints, one
+    # per trajectory step. `reference_start_offset=0` starts at the current
+    # target [P_t, ...]; offset 1 starts at the next target [P_{t+1}, ...].
     num_future_steps: int = 4
+    reference_start_offset: int = 0
 
     # "dataset" mode: instead of an analytic line/circle, each env tracks a real
     # end-effector trajectory sampled from an offline demonstration dataset (e.g.
@@ -535,6 +536,7 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "rot_speed_range",
             "rot_angle_range",
             "num_future_steps",
+            "reference_start_offset",
             "dataset_path",
             "dataset_pose_key",
             "dataset_only_success",
@@ -618,6 +620,15 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
 
     def __post_init__(self):
         self.update_env_params()
+        self.tracking.num_future_steps = int(self.tracking.num_future_steps)
+        self.tracking.reference_start_offset = int(self.tracking.reference_start_offset)
+        if self.tracking.num_future_steps < 1:
+            raise ValueError("tracking.num_future_steps must be at least 1")
+        if self.tracking.reference_start_offset not in (0, 1):
+            raise ValueError(
+                "tracking.reference_start_offset must be 0 (current-inclusive) "
+                "or 1 (future-only)"
+            )
         self.tool_frame = str(self.tool_frame).strip() or "auto"
         self.robot.spawn.usd_path = f"{ASSET_DIR}/{self.robot_usd_path}"
         self.sim.render_interval = self.decimation
@@ -637,8 +648,8 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
         future_dim = 6 * self.tracking.num_future_steps
         controller_context_dim = 6
         privileged_dim = 24
-        # Force-tracking add-on contributes a (current + lookahead) target-wrench
-        # block of 3 dims per step to both the policy and the critic observation.
+        # Force-tracking add-on uses the same reference start offset as the pose
+        # window and contributes 3 dims per step to both observations.
         force_dim = 3 * self.tracking.num_future_steps if self.tracking.enable_force else 0
         history = max(1, int(self.obs_history_length))
         # Only proprio is stacked over history; future errors + target wrench +
