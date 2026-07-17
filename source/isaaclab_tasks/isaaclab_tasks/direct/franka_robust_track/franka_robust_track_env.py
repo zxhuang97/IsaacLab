@@ -1419,6 +1419,14 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             raise ValueError("tracking.dataset_warp_cycles_range must be [min, max] with 0 <= min <= max")
 
         length = self._traj_len
+        reference_length = int(getattr(tcfg, "dataset_reference_length", 0))
+        if reference_length <= 0:
+            reference_length = length
+        if reference_length > length:
+            raise ValueError(
+                "tracking.dataset_reference_length cannot exceed the runtime "
+                f"trajectory buffer length ({reference_length} > {length})"
+            )
         want_force = self.enable_force and bool(tcfg.dataset_force_key)
         with h5py.File(path, "r") as f:
             pose = torch.as_tensor(f[tcfg.dataset_pose_key][:], dtype=torch.float32)
@@ -1437,11 +1445,25 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             seg_pos = pose[s:en, :3].to(self.device)
             seg_quat = pose[s:en, 3:7].to(self.device)
             seg_quat = seg_quat / seg_quat.norm(dim=-1, keepdim=True).clamp(min=1.0e-6)
-            p, q = self._resample_pose_sequence(seg_pos, seg_quat, length)
+            p, q = self._resample_pose_sequence(
+                seg_pos, seg_quat, reference_length
+            )
+            if reference_length < length:
+                pad = length - reference_length
+                p = torch.cat((p, p[-1:].expand(pad, -1)), dim=0)
+                q = torch.cat((q, q[-1:].expand(pad, -1)), dim=0)
             pos_list.append(p)
             quat_list.append(q)
             if force is not None:
-                wr_list.append(self._resample_vec_sequence(force[s:en, :3].to(self.device), length))
+                wr = self._resample_vec_sequence(
+                    force[s:en, :3].to(self.device), reference_length
+                )
+                if reference_length < length:
+                    wr = torch.cat(
+                        (wr, wr[-1:].expand(length - reference_length, -1)),
+                        dim=0,
+                    )
+                wr_list.append(wr)
             if tcfg.dataset_max_trajs and len(pos_list) >= int(tcfg.dataset_max_trajs):
                 break
 
@@ -1469,7 +1491,8 @@ class FrankaRobustTrackEnv(DirectRLEnv):
                 warp_str += f", shape={shape_fraction:.2f}, cycles={list(cycles_range)}"
         print(
             f"[FrankaRobustTrack] dataset mode: loaded {self._ds_num} trajectories from {path} "
-            f"(resampled to L={length}) | pos box min {box_min} max {box_max}{force_str}{warp_str}"
+            f"(reference L={reference_length}, runtime L={length}) | "
+            f"pos box min {box_min} max {box_max}{force_str}{warp_str}"
         )
 
     def _sample_dataset_candidate_params(self, env_ids: torch.Tensor, num_candidates: int) -> dict:

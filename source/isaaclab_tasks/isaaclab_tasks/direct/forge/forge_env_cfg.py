@@ -39,6 +39,9 @@ class ForgeCtrlCfg(CtrlCfg):
     # every decimation substep (legacy), or snapshot one absolute target at the
     # policy/control-step boundary and hold it throughout decimation.
     delta_target_mode: str = "per_physics_step"
+    # Legacy Forge averages the two finger Jacobians. RobustTrack controls the
+    # actual tool body's origin and shifts its COM-referenced Jacobian/velocity.
+    tool_kinematics_mode: str = "finger_average"
 
     # Use the full operational-space control law: premultiply the task-space PD
     # wrench by the task inertia Λ = (J M⁻¹ Jᵀ)⁻¹. False falls back to the legacy

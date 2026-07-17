@@ -34,7 +34,14 @@ class ForgeEnv(FactoryEnv):
         self.flip_quats = torch.ones((self.num_envs,), dtype=torch.float32, device=self.device)
 
         # Force sensor information.
-        self.force_sensor_body_idx = self._robot.body_names.index("force_sensor")
+        self.force_sensor_body_name = (
+            "force_sensor"
+            if "force_sensor" in self._robot.body_names
+            else "panda_fingertip_centered"
+        )
+        self.force_sensor_body_idx = self._robot.body_names.index(
+            self.force_sensor_body_name
+        )
         self.force_sensor_smooth = torch.zeros((self.num_envs, 6), device=self.device)
         self.force_sensor_world_smooth = torch.zeros((self.num_envs, 6), device=self.device)
         self.ep_max_ee_speed = torch.zeros((self.num_envs,), device=self.device)
@@ -146,6 +153,46 @@ class ForgeEnv(FactoryEnv):
     def _compute_intermediate_values(self, dt):
         """Add noise to observations for force sensing."""
         super()._compute_intermediate_values(dt)
+
+        kinematics_mode = str(
+            getattr(self.cfg.ctrl, "tool_kinematics_mode", "finger_average")
+        )
+        if kinematics_mode == "tool_body":
+            body_pos_w = self._robot.data.body_pos_w[:, self.fingertip_body_idx]
+            body_com_pos_w = self._robot.data.body_com_pos_w[
+                :, self.fingertip_body_idx
+            ]
+            body_com_linvel_w = self._robot.data.body_com_lin_vel_w[
+                :, self.fingertip_body_idx
+            ]
+            body_angvel_w = self._robot.data.body_com_ang_vel_w[
+                :, self.fingertip_body_idx
+            ]
+            com_to_tool_w = body_pos_w - body_com_pos_w
+            self.fingertip_midpoint_linvel = (
+                body_com_linvel_w
+                + torch.linalg.cross(
+                    body_angvel_w, com_to_tool_w, dim=-1
+                )
+            )
+            self.fingertip_midpoint_angvel = body_angvel_w
+            jacobians = self._robot.root_physx_view.get_jacobians()
+            tool_jacobian = jacobians[
+                :, self.fingertip_body_idx - 1, 0:6, 0:7
+            ].clone()
+            angular_cols = tool_jacobian[:, 3:6, :].transpose(1, 2)
+            linear_shift = torch.linalg.cross(
+                angular_cols,
+                com_to_tool_w.unsqueeze(1).expand_as(angular_cols),
+                dim=-1,
+            ).transpose(1, 2)
+            tool_jacobian[:, 0:3, :] += linear_shift
+            self.fingertip_midpoint_jacobian = tool_jacobian
+        elif kinematics_mode != "finger_average":
+            raise ValueError(
+                "ctrl.tool_kinematics_mode must be 'finger_average' or "
+                f"'tool_body', got {kinematics_mode!r}"
+            )
 
         # Optionally replace PhysX's ground-truth mass matrix (set by the factory
         # base) with the nominal reconstruction so the OSC task-space inertia
@@ -415,7 +462,7 @@ class ForgeEnv(FactoryEnv):
         self.generate_ctrl_signals(
             ctrl_target_fingertip_midpoint_pos=ctrl_target_fingertip_midpoint_pos,
             ctrl_target_fingertip_midpoint_quat=ctrl_target_fingertip_midpoint_quat,
-            ctrl_target_gripper_dof_pos=0.0,
+            ctrl_target_gripper_dof_pos=self.cfg.ctrl.gripper_dof_pos,
         )
 
     def _get_delta_ee_pose_target(self):
@@ -449,7 +496,7 @@ class ForgeEnv(FactoryEnv):
         self.generate_ctrl_signals(
             ctrl_target_fingertip_midpoint_pos=target_pos,
             ctrl_target_fingertip_midpoint_quat=target_quat,
-            ctrl_target_gripper_dof_pos=0.0,
+            ctrl_target_gripper_dof_pos=self.cfg.ctrl.gripper_dof_pos,
         )
 
     def _apply_abs_ee_pose_action(self, target_pose: torch.Tensor, clip_pose_target: bool = True):
@@ -509,7 +556,7 @@ class ForgeEnv(FactoryEnv):
         self.generate_ctrl_signals(
             ctrl_target_fingertip_midpoint_pos=ctrl_target_fingertip_midpoint_pos,
             ctrl_target_fingertip_midpoint_quat=ctrl_target_fingertip_midpoint_quat,
-            ctrl_target_gripper_dof_pos=0.0,
+            ctrl_target_gripper_dof_pos=self.cfg.ctrl.gripper_dof_pos,
         )
 
     def generate_ctrl_signals(

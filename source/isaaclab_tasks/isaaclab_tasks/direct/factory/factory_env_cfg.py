@@ -76,6 +76,7 @@ class ObsHistoryCfg:
 @configclass
 class CtrlCfg:
     ema_factor = 0.2
+    gripper_dof_pos: float = 0.0
 
     pos_action_bounds = [0.05, 0.05, 0.05]
     rot_action_bounds = [1.0, 1.0, 1.0]
@@ -293,6 +294,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
     enable_tactile_sensor: bool = False
     read_tactile_sensor: bool = False
     enable_obs_camera: bool = False
+    enable_table: bool = True
     use_compliant_gripper: bool = True
     finger_type: str = "gelsight_r15"
     robot_usd_path: str = "franka_mimic.usd"
@@ -315,6 +317,8 @@ class FactoryEnvCfg(DirectRLEnvCfg):
             self.read_tactile_sensor = env.read_tactile_sensor
         if env.get("enable_obs_camera", None) is not None:
             self.enable_obs_camera = env.enable_obs_camera
+        if env.get("enable_table", None) is not None:
+            self.enable_table = bool(env.enable_table)
         if env.get("use_compliant_gripper", None) is not None:
             self.use_compliant_gripper = env.use_compliant_gripper
         if env.get("finger_type", None) is not None:
@@ -346,6 +350,10 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         ctrl = env.get("ctrl", OmegaConf.create({}))
         if ctrl.get("ema_factor", None) is not None:
             self.ctrl.ema_factor = ctrl.ema_factor
+        if ctrl.get("gripper_dof_pos", None) is not None:
+            self.ctrl.gripper_dof_pos = float(ctrl.gripper_dof_pos)
+        if ctrl.get("tool_kinematics_mode", None) is not None:
+            self.ctrl.tool_kinematics_mode = str(ctrl.tool_kinematics_mode)
         pos_action_bounds = ctrl.get("pos_action_bounds", None)
         if pos_action_bounds is not None:
             self.ctrl.pos_action_bounds = OmegaConf.to_container(pos_action_bounds, resolve=True)

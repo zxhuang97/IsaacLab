@@ -149,6 +149,11 @@ class TrackingCfg:
     dataset_pose_key: str = "tool_pose"  # (N, 7) pos(3) + quat(4, wxyz) field
     dataset_only_success: bool = True  # keep only episodes with trial_success set
     dataset_max_trajs: int = 0  # cap loaded episodes (0 = all available)
+    # Optional replay-only resampling length. A runtime timeout may be extended
+    # to expose the final post-step state without changing the saved reference
+    # grid. If this is shorter than the runtime trajectory buffer, the last
+    # resampled pose is repeated to fill the extra lookahead slots.
+    dataset_reference_length: int = 0  # 0 = use the full runtime trajectory buffer
     # Per-reset spatial augmentation for dataset trajectories. Available strategies:
     #   "smooth_bump": original quartic warp that preserves both endpoints and
     #                  reaches the sampled offset at the trajectory midpoint.
@@ -398,7 +403,7 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
     robot = ArticulationCfg(
         prim_path="/World/envs/env_.*/Robot",
         spawn=sim_utils.UsdFileCfg(
-            usd_path=f"{ASSET_DIR}/franka_mimic.usd",
+            usd_path=f"{ASSET_DIR}/franka_gelsight_mini_assembled_z13_x10.usd",
             activate_contact_sensors=True,
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 disable_gravity=True,
@@ -465,7 +470,10 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
         },
     )
 
-    robot_usd_path: str = "franka_mimic.usd"
+    # New RobustTrack training uses the same Gelsight Franka as Forge. Saved
+    # mimic checkpoints retain their serialized asset config, and launchers can
+    # still request ``franka_mimic.usd`` explicitly for reproduction.
+    robot_usd_path: str = "franka_gelsight_mini_assembled_z13_x10.usd"
     # Frame whose pose/Jacobian defines the controlled and observed EE. "auto"
     # preserves the legacy rigid-body priority: panda_fingertip_centered,
     # force_sensor, then panda_hand. "fr3_wsg_tcp" is a virtual frame computed from
@@ -541,6 +549,7 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "dataset_pose_key",
             "dataset_only_success",
             "dataset_max_trajs",
+            "dataset_reference_length",
             "dataset_warp_strategy",
             "dataset_warp_prob",
             "dataset_warp_pos_max",
