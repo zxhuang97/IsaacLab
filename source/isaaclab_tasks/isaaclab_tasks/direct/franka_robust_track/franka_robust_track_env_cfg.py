@@ -141,19 +141,27 @@ class TrackingCfg:
     # is performed: the dataset pose must describe the frame selected by the env's
     # top-level `tool_frame`, as pos + quat (w, x, y, z) in the robot-base/env-local
     # frame, i.e. the exact format stored in `traj_pos_buf`/`traj_quat_buf`. At reset
-    # a random episode is drawn. New training configs preserve its raw per-step
-    # samples and tail-pad them to the configured chunk length; legacy configs may
-    # still resample onto the per-step control grid. The usual
+    # a random episode/chunk is drawn. New training configs preserve raw per-step
+    # samples and hold the selected chunk's last sample in the runtime tail; legacy
+    # configs may still resample onto the per-step control grid. The usual
     # cuRobo reachability + singularity filter still applies (episodes that fall
     # outside the reachable/well-conditioned workspace are resampled/backfilled).
     dataset_path: str = ""  # HDF5 path; required when mode == "dataset"
     dataset_pose_key: str = "tool_pose"  # (N, 7) pos(3) + quat(4, wxyz) field
+    # Forge critic state aligned with dataset_pose_key. Its first seven values
+    # duplicate tool_pose and values [13:20] are the recorded Franka arm joints.
+    # Short within-episode chunks use these joints for reset and history seeding.
+    dataset_state_key: str = "low_dim_state"
+    dataset_joint_pos_offset: int = 13
     dataset_only_success: bool = True  # keep only episodes with trial_success set
     dataset_max_trajs: int = 0  # cap loaded episodes (0 = all available)
+    # "episode_start" reproduces full-trajectory training from raw sample zero;
+    # "random" samples the reset timestep over the entire raw episode.
+    dataset_chunk_start_mode: str = "episode_start"
     # Training chunk length in control-step poses. When positive, raw dataset
-    # samples retain their original indices and any unused tail is filled by
-    # copying the episode's final pose. Chunking from within a longer episode is
-    # intentionally not implemented yet, so an episode longer than this raises.
+    # samples retain their original indices. The start mode selects sample zero or
+    # a random timestep over the entire episode. Missing lead-in history repeats
+    # the first sample; a chunk extending past the episode repeats its final sample.
     # Zero keeps the legacy resampling path for old configs/checkpoint replay.
     dataset_chunk_length: int = 0
     # Optional replay-only resampling length. A runtime timeout may be extended
@@ -554,8 +562,11 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "reference_start_offset",
             "dataset_path",
             "dataset_pose_key",
+            "dataset_state_key",
+            "dataset_joint_pos_offset",
             "dataset_only_success",
             "dataset_max_trajs",
+            "dataset_chunk_start_mode",
             "dataset_chunk_length",
             "dataset_reference_length",
             "dataset_warp_strategy",
