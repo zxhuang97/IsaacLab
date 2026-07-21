@@ -3,6 +3,8 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
+from typing import Literal
+
 import isaaclab.sim as sim_utils
 from isaaclab.actuators.actuator_cfg import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg
@@ -191,20 +193,31 @@ class TrackingCfg:
     # sampler. NOTE: in this peg dataset `contact_force` is all zeros; the real
     # force lives in `wrench[:, :3]` (peaks ~19 N, matching force_mag_range).
     dataset_force_key: str = "wrench"
+    # Remove the mean of the first N samples of each raw episode before using its
+    # wrench as a force goal. This compensates the episode's static wrist-sensor
+    # bias while preserving the demonstrated time-varying force profile. Zero
+    # preserves the legacy raw-wrench behavior.
+    dataset_force_bias_samples: int = 0
     # A dataset step counts as "contact" (for the free/contact metric split) when
     # its target-wrench magnitude exceeds this threshold (N).
     dataset_contact_force_threshold: float = 0.5
 
     # Force-tracking add-on (independent of `mode`). When enabled, a per-step
-    # target-wrench sequence is sampled at reset alongside the pose trajectory,
-    # applied as an external force at the wrist `force_sensor` body during the
-    # episode, and fed to the policy (current + lookahead) so it can anticipate
-    # and compensate the disturbance. The force models *contact events*: it is zero
+    # target-wrench sequence is sampled at reset alongside the pose trajectory and
+    # fed to the policy (current + lookahead). ``force_mode`` determines whether
+    # that goal is applied directly as a disturbance or tracked through virtual
+    # contact and measured-force feedback. Synthetic analytic force trajectories
+    # model *contact events*: the goal is zero
     # for most of the episode, punctuated by a few contact bands. Each band switches
     # on suddenly at a random onset and, while active, varies smoothly (continuous
     # magnitude oscillation plus a gentle direction drift) rather than staying
     # constant, then switches back off at the end of a sampled duration window.
     enable_force: bool = False
+    # ``replay_disturbance`` preserves the legacy behavior: apply the target force
+    # directly at the wrist. ``virtual_contact`` treats the dataset wrench only as
+    # a goal and generates the applied/measured force from penetration into a
+    # deterministic per-timestep unilateral plane.
+    force_mode: str = "replay_disturbance"
     force_mag_range = [5.0, 20.0]  # N, sampled peak contact magnitude (spec-capped at 20 N)
     # Number of contact bands per episode, sampled per env (inclusive range). The
     # episode is split into that many equal segments, each holding one band, so the
@@ -223,6 +236,34 @@ class TrackingCfg:
     # Direction wobble amplitude (0 = fixed direction). The force direction drifts
     # smoothly around its sampled base direction by roughly this fraction.
     force_dir_drift: float = 0.3
+
+    # Dataset-conditioned virtual contact. Every reference timestep gets its own
+    # plane. The outward normal is a centered moving-average force direction, and
+    # the plane is placed |F_goal| / k_p above the reference EE pose along that
+    # normal. Consequently the reference pose produces the target force whenever
+    # relative penetration rate is zero. k_p is fixed and independent of
+    # policy-controlled robot stiffness.
+    virtual_contact_goal_threshold: float = 1.0  # N
+    virtual_contact_direction_smoothing_window: int = 9  # odd, centered, control samples
+    virtual_contact_plane_stiffness: float = 1500.0  # k_p, N/m
+    # Select the normal-force law. The linear model uses a Kelvin-Voigt damping
+    # coefficient derived from damping_ratio; Drake Hunt-Crossley uses the
+    # separate dissipation coefficient below (units s/m).
+    contact_model: Literal["linear", "drake_hunt_crossley"] = "linear"
+    virtual_contact_damping_ratio: float = 0.7
+    hunt_crossley_dissipation: float = 1.0  # s/m
+    virtual_contact_effective_mass: float = 1.0  # kg, used only to set damping
+    # C1 smoothstep activation distance for the unilateral force. This ramps both
+    # spring and damping contributions from zero instead of switching damping on
+    # discontinuously at the first infinitesimal penetration.
+    virtual_contact_transition_width: float = 0.0  # m; zero preserves exact F=k_p*penetration
+    virtual_contact_force_cap: float = 20.0  # N
+
+    # Synthetic force sensor shown to the actor. Reward uses the uncorrupted true
+    # virtual contact force; the actor sees an EMA-filtered, biased, noisy signal.
+    force_sensor_smoothing_factor: float = 0.25
+    force_sensor_noise_std: float = 0.0  # N
+    force_sensor_bias_range: float = 0.0  # N, per-axis reset-time bias
 
 
 @configclass
@@ -338,6 +379,26 @@ class RewardCfg:
     # when ctrl.control_gains is True) to encourage smooth gain scheduling instead
     # of chattering stiffness. Computed on the normalized [-1, 1] gain actions.
     gain_rate_scale: float = -0.02
+    # Virtual-contact force regulation. The positive exponential term supplies a
+    # dense force-tracking objective; over-goal and absolute safety violations are
+    # penalized quadratically and asymmetrically.
+    force_error_scale: float = 4.0
+    force_error_temp: float = 1.0  # N
+    force_over_scale: float = -1.0
+    force_over_margin: float = 0.5  # N
+    force_safe_scale: float = -2.0
+    force_safe_threshold: float = 10.0  # N
+    force_success_threshold: float = 1.0  # N absolute normal-force error
+    # Weak privileged shaping of the normal gain: high far from the plane and low
+    # near/in contact. The actor does not observe exact plane distance, so it must
+    # infer the schedule from trajectory/force-goal lookahead and force feedback.
+    stiffness_preference_scale: float = -0.5
+    stiffness_near_margin: float = 0.005  # m
+    stiffness_near_temperature: float = 0.002  # m
+    # Relax normal pose tracking near contact so force regulation can move the EE
+    # slightly away from the demonstrated normal position; tangential tracking is
+    # unchanged.
+    contact_normal_pose_weight: float = 0.2
     joint_vel_scale: float = -0.002
     joint_limit_scale: float = -0.05
     success_pos_threshold: float = 0.003
@@ -357,6 +418,10 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
     # into one flat vector (frame history replaces the recurrent memory). H = 1
     # reproduces the original single-step observation.
     obs_history_length: int = 1
+    # Include the seven arm joint angles in each proprioceptive observation
+    # frame. Disable this when training a tracker that should rely only on the
+    # fingertip pose and its previous action history.
+    include_joint_angles: bool = True
 
     # Debug visualization of the reference trajectory: current command frame,
     # lookahead targets, and the full episode path (sampled in time).
@@ -369,11 +434,12 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
     # logged and the accumulators are reset. Set <= 0 to disable the logging.
     log_perstep_error_episodes: int = 5
     # observation_space / state_space are recomputed in __post_init__. Only the
-    # proprioceptive part (20 dims) is stacked over obs_history_length frames so
-    # the network can infer velocities/dynamics from the past. The lookahead future
-    # errors (6 * num_future_steps), controller gains (6), and the critic's
-    # privileged dims are episode-constant/current context, so they are appended
-    # once rather than duplicated across the history.
+    # proprioceptive part (20 dims by default, or 13 without joint angles) is
+    # stacked over obs_history_length frames so the network can infer
+    # velocities/dynamics from the past. The lookahead future errors
+    # (6 * num_future_steps), controller gains (6), and the critic's privileged
+    # dims are episode-constant/current context, so they are appended once rather
+    # than duplicated across the history.
     observation_space = 50
     state_space = 74
 
@@ -508,6 +574,8 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             self.tool_frame = str(env.tool_frame)
         if env.get("obs_history_length", None) is not None:
             self.obs_history_length = int(env.obs_history_length)
+        if env.get("include_joint_angles", None) is not None:
+            self.include_joint_angles = bool(env.include_joint_angles)
         if env.get("debug_vis", None) is not None:
             self.debug_vis = env.debug_vis
         if env.get("debug_vis_path_samples", None) is not None:
@@ -576,14 +644,28 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "dataset_warp_shape_fraction",
             "dataset_warp_cycles_range",
             "dataset_force_key",
+            "dataset_force_bias_samples",
             "dataset_contact_force_threshold",
             "enable_force",
+            "force_mode",
             "force_mag_range",
             "force_num_bands_range",
             "force_duration_range",
             "force_prob",
             "force_osc_freq_range",
             "force_dir_drift",
+            "virtual_contact_goal_threshold",
+            "virtual_contact_direction_smoothing_window",
+            "virtual_contact_plane_stiffness",
+            "contact_model",
+            "virtual_contact_damping_ratio",
+            "hunt_crossley_dissipation",
+            "virtual_contact_effective_mass",
+            "virtual_contact_transition_width",
+            "virtual_contact_force_cap",
+            "force_sensor_smoothing_factor",
+            "force_sensor_noise_std",
+            "force_sensor_bias_range",
         ]:
             if tracking.get(key, None) is not None:
                 setattr(self.tracking, key, _to_plain(tracking[key]))
@@ -640,6 +722,17 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "joint_vel_scale",
             "joint_limit_scale",
             "gain_rate_scale",
+            "force_error_scale",
+            "force_error_temp",
+            "force_over_scale",
+            "force_over_margin",
+            "force_safe_scale",
+            "force_safe_threshold",
+            "force_success_threshold",
+            "stiffness_preference_scale",
+            "stiffness_near_margin",
+            "stiffness_near_temperature",
+            "contact_normal_pose_weight",
             "success_pos_threshold",
             "success_rot_threshold",
         ]:
@@ -650,6 +743,42 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
         self.update_env_params()
         self.tracking.num_future_steps = int(self.tracking.num_future_steps)
         self.tracking.reference_start_offset = int(self.tracking.reference_start_offset)
+        self.tracking.force_mode = str(self.tracking.force_mode)
+        if self.tracking.force_mode not in ("replay_disturbance", "virtual_contact"):
+            raise ValueError(
+                "tracking.force_mode must be 'replay_disturbance' or 'virtual_contact', "
+                f"got {self.tracking.force_mode!r}"
+            )
+        self.tracking.dataset_force_bias_samples = int(self.tracking.dataset_force_bias_samples)
+        if self.tracking.dataset_force_bias_samples < 0:
+            raise ValueError("tracking.dataset_force_bias_samples must be non-negative")
+        if self.tracking.enable_force and self.tracking.force_mode == "virtual_contact":
+            if not self.ctrl.control_gains:
+                raise ValueError(
+                    "Virtual-contact force-feedback training requires ctrl.control_gains=True"
+                )
+            direction_window = int(self.tracking.virtual_contact_direction_smoothing_window)
+            self.tracking.virtual_contact_direction_smoothing_window = direction_window
+            if direction_window < 1 or direction_window % 2 == 0:
+                raise ValueError(
+                    "tracking.virtual_contact_direction_smoothing_window must be a positive odd integer"
+                )
+            if float(self.tracking.virtual_contact_plane_stiffness) <= 0.0:
+                raise ValueError("tracking.virtual_contact_plane_stiffness must be positive")
+            self.tracking.contact_model = str(self.tracking.contact_model)
+            if self.tracking.contact_model not in ("linear", "drake_hunt_crossley"):
+                raise ValueError(
+                    "tracking.contact_model must be 'linear' or 'drake_hunt_crossley', "
+                    f"got {self.tracking.contact_model!r}"
+                )
+            if float(self.tracking.virtual_contact_damping_ratio) < 0.0:
+                raise ValueError("tracking.virtual_contact_damping_ratio must be non-negative")
+            if float(self.tracking.hunt_crossley_dissipation) < 0.0:
+                raise ValueError("tracking.hunt_crossley_dissipation must be non-negative")
+            if float(self.tracking.virtual_contact_transition_width) < 0.0:
+                raise ValueError("tracking.virtual_contact_transition_width must be non-negative")
+            if not 0.0 <= float(self.tracking.force_sensor_smoothing_factor) <= 1.0:
+                raise ValueError("tracking.force_sensor_smoothing_factor must be in [0, 1]")
         if self.tracking.num_future_steps < 1:
             raise ValueError("tracking.num_future_steps must be at least 1")
         if self.tracking.reference_start_offset not in (0, 1):
@@ -666,16 +795,26 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
         action_dim = 6 + (6 if self.ctrl.control_gains else 0)
         self.action_space = action_dim
 
-        # Proprio obs: ee_pos(3)+ee_quat(4)+joint_pos(7)+actions(action_dim) (velocity
-        # terms are omitted; the LSTM infers them from history). Each lookahead
-        # pose contributes a (pos_error, axis_angle_error) pair = 6 dims. The 6
-        # current task gains are fed once to both policy and critic. The critic adds
-        # 24 privileged dims: payload_mass(1)+payload_com(3)+joint_friction(7)
-        # +joint_armature(7)+pos_threshold(3)+rot_threshold(3).
-        proprio_dim = 14 + action_dim
+        # Proprio obs: ee_pos(3)+ee_quat(4)+optional joint_pos(7)+actions(action_dim)
+        # (velocity terms are omitted; history lets the policy infer them). Each
+        # lookahead pose contributes a (pos_error, axis_angle_error) pair = 6 dims.
+        # The 6 current task gains are fed once to both policy and critic. The
+        # critic adds 24 privileged dims: payload_mass(1)+payload_com(3)
+        # +joint_friction(7)+joint_armature(7)+pos_threshold(3)+rot_threshold(3).
+        force_feedback_dim = (
+            3
+            if self.tracking.enable_force and self.tracking.force_mode == "virtual_contact"
+            else 0
+        )
+        proprio_dim = 7 + (7 if self.include_joint_angles else 0) + action_dim + force_feedback_dim
         future_dim = 6 * self.tracking.num_future_steps
         controller_context_dim = 6
-        privileged_dim = 24
+        virtual_contact_privileged_dim = (
+            6
+            if self.tracking.enable_force and self.tracking.force_mode == "virtual_contact"
+            else 0
+        )
+        privileged_dim = 24 + virtual_contact_privileged_dim
         # Force-tracking add-on uses the same reference start offset as the pose
         # window and contributes 3 dims per step to both observations.
         force_dim = 3 * self.tracking.num_future_steps if self.tracking.enable_force else 0
