@@ -753,10 +753,6 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
         if self.tracking.dataset_force_bias_samples < 0:
             raise ValueError("tracking.dataset_force_bias_samples must be non-negative")
         if self.tracking.enable_force and self.tracking.force_mode == "virtual_contact":
-            if not self.ctrl.control_gains:
-                raise ValueError(
-                    "Virtual-contact force-feedback training requires ctrl.control_gains=True"
-                )
             direction_window = int(self.tracking.virtual_contact_direction_smoothing_window)
             self.tracking.virtual_contact_direction_smoothing_window = direction_window
             if direction_window < 1 or direction_window % 2 == 0:

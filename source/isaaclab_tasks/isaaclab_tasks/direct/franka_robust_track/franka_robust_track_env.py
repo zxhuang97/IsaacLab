@@ -950,13 +950,17 @@ class FrankaRobustTrackEnv(DirectRLEnv):
 
             normal_sq = self.virtual_surface_normal.square()
             normal_gain = (normal_sq * self.task_prop_gains[:, :3]).sum(dim=-1)
-            low_gain = (normal_sq * self.gain_min[:, :3]).sum(dim=-1)
-            high_gain = (normal_sq * self.gain_max[:, :3]).sum(dim=-1)
-            preferred_gain = high_gain + near_contact * (low_gain - high_gain)
-            normalized_gain_error = (normal_gain - preferred_gain) / (high_gain - low_gain).clamp(min=1.0e-6)
-            stiffness_preference = (
-                normalized_gain_error.square() * self.cfg.reward.stiffness_preference_scale
-            )
+            if self.cfg.ctrl.control_gains:
+                # This term trains the policy's gain-action dimensions. With fixed
+                # gains it is not actionable and would instead distort the pose
+                # objective through its dependence on `near_contact`.
+                low_gain = (normal_sq * self.gain_min[:, :3]).sum(dim=-1)
+                high_gain = (normal_sq * self.gain_max[:, :3]).sum(dim=-1)
+                preferred_gain = high_gain + near_contact * (low_gain - high_gain)
+                normalized_gain_error = (normal_gain - preferred_gain) / (high_gain - low_gain).clamp(min=1.0e-6)
+                stiffness_preference = (
+                    normalized_gain_error.square() * self.cfg.reward.stiffness_preference_scale
+                )
 
             self.extras["force_error"] = force_error.mean()
             self.extras["force_goal_mean"] = goal_force_mag.mean()
