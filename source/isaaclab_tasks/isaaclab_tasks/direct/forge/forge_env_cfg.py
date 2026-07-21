@@ -3,6 +3,8 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
+import math
+
 import isaaclab.envs.mdp as mdp
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import SceneEntityCfg
@@ -213,6 +215,15 @@ class ForgeEnvCfg(FactoryEnvCfg):
         if ctrl.get("rot_action_threshold", None) is not None:
             self.ctrl.rot_action_threshold = OmegaConf.to_container(ctrl.rot_action_threshold, resolve=True)
         task = env.get("task", OmegaConf.create({}))
+        if task.get("hole_xy_scale", None) is not None:
+            self.task.hole_xy_scale = float(task.hole_xy_scale)
+        if "peg_insert" in self.task.name:
+            hole_xy_scale = float(self.task.hole_xy_scale)
+            if not math.isfinite(hole_xy_scale) or hole_xy_scale <= 0.0:
+                raise ValueError(
+                    f"env.task.hole_xy_scale must be finite and positive, got {hole_xy_scale}."
+                )
+            self.task.fixed_asset.spawn.scale = (hole_xy_scale, hole_xy_scale, 1.0)
         if task.get("contact_penalty_threshold_range", None) is not None:
             self.task.contact_penalty_threshold_range = OmegaConf.to_container(task.contact_penalty_threshold_range, resolve=True)
         if task.get("action_penalty_asset_scale", None) is not None:

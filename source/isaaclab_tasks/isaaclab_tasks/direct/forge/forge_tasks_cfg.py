@@ -13,6 +13,10 @@ from isaaclab_tasks.direct.factory.factory_tasks_cfg import (
 
 @configclass
 class ForgeTask(FactoryTask):
+    # Applied to the fixed socket USD in peg-insertion tasks only.  Using the
+    # same factor for x and y preserves a circular, centered hole; z remains
+    # unscaled so the insertion depth is unchanged.
+    hole_xy_scale: float = 1.0
     action_penalty_ee_scale: float = 0.0
     action_penalty_asset_scale: float = 0.001
     action_grad_penalty_scale: float = 0.1
