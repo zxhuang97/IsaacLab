@@ -2,8 +2,82 @@
 
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.nn.functional as F
+
+
+def _quat_apply_wxyz(quat: torch.Tensor, vector: torch.Tensor) -> torch.Tensor:
+    """Rotate vectors by unit ``wxyz`` quaternions with matching leading shapes."""
+    if quat.shape[:-1] != vector.shape[:-1] or quat.shape[-1] != 4 or vector.shape[-1] != 3:
+        raise ValueError(
+            "quat/vector must have matching leading shapes and trailing dimensions 4/3; "
+            f"got {tuple(quat.shape)} and {tuple(vector.shape)}"
+        )
+    xyz = quat[..., 1:]
+    cross = 2.0 * torch.linalg.cross(xyz, vector, dim=-1)
+    return vector + quat[..., :1] * cross + torch.linalg.cross(xyz, cross, dim=-1)
+
+
+def sensor_reaction_to_world_external(
+    sensor_reaction: torch.Tensor,
+    sensor_quat_world: torch.Tensor,
+) -> torch.Tensor:
+    """Convert a sensor-local incoming-joint reaction force to world external force.
+
+    PhysX reports ``get_link_incoming_joint_force`` in the child-joint frame. For
+    the Forge force-sensor joint that frame is aligned with the sensor link. The
+    external force that generated that joint reaction has the opposite sign.
+    """
+    return -_quat_apply_wxyz(sensor_quat_world, sensor_reaction)
+
+
+def world_external_to_sensor_reaction(
+    world_external: torch.Tensor,
+    sensor_quat_world: torch.Tensor,
+) -> torch.Tensor:
+    """Convert a world external force to the corresponding sensor-local reaction."""
+    sensor_quat_inverse = torch.cat(
+        (sensor_quat_world[..., :1], -sensor_quat_world[..., 1:]), dim=-1
+    )
+    return -_quat_apply_wxyz(sensor_quat_inverse, world_external)
+
+
+def invert_ema_sequence(smoothed: torch.Tensor, alpha: float) -> torch.Tensor:
+    """Recover the unsmoothed sequence for an EMA initialized at zero.
+
+    The forward filter is ``y[t] = alpha*x[t] + (1-alpha)*y[t-1]`` with
+    ``y[-1] = 0``.  The inverse is exact apart from floating-point roundoff and
+    is applied independently to every trailing component (including torque).
+    """
+    if smoothed.ndim < 2:
+        raise ValueError(
+            f"smoothed must have a batch and time dimension, got {tuple(smoothed.shape)}"
+        )
+    alpha = float(alpha)
+    if not 0.0 < alpha <= 1.0:
+        raise ValueError(f"alpha must be in (0, 1], got {alpha}")
+    previous = torch.cat((torch.zeros_like(smoothed[:, :1]), smoothed[:, :-1]), dim=1)
+    return (smoothed - (1.0 - alpha) * previous) / alpha
+
+
+def power_law_coefficient_from_reference(
+    reference_force: float,
+    reference_penetration: float,
+    exponent: float,
+) -> float:
+    """Return ``k_p = f_ref / delta_ref**p`` for a power-law contact."""
+    reference_force = float(reference_force)
+    reference_penetration = float(reference_penetration)
+    exponent = float(exponent)
+    if reference_force <= 0.0:
+        raise ValueError("reference_force must be positive")
+    if reference_penetration <= 0.0:
+        raise ValueError("reference_penetration must be positive")
+    if exponent <= 0.0:
+        raise ValueError("exponent must be positive")
+    return reference_force / reference_penetration**exponent
 
 
 def smooth_force_directions(
@@ -71,6 +145,7 @@ def construct_reference_plane_trajectory(
     plane_stiffness: float | torch.Tensor,
     direction_smoothing_window: int,
     direction_force_threshold: float,
+    power_law_exponent: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Construct one virtual plane per reference timestep.
 
@@ -78,11 +153,12 @@ def construct_reference_plane_trajectory(
     ``n`` and plane point ``p``, penetration at reference position ``x_ref`` is
     ``relu(n dot (p - x_ref))``. Therefore choosing
 
-    ``p = x_ref + (|F_goal| / k_p) * n``
+    ``p = x_ref + (|F_goal| / k_p)**(1/p) * n``
 
-    makes the spring-only contact law generate exactly ``|F_goal| * n`` when the
-    end effector perfectly follows ``x_ref``. ``k_p`` is the fixed environment
-    stiffness and is deliberately independent of the robot/controller stiffness.
+    makes the elastic law ``k_p * penetration**p`` generate exactly
+    ``|F_goal| * n`` when the end effector perfectly follows ``x_ref``. ``k_p`` is
+    the fixed environment coefficient and is deliberately independent of the
+    robot/controller stiffness. ``p=1`` recovers the linear construction.
 
     Returns ``(surface_point, surface_normal, aligned_target_force)``.
     """
@@ -96,6 +172,9 @@ def construct_reference_plane_trajectory(
     )
     if torch.any(stiffness <= 0.0):
         raise ValueError("plane_stiffness must be positive")
+    power_law_exponent = float(power_law_exponent)
+    if power_law_exponent <= 0.0:
+        raise ValueError("power_law_exponent must be positive")
     if stiffness.ndim == 0:
         stiffness = stiffness.view(1, 1, 1)
     elif stiffness.ndim == 1:
@@ -109,7 +188,7 @@ def construct_reference_plane_trajectory(
         valid_force_threshold=direction_force_threshold,
     )
     force_magnitude = torch.linalg.norm(target_force, dim=-1, keepdim=True)
-    penetration = force_magnitude / stiffness
+    penetration = (force_magnitude / stiffness).pow(1.0 / power_law_exponent)
     surface_point = reference_position + penetration * normal
     aligned_target_force = force_magnitude * normal
     return surface_point, normal, aligned_target_force
@@ -152,10 +231,15 @@ def compute_virtual_plane_contact(
     stiffness: torch.Tensor,
     damping: torch.Tensor,
     transition_width: float,
-    force_cap: float,
+    force_cap: float | None,
     surface_velocity: torch.Tensor | None = None,
     contact_model: str = "linear",
     hunt_crossley_dissipation: float = 0.0,
+    power_law_exponent: float = 1.5,
+    exponential_sharpness: float = 2.0,
+    exponential_reference_force: float = 5.0,
+    exponential_reference_penetration: float = 0.002,
+    max_damping_multiplier: float | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Return signed plane distance and a selectable unilateral contact force.
 
@@ -168,14 +252,28 @@ def compute_virtual_plane_contact(
     ``drake_hunt_crossley`` model uses
     ``f_n = k*delta*max(0, 1 + d*delta_dot)``. Here
     ``delta_dot = n dot (v_surface - v_contact)`` is positive during compression.
+    ``power_law`` replaces the elastic term with ``k_p*delta**p`` and optionally
+    applies the same Hunt-Crossley multiplier. A positive
+    ``max_damping_multiplier`` bounds that multiplier; ``None`` or a non-positive
+    value disables this clamp. A non-positive ``force_cap`` disables force capping.
     """
-    if contact_model not in ("linear", "drake_hunt_crossley"):
+    if contact_model not in ("linear", "drake_hunt_crossley", "power_law", "exponential"):
         raise ValueError(
-            "contact_model must be 'linear' or 'drake_hunt_crossley', "
+            "contact_model must be 'linear', 'drake_hunt_crossley', 'power_law', or 'exponential', "
             f"got {contact_model!r}"
         )
     if hunt_crossley_dissipation < 0.0:
         raise ValueError("hunt_crossley_dissipation must be non-negative")
+    power_law_exponent = float(power_law_exponent)
+    if power_law_exponent <= 0.0:
+        raise ValueError("power_law_exponent must be positive")
+    exponential_sharpness = float(exponential_sharpness)
+    exponential_reference_force = float(exponential_reference_force)
+    exponential_reference_penetration = float(exponential_reference_penetration)
+    if exponential_sharpness <= 0.0:
+        raise ValueError("exponential_sharpness must be positive")
+    if exponential_reference_force <= 0.0 or exponential_reference_penetration <= 0.0:
+        raise ValueError("exponential reference force and penetration must be positive")
     if surface_velocity is None:
         surface_velocity = torch.zeros_like(linear_velocity)
 
@@ -185,14 +283,26 @@ def compute_virtual_plane_contact(
     penetration_rate = ((surface_velocity - linear_velocity) * surface_normal).sum(
         dim=-1, keepdim=True
     )
-    spring_force = stiffness * penetration
+    if contact_model == "power_law":
+        elastic_force = stiffness * penetration.pow(power_law_exponent)
+    elif contact_model == "exponential":
+        exponent = (
+            exponential_sharpness * penetration / exponential_reference_penetration
+        ).clamp(max=50.0)
+        elastic_force = exponential_reference_force * torch.expm1(exponent) / math.expm1(
+            exponential_sharpness
+        )
+    else:
+        elastic_force = stiffness * penetration
     if contact_model == "linear":
-        force_magnitude = torch.relu(spring_force + damping * penetration_rate)
+        force_magnitude = torch.relu(elastic_force + damping * penetration_rate)
     else:
         dissipation_factor = torch.relu(
             1.0 + float(hunt_crossley_dissipation) * penetration_rate
         )
-        force_magnitude = spring_force * dissipation_factor
+        if max_damping_multiplier is not None and float(max_damping_multiplier) > 0.0:
+            dissipation_factor = dissipation_factor.clamp(max=float(max_damping_multiplier))
+        force_magnitude = elastic_force * dissipation_factor
     if transition_width > 0.0:
         transition = (penetration / float(transition_width)).clamp(0.0, 1.0)
         # C1-continuous smoothstep: zero value/slope at first contact and unit
@@ -204,5 +314,6 @@ def compute_virtual_plane_contact(
         force_magnitude,
         torch.zeros_like(force_magnitude),
     )
-    force_magnitude = force_magnitude.clamp(max=float(force_cap))
+    if force_cap is not None and float(force_cap) > 0.0:
+        force_magnitude = force_magnitude.clamp(max=float(force_cap))
     return distance, force_magnitude * surface_normal

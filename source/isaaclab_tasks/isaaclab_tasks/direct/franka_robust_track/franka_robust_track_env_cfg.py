@@ -193,6 +193,12 @@ class TrackingCfg:
     # sampler. NOTE: in this peg dataset `contact_force` is all zeros; the real
     # force lives in `wrench[:, :3]` (peaks ~19 N, matching force_mag_range).
     dataset_force_key: str = "wrench"
+    # Coordinate/sign convention of dataset_force_key. Forge records PhysX's
+    # incoming-joint reaction in the force-sensor child-joint axes; virtual
+    # contact instead generates an external force in world axes. Keep the legacy
+    # world convention as the default for other datasets and opt Forge training
+    # into ``sensor_child_joint_reaction`` explicitly in its launcher.
+    dataset_wrench_convention: str = "world_external"
     # Remove the mean of the first N samples of each raw episode before using its
     # wrench as a force goal. This compensates the episode's static wrist-sensor
     # bias while preserving the demonstrated time-varying force profile. Zero
@@ -214,10 +220,12 @@ class TrackingCfg:
     # constant, then switches back off at the end of a sampled duration window.
     enable_force: bool = False
     # ``replay_disturbance`` preserves the legacy behavior: apply the target force
-    # directly at the wrist. ``virtual_contact`` treats the dataset wrench only as
-    # a goal and generates the applied/measured force from penetration into a
-    # deterministic per-timestep unilateral plane.
+    # directly at the wrist. ``replay_raw_wrench`` loads all six dataset wrench
+    # components, inverts their EMA assuming a zero initial wrench, and applies the
+    # recovered force and torque. ``virtual_contact`` generates force from plane
+    # penetration instead.
     force_mode: str = "replay_disturbance"
+    dataset_wrench_ema_alpha: float = 0.25
     force_mag_range = [5.0, 20.0]  # N, sampled peak contact magnitude (spec-capped at 20 N)
     # Number of contact bands per episode, sampled per env (inclusive range). The
     # episode is split into that many equal segments, each holding one band, so the
@@ -246,18 +254,30 @@ class TrackingCfg:
     virtual_contact_goal_threshold: float = 1.0  # N
     virtual_contact_direction_smoothing_window: int = 9  # odd, centered, control samples
     virtual_contact_plane_stiffness: float = 1500.0  # k_p, N/m
+    # Scale only the force used to place the virtual plane. The recorded wrench
+    # remains the tracking/metric target. Values > 1 model a stronger physical
+    # reaction than the measured dataset wrench at the demonstrated pose.
+    virtual_contact_reference_force_scale: float = 1.0
     # Select the normal-force law. The linear model uses a Kelvin-Voigt damping
-    # coefficient derived from damping_ratio; Drake Hunt-Crossley uses the
-    # separate dissipation coefficient below (units s/m).
-    contact_model: Literal["linear", "drake_hunt_crossley"] = "linear"
+    # coefficient derived from damping_ratio; Drake Hunt-Crossley and power_law
+    # use the separate multiplicative dissipation coefficient below (units s/m).
+    contact_model: Literal["linear", "drake_hunt_crossley", "power_law", "exponential"] = "linear"
     virtual_contact_damping_ratio: float = 0.7
-    hunt_crossley_dissipation: float = 1.0  # s/m
+    hunt_crossley_dissipation: float = 0.0  # s/m; zero disables multiplicative damping
+    power_law_exponent: float = 1.5
+    power_law_reference_force: float = 5.0  # N
+    power_law_reference_penetration: float = 0.003  # m
+    # Derived during __post_init__: f_ref / delta_ref**p, units N/m**p.
+    power_law_coefficient: float = 5.0 / (0.003**1.5)
+    exponential_sharpness: float = 2.0
+    # Positive values clamp the Hunt-Crossley multiplier. Zero disables the clamp.
+    max_damping_multiplier: float = 5.0
     virtual_contact_effective_mass: float = 1.0  # kg, used only to set damping
     # C1 smoothstep activation distance for the unilateral force. This ramps both
     # spring and damping contributions from zero instead of switching damping on
     # discontinuously at the first infinitesimal penetration.
     virtual_contact_transition_width: float = 0.0  # m; zero preserves exact F=k_p*penetration
-    virtual_contact_force_cap: float = 20.0  # N
+    virtual_contact_force_cap: float = 20.0  # N; zero disables the clamp
 
     # Synthetic force sensor shown to the actor. Reward uses the uncorrupted true
     # virtual contact force; the actor sees an EMA-filtered, biased, noisy signal.
@@ -422,6 +442,9 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
     # frame. Disable this when training a tracker that should rely only on the
     # fingertip pose and its previous action history.
     include_joint_angles: bool = True
+    # Debug guard that synchronizes policy/critic tensors back to the CPU each
+    # step. Offline replay disables it after startup validation for throughput.
+    validate_observations: bool = True
 
     # Debug visualization of the reference trajectory: current command frame,
     # lookahead targets, and the full episode path (sampled in time).
@@ -644,10 +667,12 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "dataset_warp_shape_fraction",
             "dataset_warp_cycles_range",
             "dataset_force_key",
+            "dataset_wrench_convention",
             "dataset_force_bias_samples",
             "dataset_contact_force_threshold",
             "enable_force",
             "force_mode",
+            "dataset_wrench_ema_alpha",
             "force_mag_range",
             "force_num_bands_range",
             "force_duration_range",
@@ -657,9 +682,16 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "virtual_contact_goal_threshold",
             "virtual_contact_direction_smoothing_window",
             "virtual_contact_plane_stiffness",
+            "virtual_contact_reference_force_scale",
             "contact_model",
             "virtual_contact_damping_ratio",
             "hunt_crossley_dissipation",
+            "power_law_exponent",
+            "power_law_reference_force",
+            "power_law_reference_penetration",
+            "power_law_coefficient",
+            "exponential_sharpness",
+            "max_damping_multiplier",
             "virtual_contact_effective_mass",
             "virtual_contact_transition_width",
             "virtual_contact_force_cap",
@@ -744,11 +776,30 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
         self.tracking.num_future_steps = int(self.tracking.num_future_steps)
         self.tracking.reference_start_offset = int(self.tracking.reference_start_offset)
         self.tracking.force_mode = str(self.tracking.force_mode)
-        if self.tracking.force_mode not in ("replay_disturbance", "virtual_contact"):
+        if self.tracking.force_mode not in (
+            "replay_disturbance",
+            "replay_raw_wrench",
+            "virtual_contact",
+        ):
             raise ValueError(
-                "tracking.force_mode must be 'replay_disturbance' or 'virtual_contact', "
+                "tracking.force_mode must be 'replay_disturbance', 'replay_raw_wrench', "
+                "or 'virtual_contact', "
                 f"got {self.tracking.force_mode!r}"
             )
+        self.tracking.dataset_wrench_convention = str(
+            self.tracking.dataset_wrench_convention
+        )
+        if self.tracking.dataset_wrench_convention not in (
+            "world_external",
+            "sensor_child_joint_reaction",
+        ):
+            raise ValueError(
+                "tracking.dataset_wrench_convention must be 'world_external' or "
+                "'sensor_child_joint_reaction', got "
+                f"{self.tracking.dataset_wrench_convention!r}"
+            )
+        if not 0.0 < float(self.tracking.dataset_wrench_ema_alpha) <= 1.0:
+            raise ValueError("tracking.dataset_wrench_ema_alpha must be in (0, 1]")
         self.tracking.dataset_force_bias_samples = int(self.tracking.dataset_force_bias_samples)
         if self.tracking.dataset_force_bias_samples < 0:
             raise ValueError("tracking.dataset_force_bias_samples must be non-negative")
@@ -761,16 +812,40 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
                 )
             if float(self.tracking.virtual_contact_plane_stiffness) <= 0.0:
                 raise ValueError("tracking.virtual_contact_plane_stiffness must be positive")
+            if float(self.tracking.virtual_contact_reference_force_scale) <= 0.0:
+                raise ValueError("tracking.virtual_contact_reference_force_scale must be positive")
             self.tracking.contact_model = str(self.tracking.contact_model)
-            if self.tracking.contact_model not in ("linear", "drake_hunt_crossley"):
+            if self.tracking.contact_model not in (
+                "linear",
+                "drake_hunt_crossley",
+                "power_law",
+                "exponential",
+            ):
                 raise ValueError(
-                    "tracking.contact_model must be 'linear' or 'drake_hunt_crossley', "
+                    "tracking.contact_model must be 'linear', 'drake_hunt_crossley', "
+                    "'power_law', or 'exponential', "
                     f"got {self.tracking.contact_model!r}"
                 )
             if float(self.tracking.virtual_contact_damping_ratio) < 0.0:
                 raise ValueError("tracking.virtual_contact_damping_ratio must be non-negative")
             if float(self.tracking.hunt_crossley_dissipation) < 0.0:
                 raise ValueError("tracking.hunt_crossley_dissipation must be non-negative")
+            exponent = float(self.tracking.power_law_exponent)
+            reference_force = float(self.tracking.power_law_reference_force)
+            reference_penetration = float(self.tracking.power_law_reference_penetration)
+            if exponent <= 0.0:
+                raise ValueError("tracking.power_law_exponent must be positive")
+            if reference_force <= 0.0:
+                raise ValueError("tracking.power_law_reference_force must be positive")
+            if reference_penetration <= 0.0:
+                raise ValueError("tracking.power_law_reference_penetration must be positive")
+            self.tracking.power_law_coefficient = reference_force / reference_penetration**exponent
+            if float(self.tracking.exponential_sharpness) <= 0.0:
+                raise ValueError("tracking.exponential_sharpness must be positive")
+            if float(self.tracking.max_damping_multiplier) < 0.0:
+                raise ValueError("tracking.max_damping_multiplier must be non-negative")
+            if float(self.tracking.virtual_contact_force_cap) < 0.0:
+                raise ValueError("tracking.virtual_contact_force_cap must be non-negative")
             if float(self.tracking.virtual_contact_transition_width) < 0.0:
                 raise ValueError("tracking.virtual_contact_transition_width must be non-negative")
             if not 0.0 <= float(self.tracking.force_sensor_smoothing_factor) <= 1.0:
