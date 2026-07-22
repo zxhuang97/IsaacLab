@@ -27,6 +27,13 @@ class ForgeTask(FactoryTask):
     ee_speed_exp_penalty_scale: float = 0.0
     ee_speed_exp_penalty_k: float = 0.25
     ee_speed_exp_penalty_cap: float = 10.0
+    # Penalize end-effector angular motion separately from linear motion.  This
+    # is disabled by default and enabled by launchers that allow full rotation.
+    ee_ang_speed_penalty_scale: float = 0.0
+    ee_ang_speed_penalty_threshold: float = 0.1
+    # Keep the fingertip top-down even when a compliant gripper lets the held
+    # asset remain aligned independently of the robot wrist.
+    ee_upright_penalty_scale: float = 0.0
     contact_penalty_scale: float = 0.05
     # Upper bound on the per-step contact penalty (relu(force - threshold)) before
     # scaling. <= 0 disables the cap. Caps prevent rare hard-contact force spikes
@@ -38,6 +45,9 @@ class ForgeTask(FactoryTask):
 
 @configclass
 class ForgePegInsert(PegInsert, ForgeTask):
+    # PegInsert precedes ForgeTask in the MRO, so repeat overrides that also
+    # exist on FactoryTask instead of silently inheriting Factory's zeros.
+    action_grad_penalty_scale: float = 0.1
     contact_penalty_scale: float = 0.2
 
 

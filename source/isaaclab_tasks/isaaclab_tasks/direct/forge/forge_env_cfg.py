@@ -240,6 +240,12 @@ class ForgeEnvCfg(FactoryEnvCfg):
             self.task.ee_speed_exp_penalty_k = task.ee_speed_exp_penalty_k
         if task.get("ee_speed_exp_penalty_cap", None) is not None:
             self.task.ee_speed_exp_penalty_cap = task.ee_speed_exp_penalty_cap
+        if task.get("ee_ang_speed_penalty_scale", None) is not None:
+            self.task.ee_ang_speed_penalty_scale = task.ee_ang_speed_penalty_scale
+        if task.get("ee_ang_speed_penalty_threshold", None) is not None:
+            self.task.ee_ang_speed_penalty_threshold = task.ee_ang_speed_penalty_threshold
+        if task.get("ee_upright_penalty_scale", None) is not None:
+            self.task.ee_upright_penalty_scale = task.ee_upright_penalty_scale
         if task.get("contact_penalty_scale", None) is not None:
             self.task.contact_penalty_scale = task.contact_penalty_scale
         if task.get("contact_penalty_cap", None) is not None:

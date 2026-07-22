@@ -78,6 +78,7 @@ class ForgeEnv(FactoryEnv):
         self._delta_action_target_quat = torch.tensor(
             [1.0, 0.0, 0.0, 0.0], device=self.device
         ).repeat(self.num_envs, 1)
+        self.delta_rot = torch.zeros((self.num_envs, 3), device=self.device)
         self.packet_stiffness_override = None
         self.packet_deriv_override = None
         self.packet_clip_pose_target = True
@@ -214,16 +215,22 @@ class ForgeEnv(FactoryEnv):
             torch.tensor([pos_noise_level, pos_noise_level, pos_noise_level], dtype=torch.float32, device=self.device)
         )
         self.noisy_fingertip_pos = self.fingertip_midpoint_pos + fingertip_pos_noise
-        # only allow rotation around z-axis ?
+        # Add isotropic quaternion noise.  The legacy yaw-only policy projects
+        # the result back onto the top-down quaternion manifold; a full-rotation
+        # policy must retain all four components so it can observe wrist tilt.
         rot_noise_axis = torch.randn((self.num_envs, 3), dtype=torch.float32, device=self.device)
-        rot_noise_axis /= torch.linalg.norm(rot_noise_axis, dim=1, keepdim=True)
+        rot_noise_axis /= torch.linalg.norm(rot_noise_axis, dim=1, keepdim=True).clamp_min(1.0e-8)
         rot_noise_angle = torch.randn((self.num_envs,), dtype=torch.float32, device=self.device) * np.deg2rad(
             rot_noise_level_deg
         )
         self.noisy_fingertip_quat = torch_utils.quat_mul(
             self.fingertip_midpoint_quat, torch_utils.quat_from_angle_axis(rot_noise_angle, rot_noise_axis)
         )
-        self.noisy_fingertip_quat[:, [0, 3]] = 0.0
+        if not self.cfg.ctrl.use_full_rotation:
+            self.noisy_fingertip_quat[:, [0, 3]] = 0.0
+            self.noisy_fingertip_quat /= torch.linalg.norm(
+                self.noisy_fingertip_quat, dim=-1, keepdim=True
+            ).clamp_min(1.0e-8)
         self.noisy_fingertip_quat = self.noisy_fingertip_quat * self.flip_quats.unsqueeze(-1)
 
         # Repeat finite differencing with noisy fingertip positions.
@@ -234,10 +241,11 @@ class ForgeEnv(FactoryEnv):
         rot_diff_quat = torch_utils.quat_mul(
             self.noisy_fingertip_quat, torch_utils.quat_conjugate(self.prev_fingertip_quat)
         )
-        rot_diff_quat *= torch.sign(rot_diff_quat[:, 0]).unsqueeze(-1)
+        rot_diff_quat *= torch.where(rot_diff_quat[:, :1] < 0.0, -1.0, 1.0)
         rot_diff_aa = axis_angle_from_quat(rot_diff_quat)
         self.ee_angvel_fd = rot_diff_aa / dt
-        self.ee_angvel_fd[:, 0:2] = 0.0
+        if not self.cfg.ctrl.use_full_rotation:
+            self.ee_angvel_fd[:, 0:2] = 0.0
         self.prev_fingertip_quat = self.noisy_fingertip_quat.clone()
 
         # Update and smooth force values.
@@ -320,7 +328,8 @@ class ForgeEnv(FactoryEnv):
 
         noisy_fixed_pos = self.fixed_pos_obs_frame + self.init_fixed_pos_obs_noise
         prev_actions = self.actions.clone()
-        prev_actions[:, 3:5] = 0.0
+        if not self.cfg.ctrl.use_full_rotation:
+            prev_actions[:, 3:5] = 0.0
 
         obs_dict.update({
             "fingertip_pos": self.noisy_fingertip_pos,
@@ -414,6 +423,7 @@ class ForgeEnv(FactoryEnv):
         )
 
         ctrl_target_fingertip_preclipped_quat = torch_utils.quat_mul(quat_bolt_to_ee, bolt_frame_quat)
+        self._update_rotation_target_error(ctrl_target_fingertip_preclipped_quat)
 
         # Step (2): Clip targets if they are too far from current EE pose.
         # (2.a): Clip position targets.
@@ -480,6 +490,14 @@ class ForgeEnv(FactoryEnv):
         target_quat = torch_utils.quat_mul(delta_quat, self.fingertip_midpoint_quat)
         return target_pos, target_quat
 
+    def _update_rotation_target_error(self, target_quat: torch.Tensor) -> None:
+        """Cache the shortest 3-axis target error for reward computation."""
+        quat_error = torch_utils.quat_mul(
+            target_quat, torch_utils.quat_conjugate(self.fingertip_midpoint_quat)
+        )
+        quat_sign = torch.where(quat_error[:, :1] < 0.0, -1.0, 1.0)
+        self.delta_rot = axis_angle_from_quat(quat_error * quat_sign)
+
     def _apply_delta_ee_pose_action(self):
         """Apply a current-EE delta using the configured target update rate."""
         pos_actions = self.actions[:, 0:3] * self.pos_threshold
@@ -492,6 +510,7 @@ class ForgeEnv(FactoryEnv):
             target_quat = self._delta_action_target_quat
         else:
             target_pos, target_quat = self._get_delta_ee_pose_target()
+        self._update_rotation_target_error(target_quat)
 
         self.generate_ctrl_signals(
             ctrl_target_fingertip_midpoint_pos=target_pos,
@@ -512,6 +531,7 @@ class ForgeEnv(FactoryEnv):
         target_pos = target_pose[:, 0:3]
         target_quat = target_pose[:, 3:7]
         target_quat = target_quat / torch.linalg.norm(target_quat, dim=-1, keepdim=True).clamp_min(1e-8)
+        self._update_rotation_target_error(target_quat)
 
         # Position error (used for action_penalty logging too).
         self.delta_pos = target_pos - self.fingertip_midpoint_pos
@@ -605,16 +625,25 @@ class ForgeEnv(FactoryEnv):
         self._robot.set_joint_effort_target(self.joint_torque)
 
     def dir_align_reward(self, a: float = 700, b: float = 0, tol: float = 0):
-        # penalize if nut is not upright relative to the bolt's orientation
-        # compute the cosine distance between the nut normal and the bolt's up vector
+        """Reward the held asset for aligning its up axis with the fixed asset."""
         held_quat = self.held_quat
         fixed_quat = self.fixed_quat
         global_up = torch.tensor([[0, 0, 1.0]], device=held_quat.device)
         global_up_expanded = global_up.expand(fixed_quat.shape[0], 3)
         fixed_up_vec = quat_apply(fixed_quat, global_up_expanded)
         held_up_vec = quat_apply(held_quat, global_up_expanded)
-        cos_sim = torch.sum(held_up_vec * fixed_up_vec, dim=1)
-        return factory_utils.squashing_fn(cos_sim, a, b)
+        cos_sim = torch.sum(held_up_vec * fixed_up_vec, dim=1).clamp(-1.0, 1.0)
+        align_error = torch.clamp(1.0 - cos_sim - tol, min=0.0)
+        return factory_utils.squashing_fn(align_error, a, b)
+
+    def ee_upright_error(self):
+        """Return zero when the fingertip is top-down relative to the fixture."""
+        global_up = torch.tensor([[0, 0, 1.0]], device=self.device).expand(self.num_envs, 3)
+        fixed_up_vec = quat_apply(self.fixed_quat, global_up)
+        fingertip_up_vec = quat_apply(self.fingertip_midpoint_quat, global_up)
+        # A top-down fingertip has its local +Z axis anti-aligned with fixture +Z.
+        topdown_cos = torch.sum((-fingertip_up_vec) * fixed_up_vec, dim=1).clamp(-1.0, 1.0)
+        return 1.0 - topdown_cos
 
     def _get_rewards(self):
         """FORGE reward includes a contact penalty and success prediction error."""
@@ -624,7 +653,8 @@ class ForgeEnv(FactoryEnv):
         rew_dict, rew_scales = {}, {}
         # Calculate action penalty for the asset-relative action space.
         pos_error = torch.norm(self.delta_pos, p=2, dim=-1) / self.cfg.ctrl.pos_action_threshold[0]
-        rot_error = torch.abs(self.delta_yaw) / self.cfg.ctrl.rot_action_threshold[0]
+        rot_threshold = self.rot_threshold.clamp_min(1.0e-6)
+        rot_error = torch.norm(self.delta_rot / rot_threshold, p=2, dim=-1)
         # Contact penalty.
         contact_force = torch.norm(self.force_sensor_smooth[:, 0:3], p=2, dim=-1, keepdim=False)
         contact_penalty = torch.nn.functional.relu(contact_force - self.contact_penalty_thresholds)
@@ -640,6 +670,10 @@ class ForgeEnv(FactoryEnv):
             max=self.cfg_task.ee_speed_exp_penalty_cap,
         )
         ee_speed_exp_penalty = torch.exp(self.cfg_task.ee_speed_exp_penalty_k * ee_speed_excess_ratio) - 1.0
+        ee_ang_speed = torch.norm(self.fingertip_midpoint_angvel, p=2, dim=-1)
+        ee_ang_speed_penalty = torch.nn.functional.relu(
+            ee_ang_speed - self.cfg_task.ee_ang_speed_penalty_threshold
+        )
         # Add success prediction rewards.
         
         true_successes = self._get_curr_successes(
@@ -652,22 +686,27 @@ class ForgeEnv(FactoryEnv):
             self.success_pred_scale = 1.0
 
         dir_align_rew = self.dir_align_reward()
+        ee_upright_penalty = self.ee_upright_error()
         # Add new FORGE reward terms.
         rew_dict = {
             "action_penalty_asset": pos_error + rot_error,
             "ee_speed_penalty": ee_speed_penalty,
             "ee_speed_exp_penalty": ee_speed_exp_penalty,
+            "ee_ang_speed_penalty": ee_ang_speed_penalty,
             "contact_penalty": contact_penalty,
             "success_pred_error": success_pred_error,
             "dir_align_rew": dir_align_rew,
+            "ee_upright_penalty": ee_upright_penalty,
         }
         rew_scales = {
             "action_penalty_asset": -self.cfg_task.action_penalty_asset_scale,
             "ee_speed_penalty": -self.cfg_task.ee_speed_penalty_scale,
             "ee_speed_exp_penalty": -self.cfg_task.ee_speed_exp_penalty_scale,
+            "ee_ang_speed_penalty": -self.cfg_task.ee_ang_speed_penalty_scale,
             "contact_penalty": -self.cfg_task.contact_penalty_scale,
             "success_pred_error": -self.success_pred_scale,
             "dir_align_rew": 1,
+            "ee_upright_penalty": -self.cfg_task.ee_upright_penalty_scale,
         }
         for rew_name, rew in rew_dict.items():
             rew_buf += rew_dict[rew_name] * rew_scales[rew_name]
