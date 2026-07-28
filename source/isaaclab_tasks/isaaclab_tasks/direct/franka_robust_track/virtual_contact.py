@@ -20,28 +20,196 @@ def _quat_apply_wxyz(quat: torch.Tensor, vector: torch.Tensor) -> torch.Tensor:
     return vector + quat[..., :1] * cross + torch.linalg.cross(xyz, cross, dim=-1)
 
 
+def x_axis_to_vector_quat(vector: torch.Tensor, eps: float = 1.0e-8) -> torch.Tensor:
+    """Return ``wxyz`` quaternions that rotate local +x onto ``vector``.
+
+    Zero-length vectors receive the identity rotation. The helper is used by the
+    debug visualization for both force arrows and the virtual plane, whose local
+    thin axis is +x.
+    """
+    if vector.shape[-1] != 3:
+        raise ValueError(
+            "vector must have trailing dimension 3, "
+            f"got {tuple(vector.shape)}"
+        )
+    magnitude = torch.linalg.norm(vector, dim=-1, keepdim=True)
+    direction = vector / magnitude.clamp_min(eps)
+
+    # For source axis a=(1,0,0), the shortest-arc quaternion to unit b is
+    # normalize([1 + dot(a,b), cross(a,b)]). Handle b=-a separately because
+    # that expression is identically zero; +180 degrees around z maps +x to -x.
+    quat = torch.stack(
+        (
+            1.0 + direction[..., 0],
+            torch.zeros_like(direction[..., 0]),
+            -direction[..., 2],
+            direction[..., 1],
+        ),
+        dim=-1,
+    )
+    opposite = direction[..., 0] < (-1.0 + 1.0e-6)
+    opposite_quat = torch.zeros_like(quat)
+    opposite_quat[..., 3] = 1.0
+    quat = torch.where(opposite.unsqueeze(-1), opposite_quat, quat)
+    quat = quat / torch.linalg.norm(quat, dim=-1, keepdim=True).clamp_min(eps)
+
+    identity = torch.zeros_like(quat)
+    identity[..., 0] = 1.0
+    return torch.where((magnitude <= eps).expand_as(quat), identity, quat)
+
+
+def z_axis_to_vector_quat(vector: torch.Tensor, eps: float = 1.0e-8) -> torch.Tensor:
+    """Return ``wxyz`` quaternions that rotate local +z onto ``vector``.
+
+    Isaac Sim 5.0's UI arrow asset is visually rooted along local +z, despite
+    being distributed as ``arrow_x.usd``. This transform is therefore used for
+    arrow markers, while :func:`x_axis_to_vector_quat` remains correct for the
+    virtual-plane cuboid's thin local +x axis.
+    """
+    if vector.shape[-1] != 3:
+        raise ValueError(
+            "vector must have trailing dimension 3, "
+            f"got {tuple(vector.shape)}"
+        )
+    magnitude = torch.linalg.norm(vector, dim=-1, keepdim=True)
+    direction = vector / magnitude.clamp_min(eps)
+
+    # For source axis a=(0,0,1), construct the shortest-arc quaternion
+    # normalize([1 + dot(a,b), cross(a,b)]). Use +180 degrees around x for -z.
+    quat = torch.stack(
+        (
+            1.0 + direction[..., 2],
+            -direction[..., 1],
+            direction[..., 0],
+            torch.zeros_like(direction[..., 0]),
+        ),
+        dim=-1,
+    )
+    opposite = direction[..., 2] < (-1.0 + 1.0e-6)
+    opposite_quat = torch.zeros_like(quat)
+    opposite_quat[..., 1] = 1.0
+    quat = torch.where(opposite.unsqueeze(-1), opposite_quat, quat)
+    quat = quat / torch.linalg.norm(quat, dim=-1, keepdim=True).clamp_min(eps)
+
+    identity = torch.zeros_like(quat)
+    identity[..., 0] = 1.0
+    return torch.where((magnitude <= eps).expand_as(quat), identity, quat)
+
+
+def world_force_components(force_world: torch.Tensor) -> torch.Tensor:
+    """Split a world force into signed x/y/z vectors whose sum is the force."""
+    if force_world.shape[-1] != 3:
+        raise ValueError(
+            "force_world must have trailing dimension 3, "
+            f"got {tuple(force_world.shape)}"
+        )
+    return torch.diag_embed(force_world)
+
+
 def sensor_reaction_to_world_external(
     sensor_reaction: torch.Tensor,
     sensor_quat_world: torch.Tensor,
 ) -> torch.Tensor:
-    """Convert a sensor-local incoming-joint reaction force to world external force.
+    """Convert a sensor-local incoming-joint reaction to a world external vector.
 
     PhysX reports ``get_link_incoming_joint_force`` in the child-joint frame. For
     the Forge force-sensor joint that frame is aligned with the sensor link. The
-    external force that generated that joint reaction has the opposite sign.
+    external wrench that generated that joint reaction has the opposite sign.
+    The input may contain either one three-vector or a six-axis force/torque
+    wrench; force and torque are rotated independently.
     """
-    return -_quat_apply_wxyz(sensor_quat_world, sensor_reaction)
+    if sensor_reaction.shape[-1] == 3:
+        return -_quat_apply_wxyz(sensor_quat_world, sensor_reaction)
+    if sensor_reaction.shape[-1] != 6:
+        raise ValueError(
+            "sensor_reaction must have trailing dimension 3 or 6, "
+            f"got {tuple(sensor_reaction.shape)}"
+        )
+    return -torch.cat(
+        (
+            _quat_apply_wxyz(sensor_quat_world, sensor_reaction[..., :3]),
+            _quat_apply_wxyz(sensor_quat_world, sensor_reaction[..., 3:]),
+        ),
+        dim=-1,
+    )
 
 
 def world_external_to_sensor_reaction(
     world_external: torch.Tensor,
     sensor_quat_world: torch.Tensor,
 ) -> torch.Tensor:
-    """Convert a world external force to the corresponding sensor-local reaction."""
+    """Convert a world external force or wrench to its sensor-local reaction."""
     sensor_quat_inverse = torch.cat(
         (sensor_quat_world[..., :1], -sensor_quat_world[..., 1:]), dim=-1
     )
-    return -_quat_apply_wxyz(sensor_quat_inverse, world_external)
+    if world_external.shape[-1] == 3:
+        return -_quat_apply_wxyz(sensor_quat_inverse, world_external)
+    if world_external.shape[-1] != 6:
+        raise ValueError(
+            "world_external must have trailing dimension 3 or 6, "
+            f"got {tuple(world_external.shape)}"
+        )
+    return -torch.cat(
+        (
+            _quat_apply_wxyz(sensor_quat_inverse, world_external[..., :3]),
+            _quat_apply_wxyz(sensor_quat_inverse, world_external[..., 3:]),
+        ),
+        dim=-1,
+    )
+
+
+def contact_coupled_torque(
+    target_force_world: torch.Tensor,
+    target_torque_world: torch.Tensor,
+    actual_force_world: torch.Tensor,
+    in_contact: torch.Tensor,
+    max_multiplier: float,
+    torque_cap: float | None,
+) -> torch.Tensor:
+    """Scale a demonstrated torque with the realized virtual-contact force.
+
+    At the demonstrated/reference pose the realized and target force magnitudes
+    agree, so the demonstrated torque is reproduced. Moving out of contact makes
+    both force and torque zero; deeper penetration strengthens both. A target with
+    negligible force falls back to a binary contact gate so a torsional target is
+    still representable.
+    """
+    for name, value in (
+        ("target_force_world", target_force_world),
+        ("target_torque_world", target_torque_world),
+        ("actual_force_world", actual_force_world),
+    ):
+        if value.shape[-1] != 3:
+            raise ValueError(f"{name} must have trailing dimension 3, got {tuple(value.shape)}")
+    if target_force_world.shape != target_torque_world.shape or target_force_world.shape != actual_force_world.shape:
+        raise ValueError("target force, target torque, and actual force must have matching shapes")
+    if in_contact.shape != target_force_world.shape[:-1]:
+        raise ValueError(
+            "in_contact must match the wrench leading shape, "
+            f"got {tuple(in_contact.shape)} and {tuple(target_force_world.shape[:-1])}"
+        )
+
+    target_force_mag = torch.linalg.norm(target_force_world, dim=-1, keepdim=True)
+    actual_force_mag = torch.linalg.norm(actual_force_world, dim=-1, keepdim=True)
+    force_ratio = actual_force_mag / target_force_mag.clamp(min=1.0e-6)
+    ratio = torch.where(
+        target_force_mag > 1.0e-6,
+        force_ratio,
+        in_contact.unsqueeze(-1).to(target_force_world.dtype),
+    )
+    ratio = torch.where(
+        in_contact.unsqueeze(-1),
+        ratio,
+        torch.zeros_like(ratio),
+    )
+    if float(max_multiplier) > 0.0:
+        ratio = ratio.clamp(max=float(max_multiplier))
+    torque = target_torque_world * ratio
+
+    if torque_cap is not None and float(torque_cap) > 0.0:
+        magnitude = torch.linalg.norm(torque, dim=-1, keepdim=True)
+        torque = torque * (float(torque_cap) / magnitude.clamp(min=1.0e-6)).clamp(max=1.0)
+    return torque
 
 
 def invert_ema_sequence(smoothed: torch.Tensor, alpha: float) -> torch.Tensor:

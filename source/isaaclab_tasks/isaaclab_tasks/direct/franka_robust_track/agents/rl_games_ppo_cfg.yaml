@@ -32,7 +32,7 @@ params:
           val: 0
         fixed_sigma: False
     mlp:
-      units: [512, 256, 128]
+      units: [1024, 1024, 512, 256]
       activation: elu
       d2rl: False
 
@@ -75,7 +75,7 @@ params:
     score_to_win: 20000
     max_epochs: 200
     save_best_after: 10
-    save_frequency: 20
+    save_frequency: 200
     print_stats: True
     grad_norm: 1.0
     entropy_coef: 0.0
