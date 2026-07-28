@@ -391,6 +391,13 @@ class RewardCfg:
     # tight temp like 0.1 leaves it in a flat dead zone).
     pos_error_temp: float = 0.01  # m
     rot_error_temp: float = 0.1  # rad
+    # Narrow kernels refine tracking once the broad terms have brought the
+    # policy close to the reference. They are intentionally lower-weight so
+    # they do not replace the broad recovery signal.
+    fine_pos_error_scale: float = 0.0
+    fine_rot_error_scale: float = 0.0
+    fine_pos_error_temp: float = 0.03  # m
+    fine_rot_error_temp: float = 0.03  # rad
     ee_vel_scale: float = -0.01
     # Penalize step-to-step change in EE velocity (acceleration) for smoother motion.
     ee_accel_scale: float = -0.05
@@ -754,6 +761,10 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "rot_error_scale",
             "pos_error_temp",
             "rot_error_temp",
+            "fine_pos_error_scale",
+            "fine_rot_error_scale",
+            "fine_pos_error_temp",
+            "fine_rot_error_temp",
             "ee_vel_scale",
             "ee_accel_scale",
             "action_rate_scale",
@@ -779,6 +790,14 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
 
     def __post_init__(self):
         self.update_env_params()
+        for name in (
+            "pos_error_temp",
+            "rot_error_temp",
+            "fine_pos_error_temp",
+            "fine_rot_error_temp",
+        ):
+            if float(getattr(self.reward, name)) <= 0.0:
+                raise ValueError(f"reward.{name} must be positive")
         self.tracking.num_future_steps = int(self.tracking.num_future_steps)
         self.tracking.reference_start_offset = int(self.tracking.reference_start_offset)
         self.tracking.force_mode = str(self.tracking.force_mode)

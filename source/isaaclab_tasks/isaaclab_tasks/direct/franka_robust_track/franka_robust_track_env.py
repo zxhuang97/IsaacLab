@@ -295,6 +295,8 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             for key in [
                 "pos_track",
                 "rot_track",
+                "fine_pos_track",
+                "fine_rot_track",
                 "ee_vel",
                 "ee_accel",
                 "action_rate",
@@ -1040,6 +1042,14 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         rewards = {
             "pos_track": torch.exp(-pos_error_norm / self.cfg.reward.pos_error_temp) * self.cfg.reward.pos_error_scale,
             "rot_track": torch.exp(-rot_error_norm / self.cfg.reward.rot_error_temp) * self.cfg.reward.rot_error_scale,
+            "fine_pos_track": (
+                torch.exp(-pos_error_norm / self.cfg.reward.fine_pos_error_temp)
+                * self.cfg.reward.fine_pos_error_scale
+            ),
+            "fine_rot_track": (
+                torch.exp(-rot_error_norm / self.cfg.reward.fine_rot_error_temp)
+                * self.cfg.reward.fine_rot_error_scale
+            ),
             "ee_vel": ee_vel_norm * self.cfg.reward.ee_vel_scale,
             "ee_accel": ee_accel_norm * self.cfg.reward.ee_accel_scale,
             "action_rate": action_rate * self.cfg.reward.action_rate_scale,
