@@ -248,7 +248,9 @@ class ForgeEnv(FactoryEnv):
             self.ee_angvel_fd[:, 0:2] = 0.0
         self.prev_fingertip_quat = self.noisy_fingertip_quat.clone()
 
-        # Update and smooth force values.
+        # IMPORTANT: PhysX reports `get_link_incoming_joint_force()` in the
+        # incoming joint's child frame, not in world axes.  The historical
+        # `force_sensor_world*` names below are therefore misleading.
         self.force_sensor_world = self._robot.root_physx_view.get_link_incoming_joint_force()[
             :, self.force_sensor_body_idx
         ]
@@ -256,6 +258,11 @@ class ForgeEnv(FactoryEnv):
         alpha = self.cfg.ft_smoothing_factor
         self.force_sensor_world_smooth = alpha * self.force_sensor_world + (1 - alpha) * self.force_sensor_world_smooth
 
+        # NOTE: this legacy call treats the child-frame wrench above as if its
+        # source frame had identity/world orientation.  Consequently
+        # `force_sensor_smooth` is not, in general, a wrench expressed about the
+        # fixed-object observation frame.  A correct conversion must use the
+        # sensor child-joint pose and a full wrench (dual-adjoint) transform.
         self.force_sensor_smooth = torch.zeros_like(self.force_sensor_world)
         identity_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
         self.force_sensor_smooth[:, :3], self.force_sensor_smooth[:, 3:6] = forge_utils.change_FT_frame(
