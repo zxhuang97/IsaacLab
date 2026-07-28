@@ -229,6 +229,11 @@ class TrackingCfg:
     # penetration instead.
     force_mode: str = "replay_disturbance"
     dataset_wrench_ema_alpha: float = 0.25
+    # Physical amplitude multipliers used only when replaying a dataset wrench as
+    # an external disturbance. The target wrench exposed to the policy and used
+    # by rewards remains in the original dataset units.
+    disturbance_force_scale: float = 1.0
+    disturbance_torque_scale: float = 1.0
     force_mag_range = [5.0, 20.0]  # N, sampled peak contact magnitude (spec-capped at 20 N)
     torque_mag_max: float = 2.0  # Nm, observation normalization scale
     # Number of contact bands per episode, sampled per env (inclusive range). The
@@ -738,6 +743,8 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "use_full_wrench",
             "force_mode",
             "dataset_wrench_ema_alpha",
+            "disturbance_force_scale",
+            "disturbance_torque_scale",
             "force_mag_range",
             "torque_mag_max",
             "force_num_bands_range",
@@ -907,6 +914,10 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             )
         if not 0.0 < float(self.tracking.dataset_wrench_ema_alpha) <= 1.0:
             raise ValueError("tracking.dataset_wrench_ema_alpha must be in (0, 1]")
+        if float(self.tracking.disturbance_force_scale) < 0.0:
+            raise ValueError("tracking.disturbance_force_scale must be non-negative")
+        if float(self.tracking.disturbance_torque_scale) < 0.0:
+            raise ValueError("tracking.disturbance_torque_scale must be non-negative")
         self.tracking.use_full_wrench = bool(self.tracking.use_full_wrench)
         if self.tracking.force_mode == "replay_raw_wrench" and not self.tracking.use_full_wrench:
             raise ValueError(

@@ -2112,6 +2112,13 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             # contact-generated wrench, but retaining the complete target here
             # keeps reset/debug traces consistent.
             self.traj_applied_wrench_buf[env_ids, :, : self.wrench_dim] = wr
+        if self.force_mode in ("replay_disturbance", "replay_raw_wrench"):
+            self.traj_applied_wrench_buf[env_ids, :, :3] *= float(
+                self.cfg.tracking.disturbance_force_scale
+            )
+            self.traj_applied_wrench_buf[env_ids, :, 3:] *= float(
+                self.cfg.tracking.disturbance_torque_scale
+            )
         threshold = float(self.cfg.tracking.dataset_contact_force_threshold)
         self.traj_contact_buf[env_ids] = wr[..., :3].norm(dim=-1) > threshold
 
