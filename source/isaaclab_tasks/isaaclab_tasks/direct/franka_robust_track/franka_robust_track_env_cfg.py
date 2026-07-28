@@ -442,6 +442,10 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
     # frame. Disable this when training a tracker that should rely only on the
     # fingertip pose and its previous action history.
     include_joint_angles: bool = True
+    # Include the seven arm joint velocities in each proprioceptive history
+    # frame. Disabled by default to preserve the observation contract of
+    # existing policies.
+    include_joint_velocities: bool = False
     # Debug guard that synchronizes policy/critic tensors back to the CPU each
     # step. Offline replay disables it after startup validation for throughput.
     validate_observations: bool = True
@@ -599,6 +603,8 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             self.obs_history_length = int(env.obs_history_length)
         if env.get("include_joint_angles", None) is not None:
             self.include_joint_angles = bool(env.include_joint_angles)
+        if env.get("include_joint_velocities", None) is not None:
+            self.include_joint_velocities = bool(env.include_joint_velocities)
         if env.get("debug_vis", None) is not None:
             self.debug_vis = env.debug_vis
         if env.get("debug_vis_path_samples", None) is not None:
@@ -877,7 +883,13 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             if self.tracking.enable_force and self.tracking.force_mode == "virtual_contact"
             else 0
         )
-        proprio_dim = 7 + (7 if self.include_joint_angles else 0) + action_dim + force_feedback_dim
+        proprio_dim = (
+            7
+            + (7 if self.include_joint_angles else 0)
+            + (7 if self.include_joint_velocities else 0)
+            + action_dim
+            + force_feedback_dim
+        )
         future_dim = 6 * self.tracking.num_future_steps
         controller_context_dim = 6
         virtual_contact_privileged_dim = (

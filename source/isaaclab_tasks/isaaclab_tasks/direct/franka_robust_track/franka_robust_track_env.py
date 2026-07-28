@@ -84,7 +84,13 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         # gain-augmented) action vector fed back into the proprio observation.
         self.action_dim = self.actions.shape[-1]
         self.include_joint_angles = bool(self.cfg.include_joint_angles)
-        self.proprio_dim = 7 + (7 if self.include_joint_angles else 0) + self.action_dim
+        self.include_joint_velocities = bool(self.cfg.include_joint_velocities)
+        self.proprio_dim = (
+            7
+            + (7 if self.include_joint_angles else 0)
+            + (7 if self.include_joint_velocities else 0)
+            + self.action_dim
+        )
         self.future_dim = 6 * self.cfg.tracking.num_future_steps
         # Force-tracking add-on uses the same start offset as the pose-reference
         # window and is appended to the policy/critic observation when enabled.
@@ -838,6 +844,8 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         proprio_parts = [self.fingertip_midpoint_pos, self.fingertip_midpoint_quat]
         if self.include_joint_angles:
             proprio_parts.append(self.joint_pos[:, 0:7])
+        if self.include_joint_velocities:
+            proprio_parts.append(self.joint_vel[:, 0:7])
         if self.virtual_contact_enabled:
             sensor_noise = float(self.cfg.tracking.force_sensor_noise_std) * torch.randn_like(
                 self.force_sensor_smooth
@@ -2057,6 +2065,11 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         history_parts = [pos, quat]
         if self.include_joint_angles:
             history_parts.append(self._ds_joint_pos[batch_idx, source_idx])
+        if self.include_joint_velocities:
+            prev_source_idx = (source_idx - 1).clamp(min=0)
+            joint_pos = self._ds_joint_pos[batch_idx, source_idx]
+            prev_joint_pos = self._ds_joint_pos[batch_idx, prev_source_idx]
+            history_parts.append((joint_pos - prev_joint_pos) / self.step_dt)
         if self.virtual_contact_enabled:
             history_parts.append(
                 torch.zeros((len(env_ids), self.obs_history_length, 3), device=self.device)
