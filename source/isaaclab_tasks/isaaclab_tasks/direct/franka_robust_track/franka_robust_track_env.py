@@ -709,6 +709,10 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             self.target_wrench[:] = self._traj_wrench_at_index(self.episode_length_buf)
         if self.virtual_contact_enabled:
             self._update_virtual_contact_force()
+            # Match Forge's force-sensor path: `_apply_action` runs once per
+            # physics substep, so filter the synthetic incoming-joint wrench at
+            # the 120 Hz physics rate rather than once per policy/control step.
+            self._update_virtual_contact_sensor()
         self._apply_external_wrenches()
         if self.current_action_rep == "abs_ee_pose" or (
             self.current_action_rep == "delta_ee_pose" and self.delta_target_mode == "per_control_step"
@@ -982,11 +986,6 @@ class FrankaRobustTrackEnv(DirectRLEnv):
 
     def _get_rewards(self) -> torch.Tensor:
         self._compute_intermediate_values()
-        if self.virtual_contact_enabled:
-            # Forge filters one incoming-joint wrench sample per control step.
-            # Contact itself is updated at the physics rate, but its synthetic
-            # sensor signal must not run the EMA `decimation` times too fast.
-            self._update_virtual_contact_sensor()
         self._update_command()
         pos_error, rot_error = self._command_errors()
         raw_pos_error_norm = torch.linalg.norm(pos_error, dim=-1)
@@ -2720,11 +2719,13 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         )
 
     def _update_virtual_contact_sensor(self):
-        """Sample and filter the virtual sensor once per control step.
+        """Sample and filter the virtual sensor once per physics substep.
 
         For Forge data, emulate ``get_link_incoming_joint_force``: negate the
         external world wrench and express it in the current rotating sensor axes.
         Legacy world-external datasets retain their prior world-axis feedback.
+        The caller is ``_apply_action``, matching Forge's 120 Hz force EMA
+        independently of the policy decimation.
         """
         virtual_wrench = self.virtual_contact_force
         if self.wrench_dim == 6:
