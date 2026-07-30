@@ -16,6 +16,15 @@ def policy_step_to_reference_index(
     )
 
 
+def is_reference_boundary(
+    policy_step: torch.Tensor, policy_steps_per_reference: int
+) -> torch.Tensor:
+    """Return whether each policy counter lies on a native reference sample."""
+    if policy_steps_per_reference < 1:
+        raise ValueError("policy_steps_per_reference must be positive")
+    return torch.remainder(policy_step, policy_steps_per_reference) == 0
+
+
 def reference_coordinates(
     policy_step: torch.Tensor,
     *,

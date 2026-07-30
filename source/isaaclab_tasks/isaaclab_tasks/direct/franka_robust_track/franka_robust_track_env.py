@@ -29,6 +29,7 @@ from isaaclab_tasks.direct.factory import factory_control, factory_utils
 
 from .franka_robust_track_env_cfg import FrankaRobustTrackEnvCfg
 from .reference_clock import (
+    is_reference_boundary,
     policy_step_to_reference_index,
     reference_coordinates,
 )
@@ -355,13 +356,10 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             ]
         }
 
-        # Per-episode-step tracking-error profile: bin the pos/rot tracking error
-        # by the step index within the episode, then periodically emit a mean±std
-        # line plot to wandb. All envs step in lockstep (fixed-length episodes, no
-        # early termination), so each bin collects one num_envs-sized sample per
-        # episode; accumulating over several episodes yields the spread. This tests
-        # whether the error drops in later stages as the policy gains more context.
-        self._perstep_num_bins = int(self.max_episode_length)
+        # Per-native-reference-step tracking-error profile. Async policies receive
+        # rewards at their higher action rate, but evaluation metrics remain on the
+        # original reference clock so they are directly comparable to 15 Hz runs.
+        self._perstep_num_bins = int(self._reference_episode_steps)
         self._perstep_pos_sum = torch.zeros(self._perstep_num_bins, device=self.device)
         self._perstep_pos_sqsum = torch.zeros(self._perstep_num_bins, device=self.device)
         self._perstep_rot_sum = torch.zeros(self._perstep_num_bins, device=self.device)
@@ -400,7 +398,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         # per-episode reference transient into a sawtooth. Averaging over a full
         # episode-length window (aligned with the synchronized resets) removes the
         # phase dependence so the logged scalar is smooth.
-        self._track_err_window = int(self.max_episode_length)
+        self._track_err_window = int(self._reference_episode_steps)
         self._track_err_pos_sum = torch.zeros((), device=self.device)
         self._track_err_rot_sum = torch.zeros((), device=self.device)
         self._track_err_count = 0
@@ -725,12 +723,19 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             )
             self.target_wrench[:] = self._traj_wrench_at_index(reference_idx)
         if self.virtual_contact_enabled:
+            # Evaluate contact at the end of this physics interval. On the last
+            # decimation substep this is exactly the next policy boundary, which
+            # DirectRLEnv exposes to `_get_rewards` after incrementing
+            # `episode_length_buf`. Thus the generated contact and its reward
+            # target share one reference-clock instant.
             self._update_virtual_contact_force(
                 completed_physics_substeps=self._physics_substep_in_policy + 1
             )
             # Match Forge's force-sensor path: `_apply_action` runs once per
             # physics substep, so filter the synthetic incoming-joint wrench at
-            # the 120 Hz physics rate rather than once per policy/control step.
+            # the physics rate rather than once per policy/control step. The
+            # configured alpha accounts for the default 60 Hz versus Forge's
+            # 120 Hz physics rate.
             self._update_virtual_contact_sensor()
         self._apply_external_wrenches()
         self._physics_substep_in_policy += 1
@@ -1184,29 +1189,50 @@ class FrankaRobustTrackEnv(DirectRLEnv):
                     successes,
                     torque_error < float(self.cfg.reward.torque_success_threshold),
                 )
-        self.extras["curr_successes"] = successes.float().mean()
-        # Start a fresh window once the previous one filled a full episode length.
-        # Reset happens at the top so the window mean is *complete* on the final
-        # episode step (the phase the rl_games observer actually logs).
-        if self._track_err_count >= self._track_err_window:
-            self._track_err_pos_sum.zero_()
-            self._track_err_rot_sum.zero_()
-            self._track_err_count = 0
-            for buf in (
-                self._track_free_pos_sum, self._track_free_rot_sum, self._track_free_succ_sum,
-                self._track_free_count, self._track_contact_pos_sum, self._track_contact_rot_sum,
-                self._track_contact_succ_sum, self._track_contact_count,
-            ):
-                buf.zero_()
-        self._track_err_pos_sum += pos_error_norm.mean()
-        self._track_err_rot_sum += rot_error_norm.mean()
-        self._track_err_count += 1
-        self.extras["tracking_pos_error"] = self._track_err_pos_sum / self._track_err_count
-        self.extras["tracking_rot_error"] = self._track_err_rot_sum / self._track_err_count
-        if self.enable_force:
-            self._accumulate_contact_split_metrics(pos_error_norm, rot_error_norm, successes)
-        self._accumulate_perstep_error(pos_error_norm.detach(), rot_error_norm.detach())
-        self._accumulate_gain_stats()
+        native_metric_mask = is_reference_boundary(
+            self.episode_length_buf, self.policy_steps_per_reference
+        )
+        # RobustTrack episodes have no early termination, so all environments are
+        # synchronized and this scalar is exactly zero or one. Evaluation code can
+        # use it to ignore high-rate intermediate reward steps.
+        native_metric_sample = native_metric_mask.float().mean()
+        self.extras["native_reference_sample"] = native_metric_sample
+        if bool(native_metric_mask[0]):
+            self.extras["curr_successes"] = successes.float().mean()
+            # Start a fresh window once the previous one filled a full native
+            # reference episode. Only native-boundary samples enter the window.
+            if self._track_err_count >= self._track_err_window:
+                self._track_err_pos_sum.zero_()
+                self._track_err_rot_sum.zero_()
+                self._track_err_count = 0
+                for buf in (
+                    self._track_free_pos_sum,
+                    self._track_free_rot_sum,
+                    self._track_free_succ_sum,
+                    self._track_free_count,
+                    self._track_contact_pos_sum,
+                    self._track_contact_rot_sum,
+                    self._track_contact_succ_sum,
+                    self._track_contact_count,
+                ):
+                    buf.zero_()
+            self._track_err_pos_sum += pos_error_norm.mean()
+            self._track_err_rot_sum += rot_error_norm.mean()
+            self._track_err_count += 1
+            self.extras["tracking_pos_error"] = (
+                self._track_err_pos_sum / self._track_err_count
+            )
+            self.extras["tracking_rot_error"] = (
+                self._track_err_rot_sum / self._track_err_count
+            )
+            if self.enable_force:
+                self._accumulate_contact_split_metrics(
+                    pos_error_norm, rot_error_norm, successes
+                )
+            self._accumulate_perstep_error(
+                pos_error_norm.detach(), rot_error_norm.detach()
+            )
+            self._accumulate_gain_stats()
         self._vis_pos_error_norm = pos_error_norm.detach()
         self._vis_rot_error_norm = rot_error_norm.detach()
         return reward
@@ -2818,7 +2844,12 @@ class FrankaRobustTrackEnv(DirectRLEnv):
     def _update_virtual_contact_force(
         self, completed_physics_substeps: int = 0
     ):
-        """Select the interpolated plane and compute its external contact force."""
+        """Compute contact at the requested instant within the policy transition.
+
+        The final physics substep uses the same instant as the subsequent
+        post-action pose/wrench reward, avoiding a plane[t] versus wrench[t+1]
+        comparison.
+        """
         self._set_virtual_contact_surface_at_policy_step(
             self.episode_length_buf, completed_physics_substeps
         )
@@ -2860,8 +2891,9 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         For Forge data, emulate ``get_link_incoming_joint_force``: negate the
         external world wrench and express it in the current rotating sensor axes.
         Legacy world-external datasets retain their prior world-axis feedback.
-        The caller is ``_apply_action``, matching Forge's 120 Hz force EMA
-        independently of the policy decimation.
+        The caller is ``_apply_action``, matching Forge's per-physics-substep
+        force EMA independently of the policy decimation. The default alpha is
+        adjusted so the 60 Hz filter has Forge's 120 Hz physical-time response.
         """
         virtual_wrench = self.virtual_contact_force
         if self.wrench_dim == 6:
@@ -3572,10 +3604,12 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self.extras["contact_fraction"] = contact.float().mean()
 
     def _accumulate_perstep_error(self, pos_error_norm: torch.Tensor, rot_error_norm: torch.Tensor):
-        """Bin the per-step tracking error by episode step and log a profile periodically."""
+        """Bin tracking error by native reference index and log it periodically."""
         if self._perstep_log_every <= 0:
             return
-        step_idx = self.episode_length_buf.clamp(0, self._perstep_num_bins - 1)
+        step_idx = self._policy_step_to_reference_index(
+            self.episode_length_buf
+        ).clamp(0, self._perstep_num_bins - 1)
         self._perstep_pos_sum.index_add_(0, step_idx, pos_error_norm)
         self._perstep_pos_sqsum.index_add_(0, step_idx, pos_error_norm.square())
         self._perstep_rot_sum.index_add_(0, step_idx, rot_error_norm)
@@ -3616,7 +3650,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         rot_std = (self._perstep_rot_sqsum / count_safe - rot_mean.square()).clamp(min=0.0).sqrt()
 
         steps = torch.arange(self._perstep_num_bins, device=self.device)[valid]
-        time_s = (steps.float() * self.step_dt).cpu().numpy()
+        time_s = (steps.float() * self.reference_dt).cpu().numpy()
         pos_mean_np = pos_mean[valid].cpu().numpy()
         pos_std_np = pos_std[valid].cpu().numpy()
         rot_mean_np = rot_mean[valid].cpu().numpy()
