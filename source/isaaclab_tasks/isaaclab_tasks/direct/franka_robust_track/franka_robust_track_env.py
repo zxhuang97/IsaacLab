@@ -32,6 +32,7 @@ from .virtual_contact import (
     contact_coupled_torque,
     compute_virtual_plane_contact,
     construct_reference_plane_trajectory,
+    descale_virtual_sensor_wrench,
     finite_difference_surface_velocity,
     invert_ema_sequence,
     sensor_reaction_to_world_external,
@@ -257,6 +258,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self._ds_joint_pos = None
         self._ds_lengths = None
         self._ds_num = 0
+        self._disturbance_torque_clip_norm = math.inf
         if self.cfg.tracking.mode == "dataset":
             self._load_dataset_trajectories()
 
@@ -884,7 +886,11 @@ class FrankaRobustTrackEnv(DirectRLEnv):
                 noise_scale += [float(self.cfg.tracking.torque_sensor_noise_std)] * 3
             sensor_noise_scale = torch.tensor(noise_scale, device=self.device)
             sensor_noise = sensor_noise_scale * torch.randn_like(self.force_sensor_smooth)
-            self.force_sensor_obs = self.force_sensor_smooth + self.force_sensor_bias + sensor_noise
+            self.force_sensor_obs = descale_virtual_sensor_wrench(
+                self.force_sensor_smooth,
+                self.cfg.tracking.virtual_contact_force_scale,
+            )
+            self.force_sensor_obs += self.force_sensor_bias + sensor_noise
             proprio_parts.append(self.force_sensor_obs / self._wrench_scale)
         proprio_parts.append(self.actions)
         proprio = torch.cat(proprio_parts, dim=-1)
@@ -1033,19 +1039,19 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         if self.virtual_contact_enabled:
             goal_force = self.target_wrench[:, :3]
             goal_torque = self.target_wrench[:, 3:]
-            measured_force = self.force_sensor_smooth[:, :3]
-            measured_torque = self.force_sensor_smooth[:, 3:]
+            measured_wrench = descale_virtual_sensor_wrench(
+                self.force_sensor_smooth,
+                self.cfg.tracking.virtual_contact_force_scale,
+            )
+            measured_force = measured_wrench[:, :3]
+            measured_torque = measured_wrench[:, 3:]
             goal_force_mag = torch.linalg.norm(goal_force, dim=-1)
             actual_force_mag = torch.linalg.norm(self.virtual_contact_force, dim=-1)
             goal_torque_mag = torch.linalg.norm(goal_torque, dim=-1)
             actual_torque_mag = torch.linalg.norm(self.virtual_contact_torque, dim=-1)
-            # Full-wrench mode matches complete vectors in the dataset frame.
-            # Force-only mode deliberately preserves the legacy magnitude-only
-            # reward/checkpoint contract.
-            if self.wrench_dim == 6:
-                force_error = torch.linalg.norm(measured_force - goal_force, dim=-1)
-            else:
-                force_error = torch.abs(actual_force_mag - goal_force_mag)
+            # Match the complete force vector in the dataset frame in both
+            # force-only and full-wrench modes.
+            force_error = torch.linalg.norm(measured_force - goal_force, dim=-1)
             force_track = (
                 torch.exp(-force_error / max(float(self.cfg.reward.force_error_temp), 1.0e-6))
                 * self.cfg.reward.force_error_scale
@@ -1825,6 +1831,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
 
         storage_length = max(int(en) - int(s) for s, en in zip(starts, ends))
         pos_list, quat_list, phase_list, wr_list, joint_list, raw_lengths = [], [], [], [], [], []
+        torque_norm_samples = []
         for e in range(len(starts)):
             if tcfg.dataset_only_success and success is not None and float(success[e]) < 0.5:
                 continue
@@ -1889,6 +1896,8 @@ class FrankaRobustTrackEnv(DirectRLEnv):
                 if bias_samples > 0:
                     bias_count = min(bias_samples, raw_length)
                     seg_force = seg_force - seg_force[:bias_count].mean(dim=0, keepdim=True)
+                if seg_force.shape[1] == 6:
+                    torque_norm_samples.append(seg_force[:, 3:].norm(dim=-1))
                 if chunk_length > 0:
                     wr = seg_force
                     if raw_length < storage_length:
@@ -1914,6 +1923,14 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self._ds_quat = torch.stack(quat_list)  # (T, L, 4)
         self._ds_phase = torch.stack(phase_list)  # (T, L), constant through padded tails
         self._ds_wrench = torch.stack(wr_list) if wr_list else None  # (T, L, wrench_dim) or None
+        torque_clip_percentile = float(
+            getattr(tcfg, "disturbance_torque_clip_percentile", 100.0)
+        )
+        if torque_norm_samples and torque_clip_percentile < 100.0:
+            self._disturbance_torque_clip_norm = torch.quantile(
+                torch.cat(torque_norm_samples),
+                torque_clip_percentile / 100.0,
+            ).item()
         self._ds_joint_pos = torch.stack(joint_list) if joint_list else None  # (T, L, 7)
         self._ds_lengths = (
             torch.tensor(raw_lengths, dtype=torch.long, device=self.device)
@@ -1932,6 +1949,11 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             if self.wrench_dim == 6:
                 torque_max = self._ds_wrench[..., 3:].norm(dim=-1).max().item()
                 force_str += f" | torque |.| max {torque_max:.2f} Nm"
+                if math.isfinite(self._disturbance_torque_clip_norm):
+                    force_str += (
+                        f" | applied torque p{torque_clip_percentile:g} clip "
+                        f"{self._disturbance_torque_clip_norm:.3f} Nm"
+                    )
         warp_str = ""
         if warp_prob > 0.0:
             warp_str = (
@@ -2113,6 +2135,15 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             # keeps reset/debug traces consistent.
             self.traj_applied_wrench_buf[env_ids, :, : self.wrench_dim] = wr
         if self.force_mode in ("replay_disturbance", "replay_raw_wrench"):
+            if self.wrench_dim == 6 and math.isfinite(
+                self._disturbance_torque_clip_norm
+            ):
+                torque = self.traj_applied_wrench_buf[env_ids, :, 3:]
+                torque_norm = torque.norm(dim=-1, keepdim=True)
+                torque *= (
+                    self._disturbance_torque_clip_norm
+                    / torque_norm.clamp_min(1.0e-12)
+                ).clamp(max=1.0)
             self.traj_applied_wrench_buf[env_ids, :, :3] *= float(
                 self.cfg.tracking.disturbance_force_scale
             )
@@ -2673,6 +2704,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             exponential_reference_force=float(self.cfg.tracking.power_law_reference_force),
             exponential_reference_penetration=float(self.cfg.tracking.power_law_reference_penetration),
             max_damping_multiplier=float(self.cfg.tracking.max_damping_multiplier),
+            force_scale=float(self.cfg.tracking.virtual_contact_force_scale),
         )
 
         self.virtual_surface_distance[:] = distance

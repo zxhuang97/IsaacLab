@@ -234,6 +234,10 @@ class TrackingCfg:
     # by rewards remains in the original dataset units.
     disturbance_force_scale: float = 1.0
     disturbance_torque_scale: float = 1.0
+    # Clip the norm of physically replayed dataset torque to this percentile of
+    # the selected trajectories. This does not modify the dataset or the target
+    # wrench exposed to the policy. 100 disables clipping.
+    disturbance_torque_clip_percentile: float = 100.0
     force_mag_range = [5.0, 20.0]  # N, sampled peak contact magnitude (spec-capped at 20 N)
     torque_mag_max: float = 2.0  # Nm, observation normalization scale
     # Number of contact bands per episode, sampled per env (inclusive range). The
@@ -267,6 +271,11 @@ class TrackingCfg:
     # remains the tracking/metric target. Values > 1 model a stronger physical
     # reaction than the measured dataset wrench at the demonstrated pose.
     virtual_contact_reference_force_scale: float = 1.0
+    # Post-model multiplier on the virtual contact force physically applied to
+    # the wrist. Virtual sensor feedback is divided by the same value before it
+    # reaches the policy/reward, preserving the original dataset wrench units.
+    # The plane geometry and dataset target are unchanged.
+    virtual_contact_force_scale: float = 1.0
     # Independent scale for the demonstrated torque coupled to virtual contact.
     virtual_contact_reference_torque_scale: float = 1.0
     # Select the normal-force law. The linear model uses a Kelvin-Voigt damping
@@ -491,7 +500,7 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
     debug_vis_force_plane_size: float = 0.08  # square plane side length, m
     debug_vis_force_normal_length: float = 0.06  # rendered unit-normal arrow, m
     debug_vis_force_ee_sphere: bool = True
-    debug_vis_force_ee_sphere_radius: float = 0.008  # current EE marker radius, m
+    debug_vis_force_ee_sphere_radius: float = 0.002  # current EE marker radius, m
 
     # Per-episode-step tracking-error profile logged to wandb as a mean±std line
     # plot. The pos/rot tracking error is binned by the step index within the
@@ -745,6 +754,7 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "dataset_wrench_ema_alpha",
             "disturbance_force_scale",
             "disturbance_torque_scale",
+            "disturbance_torque_clip_percentile",
             "force_mag_range",
             "torque_mag_max",
             "force_num_bands_range",
@@ -756,6 +766,7 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "virtual_contact_direction_smoothing_window",
             "virtual_contact_plane_stiffness",
             "virtual_contact_reference_force_scale",
+            "virtual_contact_force_scale",
             "virtual_contact_reference_torque_scale",
             "contact_model",
             "virtual_contact_damping_ratio",
@@ -918,6 +929,13 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             raise ValueError("tracking.disturbance_force_scale must be non-negative")
         if float(self.tracking.disturbance_torque_scale) < 0.0:
             raise ValueError("tracking.disturbance_torque_scale must be non-negative")
+        torque_clip_percentile = float(
+            self.tracking.disturbance_torque_clip_percentile
+        )
+        if not 0.0 < torque_clip_percentile <= 100.0:
+            raise ValueError(
+                "tracking.disturbance_torque_clip_percentile must be in (0, 100]"
+            )
         self.tracking.use_full_wrench = bool(self.tracking.use_full_wrench)
         if self.tracking.force_mode == "replay_raw_wrench" and not self.tracking.use_full_wrench:
             raise ValueError(
@@ -939,6 +957,8 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
                 raise ValueError("tracking.virtual_contact_plane_stiffness must be positive")
             if float(self.tracking.virtual_contact_reference_force_scale) <= 0.0:
                 raise ValueError("tracking.virtual_contact_reference_force_scale must be positive")
+            if float(self.tracking.virtual_contact_force_scale) <= 0.0:
+                raise ValueError("tracking.virtual_contact_force_scale must be positive")
             if float(self.tracking.virtual_contact_reference_torque_scale) <= 0.0:
                 raise ValueError("tracking.virtual_contact_reference_torque_scale must be positive")
             self.tracking.contact_model = str(self.tracking.contact_model)

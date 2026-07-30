@@ -212,6 +212,16 @@ def contact_coupled_torque(
     return torque
 
 
+def descale_virtual_sensor_wrench(
+    sensor_wrench: torch.Tensor, force_scale: float
+) -> torch.Tensor:
+    """Map a physically scaled virtual-contact wrench back to policy units."""
+    force_scale = float(force_scale)
+    if force_scale <= 0.0:
+        raise ValueError("force_scale must be positive")
+    return sensor_wrench / force_scale
+
+
 def invert_ema_sequence(smoothed: torch.Tensor, alpha: float) -> torch.Tensor:
     """Recover the unsmoothed sequence for an EMA initialized at zero.
 
@@ -408,6 +418,7 @@ def compute_virtual_plane_contact(
     exponential_reference_force: float = 5.0,
     exponential_reference_penetration: float = 0.002,
     max_damping_multiplier: float | None = None,
+    force_scale: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Return signed plane distance and a selectable unilateral contact force.
 
@@ -423,7 +434,8 @@ def compute_virtual_plane_contact(
     ``power_law`` replaces the elastic term with ``k_p*delta**p`` and optionally
     applies the same Hunt-Crossley multiplier. A positive
     ``max_damping_multiplier`` bounds that multiplier; ``None`` or a non-positive
-    value disables this clamp. A non-positive ``force_cap`` disables force capping.
+    value disables this clamp. ``force_scale`` multiplies the modeled force
+    before the final cap. A non-positive ``force_cap`` disables force capping.
     """
     if contact_model not in ("linear", "drake_hunt_crossley", "power_law", "exponential"):
         raise ValueError(
@@ -432,6 +444,9 @@ def compute_virtual_plane_contact(
         )
     if hunt_crossley_dissipation < 0.0:
         raise ValueError("hunt_crossley_dissipation must be non-negative")
+    force_scale = float(force_scale)
+    if force_scale < 0.0:
+        raise ValueError("force_scale must be non-negative")
     power_law_exponent = float(power_law_exponent)
     if power_law_exponent <= 0.0:
         raise ValueError("power_law_exponent must be positive")
@@ -482,6 +497,7 @@ def compute_virtual_plane_contact(
         force_magnitude,
         torch.zeros_like(force_magnitude),
     )
+    force_magnitude = force_scale * force_magnitude
     if force_cap is not None and float(force_cap) > 0.0:
         force_magnitude = force_magnitude.clamp(max=float(force_cap))
     return distance, force_magnitude * surface_normal
