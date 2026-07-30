@@ -183,7 +183,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         # here. Runtime command/lookahead just index into these buffers by step,
         # so the policy tracks a discrete pose sequence. The grid is extended past
         # the episode so the furthest lookahead sample is always in-range.
-        self._traj_len = self.max_episode_length + (self.cfg.tracking.num_future_steps - 1)
+        self._traj_len = self.max_episode_length + self.cfg.tracking.num_future_steps
         self.traj_pos_buf = torch.zeros((self.num_envs, self._traj_len, 3), device=self.device)
         self.traj_quat_buf = torch.zeros((self.num_envs, self._traj_len, 4), device=self.device)
         self.traj_quat_buf[..., 0] = 1.0
@@ -2765,11 +2765,11 @@ class FrankaRobustTrackEnv(DirectRLEnv):
 
         Returns either 3 or 6 values per future step in the configured dataset
         convention. Force is normalized by force_mag_range[1]; full-wrench mode
-        additionally normalizes torque by torque_mag_max. The first index is
-        selected by `reference_start_offset`.
+        additionally normalizes torque by torque_mag_max. The window is strictly
+        future-facing and starts at the next trajectory waypoint.
         """
         num_steps = self.cfg.tracking.num_future_steps
-        base_idx = self.episode_length_buf + self.cfg.tracking.reference_start_offset
+        base_idx = self.episode_length_buf + 1
         return torch.cat(
             [
                 self._traj_wrench_at_index(base_idx + i) / self._wrench_scale
@@ -2790,15 +2790,15 @@ class FrankaRobustTrackEnv(DirectRLEnv):
                 self.current_contact[:] = self.traj_contact_buf[self._env_arange, idx]
 
     def _future_command_errors(self) -> torch.Tensor:
-        """Errors to the configured reference-pose window.
+        """Errors to the strictly future reference-pose window.
 
         The window contains one discretized waypoint per step and begins at
-        `episode_length_buf + reference_start_offset`. Returns a
-        (num_envs, 6 * num_future_steps) tensor of stacked (pos_error,
-        axis_angle_error) pairs, letting the policy infer reference velocity.
+        `episode_length_buf + 1`. Returns a (num_envs, 6 * num_future_steps)
+        tensor of stacked (pos_error, axis_angle_error) pairs, letting the policy
+        infer reference velocity.
         """
         num_steps = self.cfg.tracking.num_future_steps
-        base_idx = self.episode_length_buf + self.cfg.tracking.reference_start_offset
+        base_idx = self.episode_length_buf + 1
 
         errors = []
         for i in range(num_steps):
@@ -3313,7 +3313,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             self.traj_path_visualizer.visualize(torch.cat(path_points, dim=0))
 
             # Lookahead targets fed to the policy.
-            base_idx = self.episode_length_buf + self.cfg.tracking.reference_start_offset
+            base_idx = self.episode_length_buf + 1
             future_points = []
             for i in range(self.cfg.tracking.num_future_steps):
                 pos, _ = self._traj_pose_at_index(base_idx + i)

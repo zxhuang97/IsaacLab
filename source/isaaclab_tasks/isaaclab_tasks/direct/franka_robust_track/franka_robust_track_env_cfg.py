@@ -131,11 +131,11 @@ class TrackingCfg:
     rot_speed_range = [0.0, 0.20]  # rad/s
     rot_angle_range = [0.0, 0.30]  # rad, max sweep
 
-    # Lookahead: the policy observes `num_future_steps` reference waypoints, one
-    # per trajectory step. `reference_start_offset=0` starts at the current
-    # target [P_t, ...]; offset 1 starts at the next target [P_{t+1}, ...].
+    # Lookahead: the policy observes `num_future_steps` strictly future reference
+    # waypoints, one per trajectory step: [P_{t+1}, ..., P_{t+H}]. The post-step
+    # reward is evaluated against P_{t+1}, so the first observation target and
+    # reward target use the same waypoint.
     num_future_steps: int = 4
-    reference_start_offset: int = 0
 
     # "dataset" mode: instead of an analytic line/circle, each env tracks a real
     # end-effector trajectory sampled from an offline demonstration dataset (e.g.
@@ -728,7 +728,6 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "rot_speed_range",
             "rot_angle_range",
             "num_future_steps",
-            "reference_start_offset",
             "dataset_path",
             "dataset_pose_key",
             "dataset_state_key",
@@ -899,7 +898,6 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
         if float(self.debug_vis_force_ee_sphere_radius) <= 0.0:
             raise ValueError("debug_vis_force_ee_sphere_radius must be positive")
         self.tracking.num_future_steps = int(self.tracking.num_future_steps)
-        self.tracking.reference_start_offset = int(self.tracking.reference_start_offset)
         self.tracking.force_mode = str(self.tracking.force_mode)
         if self.tracking.force_mode not in (
             "replay_disturbance",
@@ -1005,11 +1003,6 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
                 raise ValueError("tracking.torque_sensor_bias_range must be non-negative")
         if self.tracking.num_future_steps < 1:
             raise ValueError("tracking.num_future_steps must be at least 1")
-        if self.tracking.reference_start_offset not in (0, 1):
-            raise ValueError(
-                "tracking.reference_start_offset must be 0 (current-inclusive) "
-                "or 1 (future-only)"
-            )
         self.tool_frame = str(self.tool_frame).strip() or "auto"
         self.robot.spawn.usd_path = f"{ASSET_DIR}/{self.robot_usd_path}"
         self.sim.render_interval = self.decimation
