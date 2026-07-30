@@ -99,10 +99,9 @@ class CtrlCfg:
 class TrackingCfg:
     """Discretized end-effector reference trajectory configuration.
 
-    The trajectory is generated analytically per env at reset and then sampled
-    onto a fixed grid of control steps (one waypoint per env step), so the
-    reference the policy tracks is a discrete sequence of poses rather than a
-    continuously-evaluated function of time.
+    The trajectory is generated analytically per env at reset and sampled onto
+    a native reference grid. Synchronous policies consume one waypoint per
+    action; async policies interpolate their active target between native knots.
     """
 
     mode: str = "line"  # line, line_fixed, circle, dataset
@@ -131,11 +130,15 @@ class TrackingCfg:
     rot_speed_range = [0.0, 0.20]  # rad/s
     rot_angle_range = [0.0, 0.30]  # rad, max sweep
 
-    # Lookahead: the policy observes `num_future_steps` strictly future reference
-    # waypoints, one per trajectory step: [P_{t+1}, ..., P_{t+H}]. The post-step
-    # reward is evaluated against P_{t+1}, so the first observation target and
-    # reward target use the same waypoint.
+    # Lookahead: the policy observes `num_future_steps` strictly future native
+    # waypoints: [P_{r+1}, ..., P_{r+H}], where r is the native segment index.
+    # The active reward target advances continuously from P_r to P_{r+1}.
     num_future_steps: int = 4
+    # Physics substeps between native reference samples. Zero preserves the
+    # synchronous contract by inheriting the policy/control decimation. Async
+    # dataset tracking uses 8 here (15 Hz at 120 Hz physics) with a smaller
+    # top-level decimation for a 30/60 Hz policy.
+    reference_decimation: int = 0
 
     # "dataset" mode: instead of an analytic line/circle, each env tracks a real
     # end-effector trajectory sampled from an offline demonstration dataset (e.g.
@@ -160,7 +163,7 @@ class TrackingCfg:
     # "episode_start" reproduces full-trajectory training from raw sample zero;
     # "random" samples the reset timestep over the entire raw episode.
     dataset_chunk_start_mode: str = "episode_start"
-    # Training chunk length in control-step poses. When positive, raw dataset
+    # Training chunk length in native reference poses. When positive, raw dataset
     # samples retain their original indices. The start mode selects sample zero or
     # a random timestep over the entire episode. Missing lead-in history repeats
     # the first sample; a chunk extending past the episode repeats its final sample.
@@ -728,6 +731,7 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "rot_speed_range",
             "rot_angle_range",
             "num_future_steps",
+            "reference_decimation",
             "dataset_path",
             "dataset_pose_key",
             "dataset_state_key",
@@ -898,6 +902,20 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
         if float(self.debug_vis_force_ee_sphere_radius) <= 0.0:
             raise ValueError("debug_vis_force_ee_sphere_radius must be positive")
         self.tracking.num_future_steps = int(self.tracking.num_future_steps)
+        self.tracking.reference_decimation = int(
+            self.tracking.reference_decimation
+        )
+        if self.tracking.reference_decimation == 0:
+            self.tracking.reference_decimation = self.decimation
+        if self.tracking.reference_decimation < self.decimation:
+            raise ValueError(
+                "tracking.reference_decimation must be at least env.decimation"
+            )
+        if self.tracking.reference_decimation % self.decimation != 0:
+            raise ValueError(
+                "tracking.reference_decimation must be an integer multiple of "
+                "env.decimation"
+            )
         self.tracking.force_mode = str(self.tracking.force_mode)
         if self.tracking.force_mode not in (
             "replay_disturbance",
