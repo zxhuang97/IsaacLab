@@ -29,6 +29,7 @@ from isaaclab_tasks.direct.factory import factory_control, factory_utils
 
 from .franka_robust_track_env_cfg import FrankaRobustTrackEnvCfg
 from .reference_clock import (
+    history_seed_offsets,
     is_reference_boundary,
     policy_step_to_reference_index,
     reference_coordinates,
@@ -2234,37 +2235,59 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         return source_idx, phase
 
     def _seed_dataset_proprio_history(self, env_ids: torch.Tensor):
-        """Prefill reset history from the samples immediately before each chunk.
+        """Prefill reset history on the policy-rate grid before each chunk.
 
         `_get_observations` will roll this buffer once and append the actual reset
-        state at chunk time `t`. Loading `t-H ... t-1` here therefore makes the
-        first policy observation contain `t-H+1 ... t`, oldest to newest. Dataset
-        actions were produced by Forge's different action representation, so the
-        action-feedback slots are deliberately zero rather than mislabeled.
+        state at chunk time `t`. Fractional native-sample offsets preserve the
+        original physical history span while adding high-rate intermediate frames.
+        Dataset actions used Forge's different representation, so action-feedback
+        slots remain zero rather than being mislabeled.
         """
         ds_idx = self.traj_ds_idx[env_ids]
         ds_start = self.traj_ds_start[env_ids]
-        offsets = torch.arange(
-            -self.obs_history_length, 0, device=self.device, dtype=torch.long
-        )
-        source_idx = (ds_start.unsqueeze(1) + offsets.unsqueeze(0)).clamp(min=0)
-        source_idx = torch.minimum(
-            source_idx, (self._ds_lengths[ds_idx] - 1).unsqueeze(1)
+        offsets = history_seed_offsets(
+            self.obs_history_length, self.policy_steps_per_reference
+        ).to(self.device)
+        source_fidx = ds_start.float().unsqueeze(1) + offsets.unsqueeze(0)
+        source_fidx = source_fidx.clamp(min=0.0)
+        source_fidx = torch.minimum(
+            source_fidx, (self._ds_lengths[ds_idx] - 1).float().unsqueeze(1)
         )
         batch_idx = ds_idx.unsqueeze(1)
-        pos = self._ds_pos[batch_idx, source_idx]
-        quat = self._ds_quat[batch_idx, source_idx]
+
+        def interpolate(buffer: torch.Tensor, fidx: torch.Tensor) -> torch.Tensor:
+            i0 = fidx.floor().long()
+            i1 = (i0 + 1).clamp(max=buffer.shape[1] - 1)
+            fraction = (fidx - i0.float()).unsqueeze(-1)
+            value0 = buffer[batch_idx, i0]
+            value1 = buffer[batch_idx, i1]
+            return value0 * (1.0 - fraction) + value1 * fraction
+
+        pos = interpolate(self._ds_pos, source_fidx)
+        quat_i0 = source_fidx.floor().long()
+        quat_i1 = (quat_i0 + 1).clamp(max=self._ds_quat.shape[1] - 1)
+        quat_fraction = source_fidx - quat_i0.float()
+        quat_shape = (len(env_ids), self.obs_history_length, 4)
+        quat = self._quat_slerp(
+            self._ds_quat[batch_idx, quat_i0].reshape(-1, 4),
+            self._ds_quat[batch_idx, quat_i1].reshape(-1, 4),
+            quat_fraction.reshape(-1),
+        ).view(quat_shape)
         action = torch.zeros(
             (len(env_ids), self.obs_history_length, self.action_dim), device=self.device
         )
         history_parts = [pos, quat]
         if self.include_joint_angles:
-            history_parts.append(self._ds_joint_pos[batch_idx, source_idx])
+            history_parts.append(interpolate(self._ds_joint_pos, source_fidx))
         if self.include_joint_velocities:
-            prev_source_idx = (source_idx - 1).clamp(min=0)
-            joint_pos = self._ds_joint_pos[batch_idx, source_idx]
-            prev_joint_pos = self._ds_joint_pos[batch_idx, prev_source_idx]
-            history_parts.append((joint_pos - prev_joint_pos) / self.reference_dt)
+            previous_fidx = (
+                source_fidx - 1.0 / float(self.policy_steps_per_reference)
+            ).clamp(min=0.0)
+            joint_pos = interpolate(self._ds_joint_pos, source_fidx)
+            previous_joint_pos = interpolate(self._ds_joint_pos, previous_fidx)
+            history_parts.append(
+                (joint_pos - previous_joint_pos) / self.step_dt
+            )
         if self.virtual_contact_enabled:
             history_parts.append(
                 torch.zeros(

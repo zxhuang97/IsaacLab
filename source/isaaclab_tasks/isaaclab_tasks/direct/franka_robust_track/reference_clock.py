@@ -25,6 +25,25 @@ def is_reference_boundary(
     return torch.remainder(policy_step, policy_steps_per_reference) == 0
 
 
+def history_seed_offsets(
+    history_length: int, policy_steps_per_reference: int
+) -> torch.Tensor:
+    """Return pre-roll dataset-history offsets in native-sample units.
+
+    The environment rolls once and appends the current state after reset. Thus,
+    for a 30 Hz policy with a three-frame history this returns
+    ``[-1.5, -1.0, -0.5]``; the first observation then contains
+    ``[-1.0, -0.5, 0.0]`` and preserves the original 15 Hz history span.
+    """
+    if history_length < 1:
+        raise ValueError("history_length must be positive")
+    if policy_steps_per_reference < 1:
+        raise ValueError("policy_steps_per_reference must be positive")
+    return torch.arange(-history_length, 0, dtype=torch.float32) / float(
+        policy_steps_per_reference
+    )
+
+
 def reference_coordinates(
     policy_step: torch.Tensor,
     *,
