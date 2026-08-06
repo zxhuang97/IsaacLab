@@ -305,7 +305,10 @@ class TrackingCfg:
 
     # Synthetic six-axis wrench sensor shown to the actor. Noise and reset-time
     # bias are disabled so training matches hierarchical Forge evaluation.
-    force_sensor_smoothing_factor: float = 0.25
+    # At the default 60 Hz physics rate, this has the same physical-time EMA
+    # response as Forge's alpha=0.25 filter running at 120 Hz:
+    # 1 - (1 - 0.25) ** (120 / 60) = 0.4375.
+    force_sensor_smoothing_factor: float = 0.4375
     force_sensor_noise_std: float = 0.0  # N
     force_sensor_bias_range: float = 0.0  # N, per-axis reset-time bias
     torque_sensor_noise_std: float = 0.0  # Nm
