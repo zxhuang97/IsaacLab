@@ -419,14 +419,14 @@ class RewardCfg:
     # kernel saturates to ~0 and provides no gradient (rot error runs ~1 rad, so a
     # tight temp like 0.1 leaves it in a flat dead zone).
     pos_error_temp: float = 0.01  # m
-    rot_error_temp: float = 0.1  # rad
+    rot_error_temp: float = 0.3  # rad
     # Narrow kernels refine tracking once the broad terms have brought the
-    # policy close to the reference. They are intentionally lower-weight so
-    # they do not replace the broad recovery signal.
+    # policy close to the reference. Rotation uses a broad 0.3-rad recovery
+    # kernel above and an equally weighted 0.1-rad refinement kernel below.
     fine_pos_error_scale: float = 0.0
-    fine_rot_error_scale: float = 0.0
+    fine_rot_error_scale: float = 2.0
     fine_pos_error_temp: float = 0.03  # m
-    fine_rot_error_temp: float = 0.03  # rad
+    fine_rot_error_temp: float = 0.1  # rad
     ee_vel_scale: float = -0.01
     # Penalize step-to-step change in EE velocity (acceleration) for smoother motion.
     ee_accel_scale: float = -0.05
