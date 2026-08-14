@@ -33,14 +33,22 @@ from .reference_clock import (
     is_reference_boundary,
     policy_step_to_reference_index,
     reference_coordinates,
+    virtual_contact_reference_coordinates,
 )
 from .virtual_contact import (
     contact_coupled_torque,
     compute_virtual_plane_contact,
     construct_reference_plane_trajectory,
+    construct_rotational_equilibrium_trajectory,
     descale_virtual_sensor_wrench,
+    finite_difference_quaternion_angular_velocity,
     finite_difference_surface_velocity,
     invert_ema_sequence,
+    orientation_power_law_contact_torque,
+    orientation_spring_contact_torque,
+    perturb_reference_plane_trajectory,
+    power_law_coefficient_from_reference,
+    quaternion_nlerp,
     sensor_reaction_to_world_external,
     smooth_force_directions,
     world_external_to_sensor_reaction,
@@ -221,6 +229,13 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self.traj_surface_normal_buf = torch.zeros((self.num_envs, self._traj_len, 3), device=self.device)
         self.traj_surface_normal_buf[..., 2] = 1.0
         self.traj_surface_velocity_buf = torch.zeros((self.num_envs, self._traj_len, 3), device=self.device)
+        self.traj_rotational_equilibrium_quat_buf = torch.zeros(
+            (self.num_envs, self._traj_len, 4), device=self.device
+        )
+        self.traj_rotational_equilibrium_quat_buf[..., 0] = 1.0
+        self.traj_rotational_equilibrium_angvel_buf = torch.zeros(
+            (self.num_envs, self._traj_len, 3), device=self.device
+        )
         # Dataset-conditioned target external wrench in world axes. The force
         # half places the moving plane; the torque half is coupled to the force
         # realized by that plane at runtime.
@@ -243,8 +258,56 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self.virtual_surface_normal = torch.zeros((self.num_envs, 3), device=self.device)
         self.virtual_surface_normal[:, 2] = 1.0
         self.virtual_surface_velocity = torch.zeros((self.num_envs, 3), device=self.device)
+        self.virtual_rotational_equilibrium_quat = torch.zeros(
+            (self.num_envs, 4), device=self.device
+        )
+        self.virtual_rotational_equilibrium_quat[:, 0] = 1.0
+        self.virtual_rotational_equilibrium_angvel = torch.zeros(
+            (self.num_envs, 3), device=self.device
+        )
         self.virtual_surface_stiffness = torch.zeros((self.num_envs, 1), device=self.device)
         self.virtual_surface_damping = torch.zeros((self.num_envs, 1), device=self.device)
+        self.virtual_contact_power_exponent = torch.full(
+            (self.num_envs, 1),
+            float(self.cfg.tracking.power_law_exponent),
+            device=self.device,
+        )
+        self.virtual_contact_reference_penetration = torch.full(
+            (self.num_envs, 1),
+            float(self.cfg.tracking.power_law_reference_penetration),
+            device=self.device,
+        )
+        self.virtual_contact_dissipation = torch.full(
+            (self.num_envs, 1),
+            float(self.cfg.tracking.hunt_crossley_dissipation),
+            device=self.device,
+        )
+        self.virtual_contact_surface_offset = torch.zeros(
+            (self.num_envs, 1), device=self.device
+        )
+        self.virtual_contact_normal_tilt = torch.zeros(
+            (self.num_envs, 1), device=self.device
+        )
+        self.virtual_contact_rotational_power_exponent = torch.full(
+            (self.num_envs, 1),
+            float(self.cfg.tracking.virtual_contact_rotational_power_exponent),
+            device=self.device,
+        )
+        self.virtual_contact_rotational_reference_penetration = torch.full(
+            (self.num_envs, 1),
+            float(self.cfg.tracking.virtual_contact_rotational_reference_penetration),
+            device=self.device,
+        )
+        self.virtual_contact_rotational_damping = torch.full(
+            (self.num_envs, 1),
+            float(self.cfg.tracking.virtual_contact_rotational_damping),
+            device=self.device,
+        )
+        self.virtual_contact_rotational_coefficient = torch.full(
+            (self.num_envs, 1),
+            float(self.cfg.tracking.virtual_contact_rotational_stiffness),
+            device=self.device,
+        )
         self.virtual_surface_distance = torch.full((self.num_envs, 1), 1.0, device=self.device)
         self.virtual_contact_force = torch.zeros((self.num_envs, 3), device=self.device)
         self.virtual_contact_torque = torch.zeros((self.num_envs, 3), device=self.device)
@@ -921,6 +984,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             self.force_sensor_obs = descale_virtual_sensor_wrench(
                 self.force_sensor_smooth,
                 self.cfg.tracking.virtual_contact_force_scale,
+                self.cfg.tracking.virtual_contact_torque_scale,
             )
             self.force_sensor_obs += self.force_sensor_bias + sensor_noise
             proprio_parts.append(self.force_sensor_obs / self._wrench_scale)
@@ -937,7 +1001,20 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         ]
         if self.virtual_contact_enabled:
             if str(self.cfg.tracking.contact_model) == "power_law":
-                stiffness_max = max(float(self.cfg.tracking.power_law_coefficient), 1.0e-6)
+                if bool(self.cfg.tracking.virtual_contact_randomize_parameters):
+                    exponent_max = float(
+                        self.cfg.tracking.power_law_exponent_range[1]
+                    )
+                    penetration_min = float(
+                        self.cfg.tracking.power_law_reference_penetration_range[0]
+                    )
+                    stiffness_max = float(
+                        self.cfg.tracking.power_law_reference_force
+                    ) / penetration_min**exponent_max
+                else:
+                    stiffness_max = max(
+                        float(self.cfg.tracking.power_law_coefficient), 1.0e-6
+                    )
             else:
                 stiffness_max = max(float(self.cfg.tracking.virtual_contact_plane_stiffness), 1.0e-6)
             damping_max = 2.0 * max(float(self.cfg.tracking.virtual_contact_damping_ratio), 1.0e-6) * math.sqrt(
@@ -1087,6 +1164,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             measured_wrench = descale_virtual_sensor_wrench(
                 self.force_sensor_smooth,
                 self.cfg.tracking.virtual_contact_force_scale,
+                self.cfg.tracking.virtual_contact_torque_scale,
             )
             measured_force = measured_wrench[:, :3]
             measured_torque = measured_wrench[:, 3:]
@@ -1148,6 +1226,36 @@ class FrankaRobustTrackEnv(DirectRLEnv):
                 actual_force_mag > goal_force_mag + float(self.cfg.reward.force_over_margin)
             ).float().mean()
             self.extras["normal_stiffness_mean"] = normal_gain.mean()
+            if bool(self.cfg.tracking.virtual_contact_randomize_parameters):
+                self.extras["contact_power_exponent_mean"] = (
+                    self.virtual_contact_power_exponent.mean()
+                )
+                self.extras["contact_reference_penetration_mean_mm"] = (
+                    1000.0 * self.virtual_contact_reference_penetration.mean()
+                )
+                self.extras["contact_dissipation_mean"] = (
+                    self.virtual_contact_dissipation.mean()
+                )
+                self.extras["contact_surface_offset_mean_mm"] = (
+                    1000.0 * self.virtual_contact_surface_offset.mean()
+                )
+                self.extras["contact_normal_tilt_mean_deg"] = (
+                    (180.0 / math.pi) * self.virtual_contact_normal_tilt.mean()
+                )
+                if self.wrench_dim == 6:
+                    self.extras["contact_rotational_power_exponent_mean"] = (
+                        self.virtual_contact_rotational_power_exponent.mean()
+                    )
+                    self.extras["contact_rotational_penetration_mean"] = (
+                        self.virtual_contact_rotational_reference_penetration.mean()
+                    )
+                    self.extras["contact_rotational_damping_mean"] = (
+                        self.virtual_contact_rotational_damping.mean()
+                    )
+            elif bool(self.cfg.tracking.virtual_contact_randomize_surface_offset):
+                self.extras["contact_surface_offset_mean_mm"] = (
+                    1000.0 * self.virtual_contact_surface_offset.mean()
+                )
 
         rewards = {
             "pos_track": torch.exp(-pos_error_norm / self.cfg.reward.pos_error_temp) * self.cfg.reward.pos_error_scale,
@@ -2711,19 +2819,103 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self.traj_applied_wrench_buf[env_ids, :, : self.wrench_dim] = wrench
         self.traj_contact_buf[env_ids] = contact
 
+    def _sample_virtual_contact_range(
+        self,
+        values,
+        count: int,
+        *,
+        log_uniform: bool = False,
+    ) -> torch.Tensor:
+        """Sample one scalar contact parameter for each resetting environment."""
+        low, high = (float(value) for value in values)
+        unit = torch.rand((count, 1), device=self.device)
+        if log_uniform:
+            return torch.exp(math.log(low) + (math.log(high) - math.log(low)) * unit)
+        return low + (high - low) * unit
+
+    def _sample_virtual_contact_parameters(self, env_ids: torch.Tensor):
+        """Sample or restore episode-constant virtual-contact parameters."""
+        count = len(env_ids)
+        if count == 0:
+            return
+        tcfg = self.cfg.tracking
+        if bool(tcfg.virtual_contact_randomize_parameters):
+            self.virtual_contact_power_exponent[env_ids] = self._sample_virtual_contact_range(
+                tcfg.power_law_exponent_range, count
+            )
+            self.virtual_contact_reference_penetration[env_ids] = (
+                self._sample_virtual_contact_range(
+                    tcfg.power_law_reference_penetration_range,
+                    count,
+                    log_uniform=True,
+                )
+            )
+            self.virtual_contact_dissipation[env_ids] = self._sample_virtual_contact_range(
+                tcfg.hunt_crossley_dissipation_range, count
+            )
+            self.virtual_contact_normal_tilt[env_ids] = self._sample_virtual_contact_range(
+                tcfg.virtual_contact_normal_tilt_range, count
+            )
+            self.virtual_contact_rotational_power_exponent[env_ids] = (
+                self._sample_virtual_contact_range(
+                    tcfg.virtual_contact_rotational_power_exponent_range, count
+                )
+            )
+            self.virtual_contact_rotational_reference_penetration[env_ids] = (
+                self._sample_virtual_contact_range(
+                    tcfg.virtual_contact_rotational_reference_penetration_range,
+                    count,
+                    log_uniform=True,
+                )
+            )
+            self.virtual_contact_rotational_damping[env_ids] = (
+                self._sample_virtual_contact_range(
+                    tcfg.virtual_contact_rotational_damping_range, count
+                )
+            )
+        else:
+            self.virtual_contact_power_exponent[env_ids] = float(tcfg.power_law_exponent)
+            self.virtual_contact_reference_penetration[env_ids] = float(
+                tcfg.power_law_reference_penetration
+            )
+            self.virtual_contact_dissipation[env_ids] = float(
+                tcfg.hunt_crossley_dissipation
+            )
+            self.virtual_contact_normal_tilt[env_ids] = 0.0
+            self.virtual_contact_rotational_power_exponent[env_ids] = float(
+                tcfg.virtual_contact_rotational_power_exponent
+            )
+            self.virtual_contact_rotational_reference_penetration[env_ids] = float(
+                tcfg.virtual_contact_rotational_reference_penetration
+            )
+            self.virtual_contact_rotational_damping[env_ids] = float(
+                tcfg.virtual_contact_rotational_damping
+            )
+        if bool(
+            tcfg.virtual_contact_randomize_parameters
+            or tcfg.virtual_contact_randomize_surface_offset
+        ):
+            self.virtual_contact_surface_offset[env_ids] = self._sample_virtual_contact_range(
+                tcfg.virtual_contact_surface_offset_range, count
+            )
+        else:
+            self.virtual_contact_surface_offset[env_ids] = 0.0
+
     def _sample_virtual_contact_surface(self, env_ids: torch.Tensor):
-        """Construct a deterministic virtual plane at every reference timestep.
+        """Construct a randomized virtual plane at every reference timestep.
 
         A centered moving average stabilizes the demonstrated force direction.
         For the selected elastic coefficient k_p and exponent p, each plane is
         placed (|F_goal| / k_p) ** (1/p) above the reference EE pose along that
-        direction. At zero relative penetration rate, the reference pose therefore
-        produces the target magnitude.
+        direction. The nominal plane therefore reproduces the target magnitude;
+        the optional episode-level offset and tilt are applied afterward so the
+        policy must correct the resulting hidden geometry error.
         """
         n_envs = len(env_ids)
         if n_envs == 0:
             return
         tcfg = self.cfg.tracking
+        self._sample_virtual_contact_parameters(env_ids)
         wrench = self.traj_wrench_buf[env_ids]
         if self.dataset_wrench_convention == "sensor_child_joint_reaction":
             sensor_quat_in_tool = self.force_sensor_quat_in_tool[env_ids].unsqueeze(1).expand(
@@ -2744,8 +2936,14 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         scaled_external_wrench_world[..., 3:] *= reference_torque_scale
         scaled_force_world = scaled_external_wrench_world[..., :3]
         if str(tcfg.contact_model) == "power_law":
-            contact_coefficient = float(tcfg.power_law_coefficient)
-            contact_exponent = float(tcfg.power_law_exponent)
+            contact_exponent = self.virtual_contact_power_exponent[env_ids]
+            contact_coefficient = power_law_coefficient_from_reference(
+                reference_force=float(tcfg.power_law_reference_force),
+                reference_penetration=self.virtual_contact_reference_penetration[
+                    env_ids
+                ],
+                exponent=contact_exponent,
+            )
         elif str(tcfg.contact_model) == "exponential":
             reference_force = float(tcfg.power_law_reference_force)
             reference_penetration = float(tcfg.power_law_reference_penetration)
@@ -2775,9 +2973,40 @@ class FrankaRobustTrackEnv(DirectRLEnv):
                 direction_force_threshold=float(tcfg.virtual_contact_goal_threshold),
                 power_law_exponent=contact_exponent,
             )
+        if bool(
+            tcfg.virtual_contact_randomize_parameters
+            or tcfg.virtual_contact_randomize_surface_offset
+        ):
+            base_normal = surface_normal[:, 0]
+            random_axis = torch.randn_like(base_normal)
+            random_axis = random_axis - (
+                random_axis * base_normal
+            ).sum(dim=-1, keepdim=True) * base_normal
+            axis_norm = torch.linalg.norm(random_axis, dim=-1, keepdim=True)
+            fallback_axis, _ = self._orthonormal_basis(base_normal)
+            random_axis = torch.where(
+                axis_norm > 1.0e-6,
+                random_axis / axis_norm.clamp_min(1.0e-6),
+                fallback_axis,
+            )
+            tilt_rotation_vector = (
+                random_axis * self.virtual_contact_normal_tilt[env_ids]
+            )
+            surface_point, surface_normal = perturb_reference_plane_trajectory(
+                surface_point,
+                surface_normal,
+                normal_offset=self.virtual_contact_surface_offset[env_ids],
+                tilt_rotation_vector=tilt_rotation_vector,
+            )
         # Plane placement uses the converted/scaled world external force, while
         # observations and metrics retain the original recorded sensor reaction.
-        stiffness = torch.full((n_envs, 1), contact_coefficient, device=self.device)
+        stiffness = torch.as_tensor(
+            contact_coefficient, dtype=surface_point.dtype, device=self.device
+        )
+        if stiffness.ndim == 0:
+            stiffness = stiffness.expand(n_envs, 1).clone()
+        else:
+            stiffness = stiffness.reshape(n_envs, 1)
         damping_ratio = float(tcfg.virtual_contact_damping_ratio)
         effective_mass = max(float(tcfg.virtual_contact_effective_mass), 1.0e-6)
         if str(tcfg.contact_model) == "linear":
@@ -2793,6 +3022,50 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self.traj_surface_normal_buf[env_ids] = surface_normal
         self.traj_surface_velocity_buf[env_ids] = finite_difference_surface_velocity(
             surface_point, timestep=self.reference_dt
+        )
+        target_torque_world = (
+            scaled_external_wrench_world[..., 3:]
+            if self.wrench_dim == 6
+            else torch.zeros_like(scaled_force_world)
+        )
+        rotational_power_exponent = (
+            self.virtual_contact_rotational_power_exponent[env_ids]
+            if tcfg.virtual_contact_torque_model == "orientation_power_law"
+            else 1.0
+        )
+        rotational_coefficient = (
+            power_law_coefficient_from_reference(
+                reference_force=float(
+                    tcfg.virtual_contact_rotational_reference_torque
+                ),
+                reference_penetration=self.virtual_contact_rotational_reference_penetration[
+                    env_ids
+                ],
+                exponent=rotational_power_exponent,
+            )
+            if tcfg.virtual_contact_torque_model == "orientation_power_law"
+            else float(tcfg.virtual_contact_rotational_stiffness)
+        )
+        if isinstance(rotational_coefficient, torch.Tensor):
+            self.virtual_contact_rotational_coefficient[env_ids] = rotational_coefficient
+        else:
+            self.virtual_contact_rotational_coefficient[env_ids] = float(
+                rotational_coefficient
+            )
+        rotational_equilibrium_quat = construct_rotational_equilibrium_trajectory(
+            reference_quat_world=self.traj_quat_buf[env_ids],
+            target_torque_world=target_torque_world,
+            rotational_stiffness=rotational_coefficient,
+            power_law_exponent=rotational_power_exponent,
+            torque_scale=float(tcfg.virtual_contact_torque_scale),
+            torque_cap=float(tcfg.virtual_contact_torque_cap),
+        )
+        self.traj_rotational_equilibrium_quat_buf[env_ids] = rotational_equilibrium_quat
+        self.traj_rotational_equilibrium_angvel_buf[env_ids] = (
+            finite_difference_quaternion_angular_velocity(
+                rotational_equilibrium_quat,
+                timestep=self.reference_dt,
+            )
         )
         self.traj_virtual_target_wrench_buf[env_ids] = scaled_external_wrench_world
         self.virtual_surface_stiffness[env_ids] = stiffness
@@ -2818,27 +3091,42 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self.traj_contact_buf[env_ids] = goal_mag > float(tcfg.dataset_contact_force_threshold)
 
     def _set_virtual_contact_surface_at_index(self, idx: torch.Tensor):
-        """Select the per-timestep plane corresponding to each environment."""
+        """Select and hold one native-reference virtual-contact state."""
         idx = idx.clamp(0, self._traj_len - 1)
         self.virtual_surface_point[:] = self.traj_surface_point_buf[self._env_arange, idx]
         self.virtual_surface_normal[:] = self.traj_surface_normal_buf[self._env_arange, idx]
         self.virtual_surface_velocity[:] = self.traj_surface_velocity_buf[self._env_arange, idx]
+        self.virtual_rotational_equilibrium_quat[:] = (
+            self.traj_rotational_equilibrium_quat_buf[self._env_arange, idx]
+        )
+        self.virtual_rotational_equilibrium_angvel[:] = (
+            self.traj_rotational_equilibrium_angvel_buf[self._env_arange, idx]
+        )
         target_wrench = self.traj_virtual_target_wrench_buf[self._env_arange, idx]
         self.virtual_target_force[:] = target_wrench[:, :3]
         if self.wrench_dim == 6:
             self.virtual_target_torque[:] = target_wrench[:, 3:]
         else:
             self.virtual_target_torque.zero_()
+        self.target_wrench[:] = self._traj_wrench_at_index(idx)
 
     def _set_virtual_contact_surface_at_policy_step(
         self,
         policy_step: torch.Tensor,
         completed_physics_substeps: int = 0,
     ):
-        """Interpolate the virtual-contact goal on the native reference grid."""
-        i0, i1, phase = self._reference_coordinates(
-            policy_step, completed_physics_substeps
+        """Select the virtual-contact state using interpolation or native ZOH."""
+        i0, i1, phase = virtual_contact_reference_coordinates(
+            policy_step,
+            policy_decimation=int(self.cfg.decimation),
+            reference_decimation=self.reference_decimation,
+            completed_physics_substeps=completed_physics_substeps,
+            interpolate=bool(
+                self.cfg.tracking.virtual_contact_interpolate_reference
+            ),
         )
+        i0 = i0.clamp(0, self._traj_len - 1)
+        i1 = i1.clamp(0, self._traj_len - 1)
         blend = phase.unsqueeze(-1)
 
         def interpolate(buffer):
@@ -2854,15 +3142,27 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self.virtual_surface_velocity[:] = interpolate(
             self.traj_surface_velocity_buf
         )
+        equilibrium_q0 = self.traj_rotational_equilibrium_quat_buf[
+            self._env_arange, i0
+        ]
+        equilibrium_q1 = self.traj_rotational_equilibrium_quat_buf[
+            self._env_arange, i1
+        ]
+        self.virtual_rotational_equilibrium_quat[:] = quaternion_nlerp(
+            equilibrium_q0,
+            equilibrium_q1,
+            blend,
+        )
+        self.virtual_rotational_equilibrium_angvel[:] = interpolate(
+            self.traj_rotational_equilibrium_angvel_buf
+        )
         target_wrench = interpolate(self.traj_virtual_target_wrench_buf)
         self.virtual_target_force[:] = target_wrench[:, :3]
         if self.wrench_dim == 6:
             self.virtual_target_torque[:] = target_wrench[:, 3:]
         else:
             self.virtual_target_torque.zero_()
-        self.target_wrench[:] = self._traj_wrench_at_policy_step(
-            policy_step, completed_physics_substeps
-        )
+        self.target_wrench[:] = interpolate(self.traj_wrench_buf)
 
     def _update_virtual_contact_force(
         self, completed_physics_substeps: int = 0
@@ -2887,8 +3187,8 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             force_cap=float(self.cfg.tracking.virtual_contact_force_cap),
             surface_velocity=self.virtual_surface_velocity,
             contact_model=str(self.cfg.tracking.contact_model),
-            hunt_crossley_dissipation=float(self.cfg.tracking.hunt_crossley_dissipation),
-            power_law_exponent=float(self.cfg.tracking.power_law_exponent),
+            hunt_crossley_dissipation=self.virtual_contact_dissipation,
+            power_law_exponent=self.virtual_contact_power_exponent,
             exponential_sharpness=float(self.cfg.tracking.exponential_sharpness),
             exponential_reference_force=float(self.cfg.tracking.power_law_reference_force),
             exponential_reference_penetration=float(self.cfg.tracking.power_law_reference_penetration),
@@ -2899,14 +3199,51 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self.virtual_surface_distance[:] = distance
         self.virtual_contact_force[:] = contact_force
         self.current_contact[:] = distance.squeeze(-1) < 0.0
-        self.virtual_contact_torque[:] = contact_coupled_torque(
-            target_force_world=self.virtual_target_force,
-            target_torque_world=self.virtual_target_torque,
-            actual_force_world=self.virtual_contact_force,
-            in_contact=self.current_contact,
-            max_multiplier=float(self.cfg.tracking.max_damping_multiplier),
-            torque_cap=float(self.cfg.tracking.virtual_contact_torque_cap),
-        )
+        if self.cfg.tracking.virtual_contact_torque_model == "orientation_spring":
+            self.virtual_contact_torque[:] = orientation_spring_contact_torque(
+                current_quat_world=self.fingertip_midpoint_quat,
+                current_angvel_world=self.fingertip_midpoint_angvel,
+                equilibrium_quat_world=self.virtual_rotational_equilibrium_quat,
+                equilibrium_angvel_world=self.virtual_rotational_equilibrium_angvel,
+                in_contact=self.current_contact,
+                rotational_stiffness=float(
+                    self.cfg.tracking.virtual_contact_rotational_stiffness
+                ),
+                rotational_damping=float(
+                    self.cfg.tracking.virtual_contact_rotational_damping
+                ),
+                torque_scale=float(self.cfg.tracking.virtual_contact_torque_scale),
+                torque_cap=float(self.cfg.tracking.virtual_contact_torque_cap),
+            )
+        elif self.cfg.tracking.virtual_contact_torque_model == "orientation_power_law":
+            self.virtual_contact_torque[:] = orientation_power_law_contact_torque(
+                current_quat_world=self.fingertip_midpoint_quat,
+                current_angvel_world=self.fingertip_midpoint_angvel,
+                equilibrium_quat_world=self.virtual_rotational_equilibrium_quat,
+                equilibrium_angvel_world=self.virtual_rotational_equilibrium_angvel,
+                in_contact=self.current_contact,
+                rotational_coefficient=self.virtual_contact_rotational_coefficient,
+                power_law_exponent=self.virtual_contact_rotational_power_exponent,
+                rotational_damping=self.virtual_contact_rotational_damping,
+                torque_scale=float(self.cfg.tracking.virtual_contact_torque_scale),
+                torque_cap=float(self.cfg.tracking.virtual_contact_torque_cap),
+            )
+        else:
+            self.virtual_contact_torque[:] = contact_coupled_torque(
+                # Compare forces in physical units. At the demonstrated pose the
+                # actual force includes this same post-model physical scale, so the
+                # torque ratio remains one even when force is physically softened.
+                target_force_world=(
+                    self.virtual_target_force
+                    * float(self.cfg.tracking.virtual_contact_force_scale)
+                ),
+                target_torque_world=self.virtual_target_torque,
+                actual_force_world=self.virtual_contact_force,
+                in_contact=self.current_contact,
+                max_multiplier=float(self.cfg.tracking.max_damping_multiplier),
+                torque_cap=float(self.cfg.tracking.virtual_contact_torque_cap),
+                torque_scale=float(self.cfg.tracking.virtual_contact_torque_scale),
+            )
 
     def _update_virtual_contact_sensor(self):
         """Sample and filter the virtual sensor once per physics substep.

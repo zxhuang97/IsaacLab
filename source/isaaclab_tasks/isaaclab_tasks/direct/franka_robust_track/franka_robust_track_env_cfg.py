@@ -269,6 +269,11 @@ class TrackingCfg:
     # policy-controlled robot stiffness.
     virtual_contact_goal_threshold: float = 1.0  # N
     virtual_contact_direction_smoothing_window: int = 9  # odd, centered, control samples
+    # True linearly interpolates the dataset-conditioned surface point, surface
+    # velocity, and target wrench at the physics rate, and interpolates then
+    # renormalizes the surface normal. False zero-order holds all four fields at
+    # their native reference samples (15 Hz for the async peg launcher).
+    virtual_contact_interpolate_reference: bool = True
     virtual_contact_plane_stiffness: float = 1500.0  # k_p, N/m
     # Scale only the force used to place the virtual plane. The recorded wrench
     # remains the tracking/metric target. Values > 1 model a stronger physical
@@ -279,8 +284,24 @@ class TrackingCfg:
     # reaches the policy/reward, preserving the original dataset wrench units.
     # The plane geometry and dataset target are unchanged.
     virtual_contact_force_scale: float = 1.0
+    # Independent post-model multiplier on physically applied contact torque.
+    # Virtual torque feedback is divided by this value, independently of force.
+    virtual_contact_torque_scale: float = 1.0
     # Independent scale for the demonstrated torque coupled to virtual contact.
     virtual_contact_reference_torque_scale: float = 1.0
+    # Legacy replay scales demonstrated torque by normal-force magnitude.
+    # The orientation models instead construct an offset equilibrium orientation
+    # and compute torque from live orientation and angular-velocity error.
+    virtual_contact_torque_model: Literal[
+        "dataset_force_coupled", "orientation_spring", "orientation_power_law"
+    ] = "dataset_force_coupled"
+    virtual_contact_rotational_stiffness: float = 4.0  # Nm/rad
+    virtual_contact_rotational_damping: float = 0.1  # Nm*s/rad
+    # For orientation_power_law, K_p is derived from these reference values:
+    # K_p = tau_ref / theta_ref**p.  The angular penetration is in radians.
+    virtual_contact_rotational_power_exponent: float = 1.5
+    virtual_contact_rotational_reference_torque: float = 0.2  # Nm
+    virtual_contact_rotational_reference_penetration: float = 0.05  # rad
     # Select the normal-force law. The linear model uses a Kelvin-Voigt damping
     # coefficient derived from damping_ratio; Drake Hunt-Crossley and power_law
     # use the separate multiplicative dissipation coefficient below (units s/m).
@@ -302,6 +323,25 @@ class TrackingCfg:
     virtual_contact_transition_width: float = 0.0  # m; zero preserves exact F=k_p*penetration
     virtual_contact_force_cap: float = 20.0  # N; zero disables the clamp
     virtual_contact_torque_cap: float = 2.0  # Nm; zero disables the clamp
+
+    # Reset-time, per-environment contact-domain randomization. Parameters are
+    # sampled once and held for the complete episode so the actor can infer the
+    # hidden contact law from its observation history. Disabled by default to
+    # preserve existing checkpoint and replay behavior.
+    virtual_contact_randomize_parameters: bool = False
+    # Narrow ablation switch: randomize only the signed normal surface offset,
+    # leaving the contact law and normal direction fixed.
+    virtual_contact_randomize_surface_offset: bool = False
+    power_law_exponent_range = [1.0, 1.6]
+    power_law_reference_penetration_range = [0.003, 0.010]  # m, log-uniform
+    hunt_crossley_dissipation_range = [0.0, 100.0]  # s/m
+    virtual_contact_surface_offset_range = [-0.002, 0.002]  # m along tilted normal
+    virtual_contact_normal_tilt_range = [0.0, 0.17453292519943295]  # rad, 0--10 deg
+    virtual_contact_rotational_power_exponent_range = [1.1, 2.0]
+    virtual_contact_rotational_reference_penetration_range = [0.2, 0.6]  # rad, log-uniform
+    virtual_contact_rotational_damping_range = [0.0, 0.05]  # Nm*s/rad
+    # TODO: evaluate physical-force-scale randomization as an isolated follow-up;
+    # keep virtual_contact_force_scale fixed for the first adaptive-policy study.
 
     # Synthetic six-axis wrench sensor shown to the actor. Noise and reset-time
     # bias are disabled so training matches hierarchical Forge evaluation.
@@ -770,10 +810,18 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "force_dir_drift",
             "virtual_contact_goal_threshold",
             "virtual_contact_direction_smoothing_window",
+            "virtual_contact_interpolate_reference",
             "virtual_contact_plane_stiffness",
             "virtual_contact_reference_force_scale",
             "virtual_contact_force_scale",
+            "virtual_contact_torque_scale",
             "virtual_contact_reference_torque_scale",
+            "virtual_contact_torque_model",
+            "virtual_contact_rotational_stiffness",
+            "virtual_contact_rotational_damping",
+            "virtual_contact_rotational_power_exponent",
+            "virtual_contact_rotational_reference_torque",
+            "virtual_contact_rotational_reference_penetration",
             "contact_model",
             "virtual_contact_damping_ratio",
             "hunt_crossley_dissipation",
@@ -787,6 +835,16 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "virtual_contact_transition_width",
             "virtual_contact_force_cap",
             "virtual_contact_torque_cap",
+            "virtual_contact_randomize_parameters",
+            "virtual_contact_randomize_surface_offset",
+            "power_law_exponent_range",
+            "power_law_reference_penetration_range",
+            "hunt_crossley_dissipation_range",
+            "virtual_contact_surface_offset_range",
+            "virtual_contact_normal_tilt_range",
+            "virtual_contact_rotational_power_exponent_range",
+            "virtual_contact_rotational_reference_penetration_range",
+            "virtual_contact_rotational_damping_range",
             "force_sensor_smoothing_factor",
             "force_sensor_noise_std",
             "force_sensor_bias_range",
@@ -978,8 +1036,43 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
                 raise ValueError("tracking.virtual_contact_reference_force_scale must be positive")
             if float(self.tracking.virtual_contact_force_scale) <= 0.0:
                 raise ValueError("tracking.virtual_contact_force_scale must be positive")
+            if float(self.tracking.virtual_contact_torque_scale) <= 0.0:
+                raise ValueError("tracking.virtual_contact_torque_scale must be positive")
             if float(self.tracking.virtual_contact_reference_torque_scale) <= 0.0:
                 raise ValueError("tracking.virtual_contact_reference_torque_scale must be positive")
+            self.tracking.virtual_contact_torque_model = str(
+                self.tracking.virtual_contact_torque_model
+            )
+            if self.tracking.virtual_contact_torque_model not in (
+                "dataset_force_coupled",
+                "orientation_spring",
+                "orientation_power_law",
+            ):
+                raise ValueError(
+                    "tracking.virtual_contact_torque_model must be "
+                    "'dataset_force_coupled', 'orientation_spring', or "
+                    "'orientation_power_law'"
+                )
+            if float(self.tracking.virtual_contact_rotational_stiffness) <= 0.0:
+                raise ValueError(
+                    "tracking.virtual_contact_rotational_stiffness must be positive"
+                )
+            if float(self.tracking.virtual_contact_rotational_damping) < 0.0:
+                raise ValueError(
+                    "tracking.virtual_contact_rotational_damping must be non-negative"
+                )
+            if float(self.tracking.virtual_contact_rotational_power_exponent) <= 0.0:
+                raise ValueError(
+                    "tracking.virtual_contact_rotational_power_exponent must be positive"
+                )
+            if float(self.tracking.virtual_contact_rotational_reference_torque) <= 0.0:
+                raise ValueError(
+                    "tracking.virtual_contact_rotational_reference_torque must be positive"
+                )
+            if float(self.tracking.virtual_contact_rotational_reference_penetration) <= 0.0:
+                raise ValueError(
+                    "tracking.virtual_contact_rotational_reference_penetration must be positive"
+                )
             self.tracking.contact_model = str(self.tracking.contact_model)
             if self.tracking.contact_model not in (
                 "linear",
@@ -1016,6 +1109,41 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
                 raise ValueError("tracking.virtual_contact_torque_cap must be non-negative")
             if float(self.tracking.virtual_contact_transition_width) < 0.0:
                 raise ValueError("tracking.virtual_contact_transition_width must be non-negative")
+            self.tracking.virtual_contact_randomize_parameters = bool(
+                self.tracking.virtual_contact_randomize_parameters
+            )
+            self.tracking.virtual_contact_randomize_surface_offset = bool(
+                self.tracking.virtual_contact_randomize_surface_offset
+            )
+            randomization_ranges = {
+                "power_law_exponent_range": (True, False),
+                "power_law_reference_penetration_range": (True, True),
+                "hunt_crossley_dissipation_range": (False, False),
+                "virtual_contact_surface_offset_range": (False, False),
+                "virtual_contact_normal_tilt_range": (False, False),
+                "virtual_contact_rotational_power_exponent_range": (True, False),
+                "virtual_contact_rotational_reference_penetration_range": (True, True),
+                "virtual_contact_rotational_damping_range": (False, False),
+            }
+            for name, (positive, log_uniform) in randomization_ranges.items():
+                values = list(getattr(self.tracking, name))
+                if len(values) != 2:
+                    raise ValueError(f"tracking.{name} must be [low, high]")
+                low, high = (float(value) for value in values)
+                if low > high:
+                    raise ValueError(f"tracking.{name} must satisfy low <= high")
+                if positive and low <= 0.0:
+                    raise ValueError(f"tracking.{name} lower bound must be positive")
+                if not positive and name != "virtual_contact_surface_offset_range" and low < 0.0:
+                    raise ValueError(f"tracking.{name} lower bound must be non-negative")
+                if log_uniform and low <= 0.0:
+                    raise ValueError(f"tracking.{name} log-uniform bounds must be positive")
+                setattr(self.tracking, name, [low, high])
+            if self.tracking.virtual_contact_randomize_parameters:
+                if self.tracking.contact_model != "power_law":
+                    raise ValueError(
+                        "virtual-contact parameter randomization requires contact_model='power_law'"
+                    )
             if not 0.0 <= float(self.tracking.force_sensor_smoothing_factor) <= 1.0:
                 raise ValueError("tracking.force_sensor_smoothing_factor must be in [0, 1]")
             if float(self.tracking.torque_sensor_noise_std) < 0.0:
