@@ -287,6 +287,9 @@ class TrackingCfg:
     # Independent post-model multiplier on physically applied contact torque.
     # Virtual torque feedback is divided by this value, independently of force.
     virtual_contact_torque_scale: float = 1.0
+    # Regression-only compatibility switch. The legacy implementation divided
+    # all six feedback components by virtual_contact_force_scale.
+    virtual_contact_legacy_wrench_descaling: bool = False
     # Independent scale for the demonstrated torque coupled to virtual contact.
     virtual_contact_reference_torque_scale: float = 1.0
     # Legacy replay scales demonstrated torque by normal-force magnitude.

@@ -984,7 +984,11 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             self.force_sensor_obs = descale_virtual_sensor_wrench(
                 self.force_sensor_smooth,
                 self.cfg.tracking.virtual_contact_force_scale,
-                self.cfg.tracking.virtual_contact_torque_scale,
+                torque_scale=(
+                    None
+                    if self.cfg.tracking.virtual_contact_legacy_wrench_descaling
+                    else self.cfg.tracking.virtual_contact_torque_scale
+                ),
             )
             self.force_sensor_obs += self.force_sensor_bias + sensor_noise
             proprio_parts.append(self.force_sensor_obs / self._wrench_scale)
@@ -1164,7 +1168,11 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             measured_wrench = descale_virtual_sensor_wrench(
                 self.force_sensor_smooth,
                 self.cfg.tracking.virtual_contact_force_scale,
-                self.cfg.tracking.virtual_contact_torque_scale,
+                torque_scale=(
+                    None
+                    if self.cfg.tracking.virtual_contact_legacy_wrench_descaling
+                    else self.cfg.tracking.virtual_contact_torque_scale
+                ),
             )
             measured_force = measured_wrench[:, :3]
             measured_torque = measured_wrench[:, 3:]
