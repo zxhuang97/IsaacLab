@@ -2923,7 +2923,11 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         if n_envs == 0:
             return
         tcfg = self.cfg.tracking
-        self._sample_virtual_contact_parameters(env_ids)
+        legacy_fixed_parameters = bool(
+            tcfg.virtual_contact_legacy_fixed_parameters
+        )
+        if not legacy_fixed_parameters:
+            self._sample_virtual_contact_parameters(env_ids)
         wrench = self.traj_wrench_buf[env_ids]
         if self.dataset_wrench_convention == "sensor_child_joint_reaction":
             sensor_quat_in_tool = self.force_sensor_quat_in_tool[env_ids].unsqueeze(1).expand(
@@ -2944,14 +2948,18 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         scaled_external_wrench_world[..., 3:] *= reference_torque_scale
         scaled_force_world = scaled_external_wrench_world[..., :3]
         if str(tcfg.contact_model) == "power_law":
-            contact_exponent = self.virtual_contact_power_exponent[env_ids]
-            contact_coefficient = power_law_coefficient_from_reference(
-                reference_force=float(tcfg.power_law_reference_force),
-                reference_penetration=self.virtual_contact_reference_penetration[
-                    env_ids
-                ],
-                exponent=contact_exponent,
-            )
+            if legacy_fixed_parameters:
+                contact_exponent = float(tcfg.power_law_exponent)
+                contact_coefficient = float(tcfg.power_law_coefficient)
+            else:
+                contact_exponent = self.virtual_contact_power_exponent[env_ids]
+                contact_coefficient = power_law_coefficient_from_reference(
+                    reference_force=float(tcfg.power_law_reference_force),
+                    reference_penetration=self.virtual_contact_reference_penetration[
+                        env_ids
+                    ],
+                    exponent=contact_exponent,
+                )
         elif str(tcfg.contact_model) == "exponential":
             reference_force = float(tcfg.power_law_reference_force)
             reference_penetration = float(tcfg.power_law_reference_penetration)
@@ -3184,6 +3192,19 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         self._set_virtual_contact_surface_at_policy_step(
             self.episode_length_buf, completed_physics_substeps
         )
+        legacy_fixed_parameters = bool(
+            self.cfg.tracking.virtual_contact_legacy_fixed_parameters
+        )
+        contact_dissipation = (
+            float(self.cfg.tracking.hunt_crossley_dissipation)
+            if legacy_fixed_parameters
+            else self.virtual_contact_dissipation
+        )
+        contact_exponent = (
+            float(self.cfg.tracking.power_law_exponent)
+            if legacy_fixed_parameters
+            else self.virtual_contact_power_exponent
+        )
         distance, contact_force = compute_virtual_plane_contact(
             position=self.fingertip_midpoint_pos,
             linear_velocity=self.fingertip_midpoint_linvel,
@@ -3195,8 +3216,8 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             force_cap=float(self.cfg.tracking.virtual_contact_force_cap),
             surface_velocity=self.virtual_surface_velocity,
             contact_model=str(self.cfg.tracking.contact_model),
-            hunt_crossley_dissipation=self.virtual_contact_dissipation,
-            power_law_exponent=self.virtual_contact_power_exponent,
+            hunt_crossley_dissipation=contact_dissipation,
+            power_law_exponent=contact_exponent,
             exponential_sharpness=float(self.cfg.tracking.exponential_sharpness),
             exponential_reference_force=float(self.cfg.tracking.power_law_reference_force),
             exponential_reference_penetration=float(self.cfg.tracking.power_law_reference_penetration),

@@ -290,6 +290,10 @@ class TrackingCfg:
     # Regression-only compatibility switch. The legacy implementation divided
     # all six feedback components by virtual_contact_force_scale.
     virtual_contact_legacy_wrench_descaling: bool = False
+    # Regression-only compatibility switch. Restore the pre-f892ff43 nominal
+    # fixed-contact scalar construction and runtime parameter path. This is
+    # intentionally incompatible with contact parameter/surface randomization.
+    virtual_contact_legacy_fixed_parameters: bool = False
     # Independent scale for the demonstrated torque coupled to virtual contact.
     virtual_contact_reference_torque_scale: float = 1.0
     # Legacy replay scales demonstrated torque by normal-force magnitude.
@@ -818,6 +822,8 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "virtual_contact_reference_force_scale",
             "virtual_contact_force_scale",
             "virtual_contact_torque_scale",
+            "virtual_contact_legacy_wrench_descaling",
+            "virtual_contact_legacy_fixed_parameters",
             "virtual_contact_reference_torque_scale",
             "virtual_contact_torque_model",
             "virtual_contact_rotational_stiffness",
@@ -1118,6 +1124,17 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             self.tracking.virtual_contact_randomize_surface_offset = bool(
                 self.tracking.virtual_contact_randomize_surface_offset
             )
+            self.tracking.virtual_contact_legacy_fixed_parameters = bool(
+                self.tracking.virtual_contact_legacy_fixed_parameters
+            )
+            if self.tracking.virtual_contact_legacy_fixed_parameters and (
+                self.tracking.virtual_contact_randomize_parameters
+                or self.tracking.virtual_contact_randomize_surface_offset
+            ):
+                raise ValueError(
+                    "tracking.virtual_contact_legacy_fixed_parameters requires "
+                    "fixed contact parameters and surface offset"
+                )
             randomization_ranges = {
                 "power_law_exponent_range": (True, False),
                 "power_law_reference_penetration_range": (True, True),
