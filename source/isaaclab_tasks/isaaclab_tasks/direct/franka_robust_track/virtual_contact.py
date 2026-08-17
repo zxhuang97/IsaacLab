@@ -158,6 +158,32 @@ def world_external_to_sensor_reaction(
     )
 
 
+def contact_coupled_force_denominator(
+    target_force_world: torch.Tensor,
+    force_scale: float,
+    legacy_dataset_denominator: bool = False,
+) -> torch.Tensor:
+    """Return the target force used by dataset-force-coupled torque replay.
+
+    Current semantics compare physical realized force with the physically
+    scaled target. The pre-f892ff43 semantics instead divide by the unscaled
+    dataset target, causing physical torque to inherit the force scale. Keeping
+    this choice in a pure helper makes the one-factor compatibility invariant
+    directly testable without constructing an Isaac Sim environment.
+    """
+    if target_force_world.shape[-1] != 3:
+        raise ValueError(
+            "target_force_world must have trailing dimension 3, "
+            f"got {tuple(target_force_world.shape)}"
+        )
+    force_scale = float(force_scale)
+    if force_scale <= 0.0:
+        raise ValueError("force_scale must be positive")
+    if bool(legacy_dataset_denominator):
+        return target_force_world
+    return target_force_world * force_scale
+
+
 def contact_coupled_torque(
     target_force_world: torch.Tensor,
     target_torque_world: torch.Tensor,

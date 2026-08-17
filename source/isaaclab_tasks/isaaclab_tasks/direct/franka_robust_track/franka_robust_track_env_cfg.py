@@ -294,6 +294,10 @@ class TrackingCfg:
     # fixed-contact scalar construction and runtime parameter path. This is
     # intentionally incompatible with contact parameter/surface randomization.
     virtual_contact_legacy_fixed_parameters: bool = False
+    # Regression-only compatibility switch. The pre-f892ff43 dataset-coupled
+    # torque law divided physical force by the unscaled dataset target force.
+    # This affects only the dataset_force_coupled torque denominator.
+    virtual_contact_legacy_dataset_torque_coupling: bool = False
     # Independent scale for the demonstrated torque coupled to virtual contact.
     virtual_contact_reference_torque_scale: float = 1.0
     # Legacy replay scales demonstrated torque by normal-force magnitude.
@@ -824,6 +828,7 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "virtual_contact_torque_scale",
             "virtual_contact_legacy_wrench_descaling",
             "virtual_contact_legacy_fixed_parameters",
+            "virtual_contact_legacy_dataset_torque_coupling",
             "virtual_contact_reference_torque_scale",
             "virtual_contact_torque_model",
             "virtual_contact_rotational_stiffness",
@@ -1127,6 +1132,18 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             self.tracking.virtual_contact_legacy_fixed_parameters = bool(
                 self.tracking.virtual_contact_legacy_fixed_parameters
             )
+            self.tracking.virtual_contact_legacy_dataset_torque_coupling = bool(
+                self.tracking.virtual_contact_legacy_dataset_torque_coupling
+            )
+            if (
+                self.tracking.virtual_contact_legacy_dataset_torque_coupling
+                and self.tracking.virtual_contact_torque_model
+                != "dataset_force_coupled"
+            ):
+                raise ValueError(
+                    "tracking.virtual_contact_legacy_dataset_torque_coupling "
+                    "requires dataset_force_coupled torque"
+                )
             if self.tracking.virtual_contact_legacy_fixed_parameters and (
                 self.tracking.virtual_contact_randomize_parameters
                 or self.tracking.virtual_contact_randomize_surface_offset

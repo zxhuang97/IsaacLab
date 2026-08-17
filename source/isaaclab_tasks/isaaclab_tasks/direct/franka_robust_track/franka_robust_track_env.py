@@ -36,6 +36,7 @@ from .reference_clock import (
     virtual_contact_reference_coordinates,
 )
 from .virtual_contact import (
+    contact_coupled_force_denominator,
     contact_coupled_torque,
     compute_virtual_plane_contact,
     construct_reference_plane_trajectory,
@@ -3262,9 +3263,14 @@ class FrankaRobustTrackEnv(DirectRLEnv):
                 # Compare forces in physical units. At the demonstrated pose the
                 # actual force includes this same post-model physical scale, so the
                 # torque ratio remains one even when force is physically softened.
-                target_force_world=(
-                    self.virtual_target_force
-                    * float(self.cfg.tracking.virtual_contact_force_scale)
+                target_force_world=contact_coupled_force_denominator(
+                    self.virtual_target_force,
+                    force_scale=float(
+                        self.cfg.tracking.virtual_contact_force_scale
+                    ),
+                    legacy_dataset_denominator=bool(
+                        self.cfg.tracking.virtual_contact_legacy_dataset_torque_coupling
+                    ),
                 ),
                 target_torque_world=self.virtual_target_torque,
                 actual_force_world=self.virtual_contact_force,
