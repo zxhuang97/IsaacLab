@@ -73,3 +73,24 @@ def reference_coordinates(
     remainder = torch.remainder(total_physics_steps, reference_decimation)
     phase = remainder.float() / float(reference_decimation)
     return i0, i0 + 1, phase
+
+
+def virtual_contact_reference_coordinates(
+    policy_step: torch.Tensor,
+    *,
+    policy_decimation: int,
+    reference_decimation: int,
+    completed_physics_substeps: int = 0,
+    interpolate: bool = True,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return virtual-contact coordinates for interpolation or native-rate hold."""
+    i0, i1, phase = reference_coordinates(
+        policy_step,
+        policy_decimation=policy_decimation,
+        reference_decimation=reference_decimation,
+        completed_physics_substeps=completed_physics_substeps,
+    )
+    if not interpolate:
+        i1 = i0
+        phase = torch.zeros_like(phase)
+    return i0, i1, phase

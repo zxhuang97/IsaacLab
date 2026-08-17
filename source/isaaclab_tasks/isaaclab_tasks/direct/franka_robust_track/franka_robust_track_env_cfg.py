@@ -270,6 +270,8 @@ class TrackingCfg:
     virtual_contact_goal_threshold: float = 1.0  # N
     virtual_contact_direction_smoothing_window: int = 9  # odd, centered, control samples
     virtual_contact_plane_stiffness: float = 1500.0  # k_p, N/m
+    # Interpolate virtual-contact fields at the physics rate or hold one native sample.
+    virtual_contact_interpolate_reference: bool = True
     # Scale only the force used to place the virtual plane. The recorded wrench
     # remains the tracking/metric target. Values > 1 model a stronger physical
     # reaction than the measured dataset wrench at the demonstrated pose.
@@ -771,6 +773,7 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
             "virtual_contact_goal_threshold",
             "virtual_contact_direction_smoothing_window",
             "virtual_contact_plane_stiffness",
+            "virtual_contact_interpolate_reference",
             "virtual_contact_reference_force_scale",
             "virtual_contact_force_scale",
             "virtual_contact_reference_torque_scale",
@@ -966,6 +969,9 @@ class FrankaRobustTrackEnvCfg(DirectRLEnvCfg):
         if self.tracking.dataset_force_bias_samples < 0:
             raise ValueError("tracking.dataset_force_bias_samples must be non-negative")
         if self.tracking.enable_force and self.tracking.force_mode == "virtual_contact":
+            self.tracking.virtual_contact_interpolate_reference = bool(
+                self.tracking.virtual_contact_interpolate_reference
+            )
             direction_window = int(self.tracking.virtual_contact_direction_smoothing_window)
             self.tracking.virtual_contact_direction_smoothing_window = direction_window
             if direction_window < 1 or direction_window % 2 == 0:

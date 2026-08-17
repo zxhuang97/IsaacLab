@@ -33,6 +33,7 @@ from .reference_clock import (
     is_reference_boundary,
     policy_step_to_reference_index,
     reference_coordinates,
+    virtual_contact_reference_coordinates,
 )
 from .virtual_contact import (
     contact_coupled_torque,
@@ -2835,10 +2836,18 @@ class FrankaRobustTrackEnv(DirectRLEnv):
         policy_step: torch.Tensor,
         completed_physics_substeps: int = 0,
     ):
-        """Interpolate the virtual-contact goal on the native reference grid."""
-        i0, i1, phase = self._reference_coordinates(
-            policy_step, completed_physics_substeps
+        """Select the virtual-contact goal using interpolation or native ZOH."""
+        i0, i1, phase = virtual_contact_reference_coordinates(
+            policy_step,
+            policy_decimation=int(self.cfg.decimation),
+            reference_decimation=self.reference_decimation,
+            completed_physics_substeps=completed_physics_substeps,
+            interpolate=bool(
+                self.cfg.tracking.virtual_contact_interpolate_reference
+            ),
         )
+        i0 = i0.clamp(0, self._traj_len - 1)
+        i1 = i1.clamp(0, self._traj_len - 1)
         blend = phase.unsqueeze(-1)
 
         def interpolate(buffer):
@@ -2860,9 +2869,7 @@ class FrankaRobustTrackEnv(DirectRLEnv):
             self.virtual_target_torque[:] = target_wrench[:, 3:]
         else:
             self.virtual_target_torque.zero_()
-        self.target_wrench[:] = self._traj_wrench_at_policy_step(
-            policy_step, completed_physics_substeps
-        )
+        self.target_wrench[:] = interpolate(self.traj_wrench_buf)
 
     def _update_virtual_contact_force(
         self, completed_physics_substeps: int = 0
